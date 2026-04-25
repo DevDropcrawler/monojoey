@@ -5,27 +5,25 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 1
-- Chunk: 1.2 lightweight shared contracts/protocol placeholder
-- Completion status: Completed with documented solution-build environment caveats.
-- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 1 commit ahead before this chunk commit)
-- Previous commit: `cac8157` (`phase-1-1: add dotnet server skeleton`)
+- Chunk: 1.3 server test harness baseline cleanup
+- Completion status: Completed.
+- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 2 commits ahead before this chunk commit)
+- Previous commits:
+  - `cac8157` - `phase-1-1: add dotnet server skeleton`
+  - `eb9f674` - `phase-1-2: add shared contract placeholders`
 - Commit: pending at handover write time; see `git log -1` after the chunk commit.
-- Date/time: 2026-04-26 10:01 +12:00
+- Date/time: 2026-04-26 10:08 +12:00
 
 ## Last Completed Chunk
 
-Phase 1, Chunk 1.2 - lightweight shared contracts/protocol placeholder.
+Phase 1, Chunk 1.3 - server test harness baseline cleanup.
 
 Completed:
 
-- Created `shared/MonoJoey.Shared/` as a .NET 8 class library.
-- Added lightweight protocol ID wrappers.
-- Added client message, server event, and error-code enums from the protocol docs.
-- Added schema placeholder enums for game phase, tile type, card action type, and money reason.
-- Added a minimal player profile DTO.
-- Added project references from server and tests to shared.
-- Added a baseline shared-contract reference test.
-- Updated `shared/README.md`.
+- Added `server-dotnet/MonoJoey.Server.Tests/README.md`.
+- Documented test class and method naming conventions.
+- Documented that future domain behavior tests belong with the chunks that introduce behavior.
+- Confirmed no additional code cleanup was needed in this chunk.
 
 Not implemented:
 
@@ -42,20 +40,10 @@ Not implemented:
 
 ## Files/Folders Created
 
-- `shared/MonoJoey.Shared/`
-- `shared/MonoJoey.Shared/MonoJoey.Shared.csproj`
-- `shared/MonoJoey.Shared/Protocol/Identifiers.cs`
-- `shared/MonoJoey.Shared/Protocol/MessageTypes.cs`
-- `shared/MonoJoey.Shared/Protocol/Envelopes.cs`
-- `shared/MonoJoey.Shared/Schemas/SchemaEnums.cs`
-- `shared/MonoJoey.Shared/Dtos/PlayerProfileSelectionDto.cs`
+- `server-dotnet/MonoJoey.Server.Tests/README.md`
 
 ## Files Changed
 
-- `shared/README.md`
-- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
-- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
-- `server-dotnet/MonoJoey.Server.Tests/BaselineTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Validation Commands Run
@@ -69,27 +57,18 @@ Not implemented:
   - Output: `8.0.420`
 - `git status --short --branch`
   - Result: succeeded.
-  - Initial output: `## main...origin/main [ahead 1, behind 3]`.
+  - Initial output: `## main...origin/main [ahead 2, behind 3]`.
 - `dotnet build .\server-dotnet\MonoJoey.sln`
   - Result: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
-  - Confirmed `MonoJoey.Shared` builds via the test project reference.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln`
   - Result: succeeded.
   - Output summary: 2 tests passed, 0 failed, 0 skipped.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`
-  - Result: succeeded.
-  - Output summary: `MonoJoey.Shared` and `MonoJoey.Server` built successfully, 0 warnings, 0 errors.
-- `dotnet sln .\server-dotnet\MonoJoey.sln list`
-  - Result: succeeded.
-  - Projects listed:
-
-```text
-MonoJoey.Server.Tests\MonoJoey.Server.Tests.csproj
-MonoJoey.Server\MonoJoey.Server.csproj
-```
+- `git status --short --branch`
+  - Result before handover update: succeeded.
+  - Output: `## main...origin/main [ahead 2, behind 3]` plus untracked `server-dotnet/MonoJoey.Server.Tests/README.md`.
 
 ## Known Issues
 
@@ -102,8 +81,8 @@ MonoJoey.Server\MonoJoey.Server.csproj
 
 ## Placeholders Introduced Or Preserved
 
-- Introduced shared protocol/contracts placeholders only.
-- Introduced no validation logic, rules logic, gameplay state, or behavior.
+- Introduced no new code placeholders in this chunk.
+- Preserved shared protocol/contracts placeholders only.
 - Preserved README-only Unity client area in `client-unity/`.
 - Preserved README-only tools area in `tools/`.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
@@ -120,19 +99,15 @@ MonoJoey.Server\MonoJoey.Server.csproj
 
 ## Next Recommended Chunk
 
-Continue Phase 1, Chunk 1.3: baseline server/test harness cleanup only if still needed.
-
-Read only:
-
-- `docs/TECH_ARCHITECTURE.md`
-- `docs/AGENT_RULES.md`
-- `docs/SESSION_HANDOVER.md`
+Continue Phase 1, Chunk 1.4: final Phase 1 audit.
 
 Recommended scope:
 
-- Audit whether Chunk 1.3 has anything left after the baseline tests added in Chunks 1.1 and 1.2.
-- If no code cleanup is needed, update handover and proceed to final Phase 1 audit.
-- Do not add gameplay or rules behavior.
+- Verify repo structure.
+- Verify build/test.
+- Verify Unity remains README-only.
+- Verify no Phase 2 gameplay/rules systems were introduced.
+- Update this handover with final Phase 1 status.
 
 ## Do Not Touch Notes
 
@@ -152,4 +127,4 @@ Do not implement:
 
 ## Fresh-Session Recommendation
 
-Not required yet. Context risk is moderate but still manageable for a short Chunk 1.3 audit.
+Not required for the final Phase 1 audit if kept short.
