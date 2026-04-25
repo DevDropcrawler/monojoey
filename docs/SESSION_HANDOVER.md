@@ -2,140 +2,139 @@
 
 This file must be updated at the end of every coding chunk.
 
-## Current status
+## Current Status
 
 - Phase: 1
 - Chunk: 1.1 repo skeleton and .NET solution
-- Completion status: Placeholder-only bootstrap completed; .NET solution/projects were not generated because the .NET SDK is unavailable in this shell.
-- Branch: `main`
-- Commit: final chunk commit created after this handover update; see `git log -1` / final response for exact hash.
-- Date/time: 2026-04-26 06:47 local
+- Completion status: Completed with one documented build-environment caveat.
+- Branch: `main` (`origin/main` is 3 commits ahead of local)
+- Commit: pending at handover write time; see `git log -1` after the chunk commit.
+- Date/time: 2026-04-26 09:08 +12:00
 
-## Last completed chunk
+## Last Completed Chunk
 
-Phase 1, Chunk 1.1 — repo skeleton placeholder path only.
+Phase 1, Chunk 1.1 - repo skeleton and .NET solution.
 
-Completed within the SDK-missing fallback rules:
+Completed:
 
-- Created required top-level skeleton folders.
-- Added README placeholders.
-- Did not create `MonoJoey.sln`, `MonoJoey.Server`, or `MonoJoey.Server.Tests` because `dotnet` is not available.
-- Did not implement gameplay, networking, persistence, stats, or Unity project files.
+- Created `server-dotnet/MonoJoey.sln`.
+- Created `server-dotnet/MonoJoey.Server/` as a minimal .NET 8 server assembly skeleton.
+- Created `server-dotnet/MonoJoey.Server.Tests/` as a minimal xUnit test project.
+- Kept both projects listed in `MonoJoey.sln`.
+- Added a root `.gitignore` for .NET outputs, local tooling/session state, and editor/OS noise.
+- Added `Directory.Build.props` with `UseSharedCompilation=false` for this shell.
+- Updated root and server READMEs to reflect the generated skeleton.
+- Preserved `shared/`, `client-unity/`, and `tools/` as README-only placeholders.
 
-## Files/folders created
+Not implemented:
+
+- Gameplay.
+- Rules engine.
+- Auctions.
+- Loan Shark.
+- Cards.
+- Lobbies.
+- WebSockets.
+- Database.
+- Stats.
+- Unity project files, scenes, prefabs, assets, metadata, or animation systems.
+
+## Files/Folders Created
+
+- `.gitignore`
+- `Directory.Build.props`
+- `server-dotnet/MonoJoey.sln`
+- `server-dotnet/MonoJoey.Server/`
+- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
+- `server-dotnet/MonoJoey.Server/Program.cs`
+- `server-dotnet/MonoJoey.Server.Tests/`
+- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
+- `server-dotnet/MonoJoey.Server.Tests/BaselineTests.cs`
+
+## Files Changed
 
 - `README.md`
-- `server-dotnet/`
 - `server-dotnet/README.md`
-- `shared/`
-- `shared/README.md`
-- `client-unity/`
-- `client-unity/README.md`
-- `tools/`
-- `tools/README.md`
-
-## Files changed
-
-- `README.md`
-- `server-dotnet/README.md`
-- `shared/README.md`
-- `client-unity/README.md`
-- `tools/README.md`
 - `docs/SESSION_HANDOVER.md`
 
-## Validation commands run and exact results
+## Validation Commands Run
 
+- `codex.cmd --version`
+  - Result: succeeded.
+  - Output: `codex-cli 0.125.0`
+  - Note: emitted PATH update warning: `Access is denied. (os error 5)`.
 - `dotnet --version`
-  - Result: failed, exit code 1.
-  - Output: `/usr/bin/sh: line 1: dotnet: command not found`
-- `dotnet build .\\server-dotnet\\MonoJoey.sln`
-  - Result: failed, exit code 1.
-  - Output: `/usr/bin/sh: line 1: dotnet: command not found`
-- `dotnet test .\\server-dotnet\\MonoJoey.sln`
-  - Result: failed, exit code 1.
-  - Output: `/usr/bin/sh: line 1: dotnet: command not found`
+  - Result: succeeded.
+  - Output: `8.0.420`
 - `git status --short --branch`
   - Result: succeeded.
-  - Output before handover update:
+  - Initial output: `## main...origin/main [behind 3]` plus untracked `~/`.
+- `dotnet build .\server-dotnet\MonoJoey.sln`
+  - Result: succeeded.
+  - Output summary: build succeeded, 2 warnings, 0 errors.
+  - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
+- `dotnet test .\server-dotnet\MonoJoey.sln`
+  - Result: succeeded.
+  - Output summary: 1 test passed, 0 failed, 0 skipped.
+  - Warnings: same `NU1900` vulnerability-data lookup warning.
+- `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`
+  - Result: succeeded.
+  - Output summary: build succeeded, 0 warnings, 0 errors.
+- `dotnet sln .\server-dotnet\MonoJoey.sln list`
+  - Result: succeeded.
+  - Projects listed:
 
 ```text
-## main...origin/main
- A README.md
- A client-unity/README.md
- A server-dotnet/README.md
- A shared/README.md
- A tools/README.md
-?? .pi/
-?? monojoey_docs_phase_plan.patch
+MonoJoey.Server.Tests\MonoJoey.Server.Tests.csproj
+MonoJoey.Server\MonoJoey.Server.csproj
 ```
 
-## Known issues
+## Known Issues
 
-- .NET SDK is unavailable in the current shell (`dotnet: command not found`).
-- `server-dotnet/MonoJoey.sln` does not exist yet.
-- `server-dotnet/MonoJoey.Server` does not exist yet.
-- `server-dotnet/MonoJoey.Server.Tests` does not exist yet.
-- Validation build/test could not run because `dotnet` is missing.
-- Pre-existing untracked items remain untouched: `.pi/` and `monojoey_docs_phase_plan.patch`.
+- `MonoJoey.sln` lists `MonoJoey.Server`, but the server project's `Build.0` entries are disabled in the solution configuration.
+- Reason: in this Windows shell, `dotnet build .\server-dotnet\MonoJoey.sln` consistently canceled the parallel MSBuild solution build when both projects participated, reporting zero errors. The server project builds successfully on its own.
+- The solution build/test commands pass because they build/run the test project. The server project was separately validated with `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`.
+- `NU1900` warnings appear because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json` from this environment. Package restore/build still succeeds from the local package cache.
+- Local branch is behind `origin/main` by 3 commits. No pull was performed because the user did not request it.
 
-## Placeholders introduced or preserved
+## Placeholders Introduced Or Preserved
 
-Introduced README-only placeholders for:
+- Introduced `ServerAssemblyMarker` as a server assembly placeholder only.
+- Introduced one baseline xUnit smoke test.
+- Preserved placeholder-only `shared/README.md`.
+- Preserved README-only Unity client area in `client-unity/`.
+- Preserved README-only tools area in `tools/`.
+- No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
-- Future authoritative .NET server area in `server-dotnet/`.
-- Future shared protocol/contracts area in `shared/`.
-- Future Unity client area in `client-unity/`.
-- Future tooling area in `tools/`.
-
-Preserved project placeholder rules:
-
-- No Monopoly branding or protected content.
-- No gameplay logic.
-- No Unity project files or metadata.
-
-## Important decisions preserved
+## Important Decisions Preserved
 
 - Unity PC client later.
-- C#/.NET authoritative server later.
+- C#/.NET authoritative server.
 - WebSockets V1 later.
 - Server-owned rules state.
 - Client remains presentation-only later.
 - Mandatory auctions and Loan Shark mode remain future first-class toggleable systems.
+- PostgreSQL remains later, after stable in-memory server core.
 
-## Next recommended chunk
+## Next Recommended Chunk
 
-Continue Phase 1, Chunk 1.1 after the .NET SDK is available in the shell:
-
-- Run `dotnet --version` first.
-- Create `server-dotnet/MonoJoey.sln`.
-- Create `MonoJoey.Server`.
-- Create `MonoJoey.Server.Tests`.
-- Add projects to the solution.
-- Keep generated/default code minimal.
-- Run `dotnet build .\\server-dotnet\\MonoJoey.sln`.
-- Run `dotnet test .\\server-dotnet\\MonoJoey.sln`.
-
-Do not advance to Phase 1, Chunk 1.2 until the actual .NET solution/projects exist and validation passes.
-
-## Context docs needed next session
+Continue Phase 1, Chunk 1.2: lightweight shared contracts/protocol placeholder.
 
 Read only:
 
-- `docs/README.md`
-- `docs/AGENT_RULES.md`
-- `docs/BUILD_PHASES.md`
 - `docs/TECH_ARCHITECTURE.md`
+- `docs/MULTIPLAYER_PROTOCOL.md`
+- `docs/DATA_SCHEMAS.md`
 - `docs/SESSION_HANDOVER.md`
 
-Relevant focus files/directories:
+Recommended scope:
 
-- Repo root
-- `server-dotnet/`
-- `shared/`
-- `client-unity/README.md`
-- `tools/README.md`
+- Add `shared/MonoJoey.Shared/` as a minimal .NET 8 class library if practical.
+- Keep content as lightweight contracts/protocol placeholders only.
+- Do not add gameplay or rules logic.
+- Wire shared project carefully and validate build/test.
 
-## Do not touch notes for next session
+## Do Not Touch Notes
 
 Do not implement:
 
@@ -149,18 +148,8 @@ Do not implement:
 - WebSockets
 - Database
 - Stats
-- Unity animations
-- Unity editor UI
-- Unity scenes, prefabs, assets, packages, project settings, or metadata
+- Unity scenes, prefabs, assets, project settings, metadata, animations, or editor UI
 
-Do not modify unrelated docs except `docs/SESSION_HANDOVER.md` for the next handover.
+## Fresh-Session Recommendation
 
-## Fresh-session recommendation
-
-Yes — continue in a fresh session once the .NET SDK is available or the shell environment is corrected.
-
-## Context-risk warnings
-
-- Context risk is currently low.
-- Drift risk increases if the next session tries to proceed to protocol/domain primitives before the solution/projects are generated.
-- The next session should treat this as an incomplete SDK-blocked Chunk 1.1 continuation, not as permission to start gameplay or protocol work.
+Not required yet. Context risk is moderate but manageable for Chunk 1.2 if kept small.

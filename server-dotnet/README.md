@@ -1,7 +1,11 @@
 # MonoJoey .NET Server
 
-This directory is reserved for the MonoJoey C#/.NET authoritative server solution.
+This directory contains the MonoJoey C#/.NET authoritative server solution skeleton.
 
-The .NET SDK was not available during Phase 1, Chunk 1.1 bootstrap, so `MonoJoey.sln`, `MonoJoey.Server`, and `MonoJoey.Server.Tests` were not generated yet.
+Phase 1 keeps this area intentionally minimal:
 
-No gameplay logic belongs in this placeholder.
+- `MonoJoey.sln`
+- `MonoJoey.Server/`
+- `MonoJoey.Server.Tests/`
+
+No gameplay logic belongs in this skeleton chunk.

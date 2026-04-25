@@ -1,0 +1,26 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MonoJoey.Server.Tests", "MonoJoey.Server.Tests\MonoJoey.Server.Tests.csproj", "{C9EBC50F-03FC-4228-97F3-45F5F4C40992}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MonoJoey.Server", "MonoJoey.Server\MonoJoey.Server.csproj", "{6DF7AAC2-6CE7-4371-B253-6516D39058E7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C9EBC50F-03FC-4228-97F3-45F5F4C40992}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9EBC50F-03FC-4228-97F3-45F5F4C40992}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9EBC50F-03FC-4228-97F3-45F5F4C40992}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9EBC50F-03FC-4228-97F3-45F5F4C40992}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6DF7AAC2-6CE7-4371-B253-6516D39058E7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6DF7AAC2-6CE7-4371-B253-6516D39058E7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	EndGlobalSection
+EndGlobal
