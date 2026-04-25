@@ -5,46 +5,51 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 1
-- Chunk: 1.3 server test harness baseline cleanup
-- Completion status: Completed.
-- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 2 commits ahead before this chunk commit)
+- Chunk: 1.4 final Phase 1 audit
+- Completion status: Phase 1 complete.
+- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 3 commits ahead before this chunk commit)
 - Previous commits:
   - `cac8157` - `phase-1-1: add dotnet server skeleton`
   - `eb9f674` - `phase-1-2: add shared contract placeholders`
-- Commit: pending at handover write time; see `git log -1` after the chunk commit.
-- Date/time: 2026-04-26 10:08 +12:00
+  - `5c1618d` - `phase-1-3: document server test harness conventions`
+- Commit: pending at handover write time; see `git log -1` after the final audit commit.
+- Date/time: 2026-04-26 10:10 +12:00
 
 ## Last Completed Chunk
 
-Phase 1, Chunk 1.3 - server test harness baseline cleanup.
+Phase 1, Chunk 1.4 - final Phase 1 audit.
 
 Completed:
 
-- Added `server-dotnet/MonoJoey.Server.Tests/README.md`.
-- Documented test class and method naming conventions.
-- Documented that future domain behavior tests belong with the chunks that introduce behavior.
-- Confirmed no additional code cleanup was needed in this chunk.
+- Verified required Phase 1 repo structure exists.
+- Verified `client-unity/` remains README-only.
+- Verified `tools/` remains README-only.
+- Verified no gameplay/rules engine implementation was introduced.
+- Verified no lobbies, WebSockets, database, stats, Unity scenes, or animation systems were introduced.
+- Re-ran build/test validation.
+- Re-ran server project build validation because the server project is not directly built by the solution in this environment.
 
-Not implemented:
+## Phase 1 Deliverables
 
-- Gameplay.
-- Rules engine.
-- Auctions.
-- Loan Shark.
-- Cards.
-- Lobbies.
-- WebSockets.
-- Database.
-- Stats.
-- Unity project files, scenes, prefabs, assets, metadata, or animation systems.
+- `server-dotnet/MonoJoey.sln`
+- `server-dotnet/MonoJoey.Server/`
+- `server-dotnet/MonoJoey.Server.Tests/`
+- `shared/MonoJoey.Shared/`
+- `client-unity/README.md`
+- `tools/README.md`
+- Root `.gitignore`
+- Root `Directory.Build.props`
+- Updated `docs/SESSION_HANDOVER.md`
 
-## Files/Folders Created
+## Files/Folders Created Across Phase 1
 
+- `.gitignore`
+- `Directory.Build.props`
+- `server-dotnet/MonoJoey.sln`
+- `server-dotnet/MonoJoey.Server/`
+- `server-dotnet/MonoJoey.Server.Tests/`
 - `server-dotnet/MonoJoey.Server.Tests/README.md`
-
-## Files Changed
-
-- `docs/SESSION_HANDOVER.md`
+- `shared/MonoJoey.Shared/`
 
 ## Validation Commands Run
 
@@ -57,7 +62,13 @@ Not implemented:
   - Output: `8.0.420`
 - `git status --short --branch`
   - Result: succeeded.
-  - Initial output: `## main...origin/main [ahead 2, behind 3]`.
+  - Initial output: `## main...origin/main [ahead 3, behind 3]`.
+- `rg --files server-dotnet shared client-unity tools -g '!**/bin/**' -g '!**/obj/**'`
+  - Result: succeeded.
+  - Confirmed only expected Phase 1 files.
+- `rg -n "class .*Auction|class .*Loan|class .*Lobby|WebSocket|DbContext|Npgsql|MatchState|Dice|Rent|Bankrupt|CardResolver|TurnManager" server-dotnet shared -g '!**/bin/**' -g '!**/obj/**'`
+  - Result: succeeded.
+  - Findings were limited to expected shared enum names and a README naming example, not implementations.
 - `dotnet build .\server-dotnet\MonoJoey.sln`
   - Result: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
@@ -66,9 +77,12 @@ Not implemented:
   - Result: succeeded.
   - Output summary: 2 tests passed, 0 failed, 0 skipped.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
+- `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`
+  - Result: succeeded.
+  - Output summary: `MonoJoey.Shared` and `MonoJoey.Server` built successfully, 0 warnings, 0 errors.
 - `git status --short --branch`
   - Result before handover update: succeeded.
-  - Output: `## main...origin/main [ahead 2, behind 3]` plus untracked `server-dotnet/MonoJoey.Server.Tests/README.md`.
+  - Output: `## main...origin/main [ahead 3, behind 3]`.
 
 ## Known Issues
 
@@ -81,10 +95,11 @@ Not implemented:
 
 ## Placeholders Introduced Or Preserved
 
-- Introduced no new code placeholders in this chunk.
-- Preserved shared protocol/contracts placeholders only.
-- Preserved README-only Unity client area in `client-unity/`.
-- Preserved README-only tools area in `tools/`.
+- `ServerAssemblyMarker` is a server assembly placeholder only.
+- Shared protocol/contracts are placeholders only.
+- Baseline xUnit tests are smoke tests only.
+- Unity remains README-only.
+- Tools remain README-only.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
 ## Important Decisions Preserved
@@ -99,23 +114,24 @@ Not implemented:
 
 ## Next Recommended Chunk
 
-Continue Phase 1, Chunk 1.4: final Phase 1 audit.
+Start Phase 2, Chunk 2.1 in a fresh Codex session.
 
-Recommended scope:
+Recommended first reads for Phase 2:
 
-- Verify repo structure.
-- Verify build/test.
-- Verify Unity remains README-only.
-- Verify no Phase 2 gameplay/rules systems were introduced.
-- Update this handover with final Phase 1 status.
+- `docs/README.md`
+- `docs/AGENT_RULES.md`
+- `docs/BUILD_PHASES.md`
+- `docs/SESSION_HANDOVER.md`
+- `docs/RULES_ENGINE.md`
+- `docs/DATA_SCHEMAS.md`
+
+Phase 2 should start with server-side state models only. Do not implement auctions, loans, cards, lobbies, WebSockets, database, stats, Unity scenes, or animation systems in Chunk 2.1.
 
 ## Do Not Touch Notes
 
-Do not implement:
+Do not implement before its assigned chunk:
 
-- Board logic
-- Dice
-- Movement
+- Dice/movement resolution
 - Auctions
 - Loan Shark
 - Cards
@@ -127,4 +143,4 @@ Do not implement:
 
 ## Fresh-Session Recommendation
 
-Not required for the final Phase 1 audit if kept short.
+Yes. Phase 1 is complete; start a fresh Codex session before Phase 2 to keep context clean.
