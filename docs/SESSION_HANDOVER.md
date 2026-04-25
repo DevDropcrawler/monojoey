@@ -5,26 +5,27 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 1
-- Chunk: 1.1 repo skeleton and .NET solution
-- Completion status: Completed with one documented build-environment caveat.
-- Branch: `main` (`origin/main` is 3 commits ahead of local)
+- Chunk: 1.2 lightweight shared contracts/protocol placeholder
+- Completion status: Completed with documented solution-build environment caveats.
+- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 1 commit ahead before this chunk commit)
+- Previous commit: `cac8157` (`phase-1-1: add dotnet server skeleton`)
 - Commit: pending at handover write time; see `git log -1` after the chunk commit.
-- Date/time: 2026-04-26 09:08 +12:00
+- Date/time: 2026-04-26 10:01 +12:00
 
 ## Last Completed Chunk
 
-Phase 1, Chunk 1.1 - repo skeleton and .NET solution.
+Phase 1, Chunk 1.2 - lightweight shared contracts/protocol placeholder.
 
 Completed:
 
-- Created `server-dotnet/MonoJoey.sln`.
-- Created `server-dotnet/MonoJoey.Server/` as a minimal .NET 8 server assembly skeleton.
-- Created `server-dotnet/MonoJoey.Server.Tests/` as a minimal xUnit test project.
-- Kept both projects listed in `MonoJoey.sln`.
-- Added a root `.gitignore` for .NET outputs, local tooling/session state, and editor/OS noise.
-- Added `Directory.Build.props` with `UseSharedCompilation=false` for this shell.
-- Updated root and server READMEs to reflect the generated skeleton.
-- Preserved `shared/`, `client-unity/`, and `tools/` as README-only placeholders.
+- Created `shared/MonoJoey.Shared/` as a .NET 8 class library.
+- Added lightweight protocol ID wrappers.
+- Added client message, server event, and error-code enums from the protocol docs.
+- Added schema placeholder enums for game phase, tile type, card action type, and money reason.
+- Added a minimal player profile DTO.
+- Added project references from server and tests to shared.
+- Added a baseline shared-contract reference test.
+- Updated `shared/README.md`.
 
 Not implemented:
 
@@ -41,20 +42,20 @@ Not implemented:
 
 ## Files/Folders Created
 
-- `.gitignore`
-- `Directory.Build.props`
-- `server-dotnet/MonoJoey.sln`
-- `server-dotnet/MonoJoey.Server/`
-- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
-- `server-dotnet/MonoJoey.Server/Program.cs`
-- `server-dotnet/MonoJoey.Server.Tests/`
-- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
-- `server-dotnet/MonoJoey.Server.Tests/BaselineTests.cs`
+- `shared/MonoJoey.Shared/`
+- `shared/MonoJoey.Shared/MonoJoey.Shared.csproj`
+- `shared/MonoJoey.Shared/Protocol/Identifiers.cs`
+- `shared/MonoJoey.Shared/Protocol/MessageTypes.cs`
+- `shared/MonoJoey.Shared/Protocol/Envelopes.cs`
+- `shared/MonoJoey.Shared/Schemas/SchemaEnums.cs`
+- `shared/MonoJoey.Shared/Dtos/PlayerProfileSelectionDto.cs`
 
 ## Files Changed
 
-- `README.md`
-- `server-dotnet/README.md`
+- `shared/README.md`
+- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
+- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
+- `server-dotnet/MonoJoey.Server.Tests/BaselineTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Validation Commands Run
@@ -68,18 +69,19 @@ Not implemented:
   - Output: `8.0.420`
 - `git status --short --branch`
   - Result: succeeded.
-  - Initial output: `## main...origin/main [behind 3]` plus untracked `~/`.
+  - Initial output: `## main...origin/main [ahead 1, behind 3]`.
 - `dotnet build .\server-dotnet\MonoJoey.sln`
   - Result: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
+  - Confirmed `MonoJoey.Shared` builds via the test project reference.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln`
   - Result: succeeded.
-  - Output summary: 1 test passed, 0 failed, 0 skipped.
+  - Output summary: 2 tests passed, 0 failed, 0 skipped.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`
   - Result: succeeded.
-  - Output summary: build succeeded, 0 warnings, 0 errors.
+  - Output summary: `MonoJoey.Shared` and `MonoJoey.Server` built successfully, 0 warnings, 0 errors.
 - `dotnet sln .\server-dotnet\MonoJoey.sln list`
   - Result: succeeded.
   - Projects listed:
@@ -91,17 +93,17 @@ MonoJoey.Server\MonoJoey.Server.csproj
 
 ## Known Issues
 
-- `MonoJoey.sln` lists `MonoJoey.Server`, but the server project's `Build.0` entries are disabled in the solution configuration.
-- Reason: in this Windows shell, `dotnet build .\server-dotnet\MonoJoey.sln` consistently canceled the parallel MSBuild solution build when both projects participated, reporting zero errors. The server project builds successfully on its own.
-- The solution build/test commands pass because they build/run the test project. The server project was separately validated with `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`.
+- `MonoJoey.Server` is listed in the solution, but its `Build.0` entries remain disabled.
+- `MonoJoey.Shared` is intentionally not listed in the solution after testing showed the same parallel MSBuild cancellation when it directly participated in solution builds.
+- `MonoJoey.Shared` is still built by `dotnet build .\server-dotnet\MonoJoey.sln` through the test project reference and by `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj` through the server project reference.
+- Reason: in this Windows shell, direct multi-project solution builds consistently cancel parallel MSBuild child builds, sometimes with zero errors. Project-reference builds are stable.
 - `NU1900` warnings appear because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json` from this environment. Package restore/build still succeeds from the local package cache.
 - Local branch is behind `origin/main` by 3 commits. No pull was performed because the user did not request it.
 
 ## Placeholders Introduced Or Preserved
 
-- Introduced `ServerAssemblyMarker` as a server assembly placeholder only.
-- Introduced one baseline xUnit smoke test.
-- Preserved placeholder-only `shared/README.md`.
+- Introduced shared protocol/contracts placeholders only.
+- Introduced no validation logic, rules logic, gameplay state, or behavior.
 - Preserved README-only Unity client area in `client-unity/`.
 - Preserved README-only tools area in `tools/`.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
@@ -118,21 +120,19 @@ MonoJoey.Server\MonoJoey.Server.csproj
 
 ## Next Recommended Chunk
 
-Continue Phase 1, Chunk 1.2: lightweight shared contracts/protocol placeholder.
+Continue Phase 1, Chunk 1.3: baseline server/test harness cleanup only if still needed.
 
 Read only:
 
 - `docs/TECH_ARCHITECTURE.md`
-- `docs/MULTIPLAYER_PROTOCOL.md`
-- `docs/DATA_SCHEMAS.md`
+- `docs/AGENT_RULES.md`
 - `docs/SESSION_HANDOVER.md`
 
 Recommended scope:
 
-- Add `shared/MonoJoey.Shared/` as a minimal .NET 8 class library if practical.
-- Keep content as lightweight contracts/protocol placeholders only.
-- Do not add gameplay or rules logic.
-- Wire shared project carefully and validate build/test.
+- Audit whether Chunk 1.3 has anything left after the baseline tests added in Chunks 1.1 and 1.2.
+- If no code cleanup is needed, update handover and proceed to final Phase 1 audit.
+- Do not add gameplay or rules behavior.
 
 ## Do Not Touch Notes
 
@@ -152,4 +152,4 @@ Do not implement:
 
 ## Fresh-Session Recommendation
 
-Not required yet. Context risk is moderate but manageable for Chunk 1.2 if kept small.
+Not required yet. Context risk is moderate but still manageable for a short Chunk 1.3 audit.

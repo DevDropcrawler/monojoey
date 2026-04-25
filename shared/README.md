@@ -1,7 +1,11 @@
 # MonoJoey Shared Contracts
 
-Placeholder area for future shared protocol/contracts definitions.
+Placeholder area for shared protocol/contracts definitions.
 
-Planned later content may include protocol DTOs, schema contracts, and shared identifiers as directed by the source-of-truth docs.
+Current Phase 1 content is intentionally lightweight:
 
-No gameplay logic is implemented here yet.
+- `MonoJoey.Shared/Protocol/` for message/event envelopes, IDs, and protocol enums.
+- `MonoJoey.Shared/Schemas/` for schema enum placeholders.
+- `MonoJoey.Shared/Dtos/` for serialization-safe DTO placeholders.
+
+No gameplay logic is implemented here.
