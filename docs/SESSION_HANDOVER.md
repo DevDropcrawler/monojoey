@@ -5,34 +5,32 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 3
-- Chunk: 3.5 Start-of-turn loan interest enforcement
-- Completion status: Chunk 3.5 complete; start-of-turn loan interest is enforced before roll/movement/actions through turn start and advancement.
+- Chunk: 3.6 Anti-loop borrowing rules
+- Completion status: Chunk 3.6 complete; borrowing is context-aware and loan-payment borrowing purposes are rejected before cash or loan state can mutate.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated, not committed in this session.
 - Previous commit: `654dec7` - `phase-3-3: add auction finalization`
 - Last commit: `phase-3-4: add loan shark foundation`
-- Date/time: 2026-04-27 00:25 +12:00
+- Date/time: 2026-04-27 00:32 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.5 - Start-of-turn loan interest enforcement only.
+Phase 3, Chunk 3.6 - Anti-loop borrowing rules only.
 
 Completed:
 
-- Added `LoanManager.StartTurnInterestCheck`.
-- Start-turn interest recalculates from `PlayerLoanState.TotalBorrowed` and the stored `CurrentInterestRatePercent`.
-- Interest uses existing integer `Money` arithmetic: `totalBorrowed * currentInterestRate / 100`.
-- Deducts start-turn interest from player money.
-- Refreshes `NextTurnInterestDue` to the calculated deterministic interest amount.
-- Runs existing `BankruptcyManager.EliminateIfBankrupt` after deduction; players whose interest charge makes money negative are marked bankrupt/eliminated before they can roll.
-- Integrated the interest check into `TurnManager.StartFirstTurn`.
-- Integrated the interest check into `TurnManager.AdvanceToNextTurn`.
-- Added focused `LoanManagerTests` for no-loan no-op, stored-rate deduction, deterministic rounding, and elimination on unpaid interest.
-- Added focused `TurnManagerTests` proving interest is charged before first-turn roll and next-turn roll, and failed interest eliminates before `GetCurrentPlayer` can return the player.
+- Added `BorrowPurpose` as the explicit context for borrowing.
+- Changed `LoanManager.TakeLoan` to require a `BorrowPurpose`.
+- `LoanTakeResult` now records the attempted borrow purpose.
+- Added `LoanTakeResultKind.DisallowedBorrowPurpose`.
+- Allows borrowing for `AuctionBid`, `RentPayment`, `TaxPayment`, `CardPenalty`, and `Fine`.
+- Rejects borrowing for `LoanInterest`, `LoanPrincipalRepayment`, and `ExistingLoanDebt`.
+- Rejected anti-loop borrow attempts return the unchanged `GameState`; player money and existing loan state are not mutated.
+- Existing invalid amount, eliminated player, player-not-in-game, loan state, and interest escalation behavior remain unchanged apart from requiring a purpose argument.
+- Added focused `LoanManagerTests` proving every allowed purpose is accepted and every blocked loan-payment purpose is rejected.
 
 Not included by explicit user scope:
 
 - Repayment system.
-- Preventing borrowing or anti-loop rules beyond basic invalid amount and eliminated-player rejection.
 - Networking.
 - Unity/UI.
 - Persistence.
@@ -41,9 +39,9 @@ Not included by explicit user scope:
 ## Files Changed In This Chunk
 
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/BorrowPurpose.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -58,6 +56,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionStatus.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/BankruptcyManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Board.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/BorrowPurpose.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
@@ -90,13 +89,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 89 tests passed.
+  - Output summary: 97 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `dotnet test .\server-dotnet\MonoJoey.sln -m:1 --filter "FullyQualifiedName~LoanManagerTests|FullyQualifiedName~TurnManagerTests"`
-  - Result: succeeded.
-  - Output summary: 25 tests passed.
 - `git status --short --branch`
-  - Result: `main...origin/main` with modified Phase 3.5 files and this handover doc.
+  - Result: `main...origin/main` with modified Phase 3.6 files and this handover doc.
 
 ## Known Issues
 
@@ -145,13 +141,15 @@ Not included by explicit user scope:
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
 - Loan state lives on `Player.LoanState` and is optional until a player first borrows.
-- `LoanManager.TakeLoan` mutates only the borrowing player's money and loan state through a returned `GameState`.
+- `LoanManager.TakeLoan` requires an explicit `BorrowPurpose` and mutates only the borrowing player's money and loan state through a returned `GameState` when the purpose is allowed.
 - Loan rejection results return the unchanged `GameState`.
+- Borrowing to pay `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt` is rejected through `LoanTakeResultKind.DisallowedBorrowPurpose`.
+- Borrowing remains allowed for `AuctionBid`, `RentPayment`, `TaxPayment`, `CardPenalty`, and `Fine`.
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
 - Start-of-turn loan interest also uses total borrowed and the stored current interest rate using the same integer money arithmetic.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
-- Loan enforcement does not interact with auctions, repayment, borrowing restrictions, anti-loop logic, networking, UI, persistence, or stats.
+- Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
 
 ## Next Recommended Chunk
 
@@ -175,9 +173,8 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Borrowing to cover auctions.
+- Borrowing to cover auctions beyond the explicit `BorrowPurpose.AuctionBid` context marker.
 - Loan repayment.
-- Anti-loop loan prevention beyond current invalid amount and eliminated-player checks.
 - Auction retry logic.
 - Debt recovery.
 - Asset liquidation.

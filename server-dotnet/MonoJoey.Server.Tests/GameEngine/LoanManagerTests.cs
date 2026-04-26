@@ -12,10 +12,11 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(200));
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(200), BorrowPurpose.RentPayment);
 
         Assert.True(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.Accepted, result.ResultKind);
+        Assert.Equal(BorrowPurpose.RentPayment, result.Purpose);
         Assert.Equal(new Money(1700), result.GameState.Players[0].Money);
         Assert.Equal(new Money(1500), gameState.Players[0].Money);
     }
@@ -26,7 +27,7 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100));
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
 
         Assert.NotNull(result.LoanState);
         Assert.Equal(new Money(100), result.LoanState.TotalBorrowed);
@@ -43,8 +44,8 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100));
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100));
+        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
 
         Assert.NotNull(firstResult.LoanState);
         Assert.NotNull(secondResult.LoanState);
@@ -57,10 +58,10 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100));
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100));
-        var thirdResult = LoanManager.TakeLoan(secondResult.GameState, playerId, new Money(100));
-        var fourthResult = LoanManager.TakeLoan(thirdResult.GameState, playerId, new Money(100));
+        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var thirdResult = LoanManager.TakeLoan(secondResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var fourthResult = LoanManager.TakeLoan(thirdResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
 
         Assert.Equal(20, firstResult.LoanState?.CurrentInterestRatePercent);
         Assert.Equal(30, secondResult.LoanState?.CurrentInterestRatePercent);
@@ -75,8 +76,8 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(125));
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(75));
+        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(125), BorrowPurpose.RentPayment);
+        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(75), BorrowPurpose.RentPayment);
 
         Assert.Equal(new Money(200), secondResult.GameState.Players[0].LoanState?.TotalBorrowed);
         Assert.Equal(2, secondResult.GameState.Players[0].LoanState?.LoanTier);
@@ -92,7 +93,7 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(amount));
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(amount), BorrowPurpose.RentPayment);
 
         Assert.False(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.InvalidAmount, result.ResultKind);
@@ -107,13 +108,57 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, isEliminated: true));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100));
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
 
         Assert.False(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.PlayerEliminated, result.ResultKind);
         Assert.Same(gameState, result.GameState);
         Assert.Equal(new Money(1500), result.GameState.Players[0].Money);
         Assert.Null(result.GameState.Players[0].LoanState);
+    }
+
+    [Theory]
+    [InlineData(BorrowPurpose.AuctionBid)]
+    [InlineData(BorrowPurpose.RentPayment)]
+    [InlineData(BorrowPurpose.TaxPayment)]
+    [InlineData(BorrowPurpose.CardPenalty)]
+    [InlineData(BorrowPurpose.Fine)]
+    public void TakeLoan_AllowsNonLoanPaymentBorrowPurposes(BorrowPurpose purpose)
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
+
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose);
+
+        Assert.True(result.LoanTaken);
+        Assert.Equal(LoanTakeResultKind.Accepted, result.ResultKind);
+        Assert.Equal(purpose, result.Purpose);
+        Assert.Equal(new Money(1600), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(100), result.GameState.Players[0].LoanState?.TotalBorrowed);
+    }
+
+    [Theory]
+    [InlineData(BorrowPurpose.LoanInterest)]
+    [InlineData(BorrowPurpose.LoanPrincipalRepayment)]
+    [InlineData(BorrowPurpose.ExistingLoanDebt)]
+    public void TakeLoan_BlocksLoanPaymentBorrowPurposes(BorrowPurpose purpose)
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: new Money(60),
+            LoanTier: 2);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 50, loanState: loanState));
+
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose);
+
+        Assert.False(result.LoanTaken);
+        Assert.Equal(LoanTakeResultKind.DisallowedBorrowPurpose, result.ResultKind);
+        Assert.Equal(purpose, result.Purpose);
+        Assert.Same(gameState, result.GameState);
+        Assert.Equal(new Money(50), result.GameState.Players[0].Money);
+        Assert.Same(loanState, result.GameState.Players[0].LoanState);
     }
 
     [Fact]

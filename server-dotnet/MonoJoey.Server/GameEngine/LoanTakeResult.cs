@@ -7,6 +7,7 @@ public sealed record LoanTakeResult(
     GameState GameState,
     PlayerId PlayerId,
     Money Amount,
+    BorrowPurpose Purpose,
     PlayerLoanState? LoanState,
     string Message)
 {
@@ -19,4 +20,5 @@ public enum LoanTakeResultKind
     PlayerNotInGame,
     PlayerEliminated,
     InvalidAmount,
+    DisallowedBorrowPurpose,
 }

@@ -35,7 +35,7 @@ public static class LoanManager
         return BankruptcyManager.EliminateIfBankrupt(paidGameState, playerId).GameState;
     }
 
-    public static LoanTakeResult TakeLoan(GameState gameState, PlayerId playerId, Money amount)
+    public static LoanTakeResult TakeLoan(GameState gameState, PlayerId playerId, Money amount, BorrowPurpose purpose)
     {
         var playerIndex = FindPlayerIndexOrNull(gameState.Players, playerId);
         if (playerIndex is null)
@@ -45,6 +45,7 @@ public static class LoanManager
                 gameState,
                 playerId,
                 amount,
+                purpose,
                 loanState: null,
                 "Loan player must exist in the game player list.");
         }
@@ -57,6 +58,7 @@ public static class LoanManager
                 gameState,
                 playerId,
                 amount,
+                purpose,
                 player.LoanState,
                 "Eliminated players cannot take loans.");
         }
@@ -68,8 +70,21 @@ public static class LoanManager
                 gameState,
                 playerId,
                 amount,
+                purpose,
                 player.LoanState,
                 "Loan amount must be positive.");
+        }
+
+        if (!IsBorrowPurposeAllowed(purpose))
+        {
+            return LoanRejected(
+                LoanTakeResultKind.DisallowedBorrowPurpose,
+                gameState,
+                playerId,
+                amount,
+                purpose,
+                player.LoanState,
+                "Players cannot borrow to pay loan interest or loan debt.");
         }
 
         var previousLoanState = player.LoanState;
@@ -94,6 +109,7 @@ public static class LoanManager
             gameState with { Players = players },
             playerId,
             amount,
+            purpose,
             loanState,
             "Loan accepted.");
     }
@@ -103,10 +119,27 @@ public static class LoanManager
         GameState gameState,
         PlayerId playerId,
         Money amount,
+        BorrowPurpose purpose,
         PlayerLoanState? loanState,
         string message)
     {
-        return new LoanTakeResult(resultKind, gameState, playerId, amount, loanState, message);
+        return new LoanTakeResult(resultKind, gameState, playerId, amount, purpose, loanState, message);
+    }
+
+    private static bool IsBorrowPurposeAllowed(BorrowPurpose purpose)
+    {
+        return purpose switch
+        {
+            BorrowPurpose.AuctionBid
+                or BorrowPurpose.RentPayment
+                or BorrowPurpose.TaxPayment
+                or BorrowPurpose.CardPenalty
+                or BorrowPurpose.Fine => true,
+            BorrowPurpose.LoanInterest
+                or BorrowPurpose.LoanPrincipalRepayment
+                or BorrowPurpose.ExistingLoanDebt => false,
+            _ => false,
+        };
     }
 
     private static int CalculateInterestRatePercent(int loanTier)
