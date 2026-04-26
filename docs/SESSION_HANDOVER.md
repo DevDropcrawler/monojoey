@@ -5,34 +5,37 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 2
-- Chunk: 2.5 tile resolution hooks
-- Completion status: Chunk 2.5 complete; tile resolution result hooks implemented and ready for the next explicitly requested chunk.
+- Chunk: 2.6 basic property system
+- Completion status: Chunk 2.6 complete; basic server-side property ownership, purchase, and rent transfer helpers are implemented.
 - Branch: `main` tracking `origin/main`; local has this chunk staged/committed after final validation.
-- Previous commit: `9c0e4e4` - `phase-2-4: add movement system`
-- Commit: pending at handover write time; see `git log -1` after the Chunk 2.5 commit.
-- Date/time: 2026-04-26 19:02 +12:00
+- Previous commit: `cfeac20` - `phase-2-5: add tile resolution hooks`
+- Commit: pending at handover write time; see `git log -1` after the Chunk 2.6 commit.
+- Date/time: 2026-04-26 19:18 +12:00
 
 ## Last Completed Chunk
 
-Phase 2, Chunk 2.5 - server-side tile resolution hooks only.
+Phase 2, Chunk 2.6 - basic property system only.
 
 Completed:
 
-- Added a server-side tile resolver for the player's current board tile.
-- Added a neutral tile resolution result with player ID, tile ID, tile index, tile type, action requirement flag, no-action helper, and placeholder action kind.
-- Added placeholder action categories for no action, start, property-like purchasable tiles, deck tiles, tax tiles, and go-to-lockup tiles.
-- Added validation for unknown players and players whose current tile is not present on the board.
-- Added focused tests for no-op tile resolution, property placeholder resolution, Start tile resolution, invalid player/tile handling, and non-mutation of money, ownership, player location, phase, turn number, and game end state.
+- Added `PropertyManager` for server-side property ownership and rent behavior.
+- Added `AssignOwner` for assigning an unowned purchasable tile to an existing player without money transfer.
+- Added `BuyProperty` for buying an unowned purchasable tile, deducting the tile price, and assigning ownership.
+- Added `PayRentForCurrentTile` for paying rent from the landing player to the owner of the landed purchasable tile.
+- Rent uses the first value from the tile rent table, with a simple placeholder fallback for purchasable tiles that have no rent table.
+- Added result records for property purchases and rent payments.
+- Added validation for unknown owners, buyers, landing players, missing property tiles, non-purchasable tiles, already-owned properties, duplicate ownership, and rent that would make the landing player negative.
+- Added focused tests for assignment/purchase, rent charging, rent transfer, own-property no-charge, unowned-property no-charge, non-property no-rent, and invalid handling.
 
 Not included by explicit user scope:
 
-- Rent.
-- Buying property.
-- Auctions.
+- Auctions or mandatory auction flow.
 - Loan Shark.
-- Card draws or card effects.
-- Jail/status logic.
-- Taxes/fines money changes.
+- Cards.
+- Mortgages.
+- Houses/upgrades.
+- Trading.
+- Bankruptcy or elimination flow.
 - Networking.
 - Unity/UI.
 - Stats.
@@ -40,10 +43,10 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionActionKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TileResolver.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TileResolverTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyPurchaseResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/RentPaymentResult.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Phase 2 Engine Files
@@ -58,7 +61,10 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/MovementResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyPurchaseResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/RentPaymentResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Tile.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionActionKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionResult.cs`
@@ -73,10 +79,11 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 28 tests passed.
+  - Output summary: 41 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
   - Run after build/test and before final staging/commit as requested.
+  - Output showed `main...origin/main` with the new property-system files and handover update untracked/modified before staging.
 
 ## Known Issues
 
@@ -88,20 +95,24 @@ Not included by explicit user scope:
 ## Placeholders Introduced Or Preserved
 
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
-- New tile resolution action kinds are placeholders only and do not apply game effects.
+- Tile resolution action kinds remain placeholders and do not apply game effects.
+- Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 - No deterministic production dice sequence was introduced; deterministic dice behavior remains represented by test injection through `IDiceRoller`.
-- No ownership, rent, reward, jail/lockup status, auction, card, loan, tax/fine money, networking, Unity, stats, or persistence behavior was introduced.
+- No auction, Loan Shark, card, mortgage, house/upgrade, trade, tax/fine money, networking, Unity, stats, or persistence behavior was introduced.
 
 ## Important Decisions Preserved
 
 - Server-authoritative rules state.
 - Unity remains untouched.
-- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, property/rent behavior, card behavior, pass-start reward payment, lockup behavior, or bankruptcy behavior was added.
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
+- Ownership continues to live on `Player.OwnedPropertyIds`; no new persistence or aggregate ownership store was added.
+- `PropertyManager.AssignOwner` is intentionally narrow so a future auction flow can assign ownership after its own bidding rules.
+- `PropertyManager.BuyProperty` only buys unowned purchasable tiles and rejects purchases that would make the buyer negative.
+- Rent payment is a focused money transfer and rejects rent that would make the landing player negative; bankruptcy/elimination is still not implemented.
+- Tile resolution remains neutral metadata only and does not mutate `GameState`.
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
-- Tile resolution currently returns neutral metadata only and does not mutate `GameState`.
 
 ## Next Recommended Chunk
 
@@ -110,8 +121,8 @@ Phase 2 follow-up - choose one narrow rules slice, only if explicitly requested.
 Possible next scopes:
 
 - Pass-start reward handling.
-- Property purchase offer flow.
 - End-turn transition after resolution.
+- Purchase offer state that calls into the basic property helper.
 
 Recommended validation:
 
@@ -123,11 +134,13 @@ Recommended validation:
 
 Do not implement before its assigned chunk:
 
-- Property ownership or rent.
 - Bankruptcy/elimination behavior.
 - Auctions.
 - Loan Shark.
 - Cards.
+- Mortgages.
+- Houses/upgrades.
+- Trading.
 - Taxes/fines money changes.
 - Jail/lockup status behavior.
 - Lobbies.
@@ -138,4 +151,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 2.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 2.6 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
