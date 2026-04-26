@@ -5,33 +5,31 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 4
-- Chunk: 4.3 Card action resolution hooks
-- Completion status: Chunk 4.3 complete; drawn card metadata can be resolved into neutral structured effects without executing them.
+- Chunk: 4.4 Execute card effects
+- Completion status: Chunk 4.4 complete; resolved movement-to-start, relative movement, receive-money, and pay-money card effects can execute against `GameState`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `9998c11` - `phase-4-2: add card draw state`
-- Last commit after this chunk: `phase-4-3: add card resolution hooks`
-- Date/time: 2026-04-27 10:10 +12:00
+- Previous commit: `phase-4-3: add card resolution hooks`
+- Last commit after this chunk: `phase-4-4: execute card effects`
+- Date/time: 2026-04-27 10:18 +12:00
 
 ## Last Completed Chunk
 
-Phase 4, Chunk 4.3 - Card action resolution hooks only.
+Phase 4, Chunk 4.4 - Execute card effects, movement and money only.
 
 Completed:
 
-- Added `CardActionParameters` for passive card metadata such as target tile, step count, and amount.
-- Extended `Card` to carry optional passive parameters.
-- Added `CardResolutionActionKind` for neutral resolved card effects.
-- Added `CardResolutionResult` with `PlayerId`, `CardId`, resolved action kind, and optional parameters.
-- Added `CardResolver.ResolveCard(player, card)` to map a card to a structured result without reading or mutating `GameState`.
-- Mapped movement, money, lockup, release-from-lockup, nearest-property-type, and repair-style card action kinds to neutral result kinds.
-- Invalid, unspecified, undefined, or missing-required-parameter cards return `CardResolutionActionKind.InvalidCard` instead of throwing.
-- Added focused tests for every current `CardActionKind`, parameter pass-through, invalid card handling, placeholder deck validity, and no `GameState` mutation.
+- Added `CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution)`.
+- Executed `CardResolutionActionKind.MoveToStart` by calculating forward steps to the start tile and routing through `MovementManager`.
+- Executed `CardResolutionActionKind.MoveSteps` by routing the resolved step count through `MovementManager`.
+- Extended `MovementManager.MovePlayer` to support negative relative steps with positive modulo board wrapping.
+- Executed `CardResolutionActionKind.ReceiveMoney` by increasing only the resolved player's balance.
+- Executed `CardResolutionActionKind.PayMoney` by deducting from only the resolved player's balance.
+- Routed negative post-payment balances through `BankruptcyManager.EliminateIfBankrupt`, preserving existing hard-elimination bankruptcy behavior.
+- Left unsupported/out-of-scope card resolution kinds as no-ops for this chunk.
+- Added focused tests for move-to-start, backward move-steps, receiving money, paying money, pay-money negative-balance elimination, and no unrelated state mutation.
 
 Not included by explicit user scope:
 
-- Card action execution.
-- Movement from cards.
-- Money changes from cards.
 - Jail/lockup behavior from cards.
 - Networking.
 - Unity/UI.
@@ -40,13 +38,9 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardResolverTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardEffectExecutorTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -70,6 +64,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResultKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
@@ -106,10 +101,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 127 tests passed.
+  - Output summary: 133 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with card resolution files, resolver tests, card metadata updates, and this handover doc.
+  - Result before commit: `main...origin/main` with card effect executor, movement manager update, executor tests, and this handover doc.
 
 ## Known Issues
 
@@ -134,6 +129,7 @@ Not included by explicit user scope:
 - Empty card draw piles return `CardDrawResultKind.DrawPileEmpty`; discards are not reshuffled yet.
 - Card deck state is standalone and is not stored in `GameState` yet.
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; it does not mutate state or discard cards.
+- `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged in this chunk.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -180,9 +176,17 @@ Not included by explicit user scope:
 - `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
+- Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
 - `CardResolver.ResolveCard(player, card)` maps `CardActionKind` plus card parameters into `CardResolutionResult` only.
 - `CardResolver.ResolveCard(player, card)` does not accept `GameState`, does not mutate player state, and does not execute the resolved effect.
-- Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
+- `CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution)` is the first card execution boundary and returns a new `GameState`.
+- Card movement execution reuses `MovementManager`; no card-specific position mutation path was added.
+- `MovementManager.MovePlayer` now accepts negative steps for relative backward movement and wraps by board length.
+- `CardResolutionActionKind.MoveToStart` execution currently moves forward to tile ID `start`, including wrapping when needed, through `MovementManager`.
+- `CardResolutionActionKind.MoveSteps` execution can move forward or backward through `MovementManager`.
+- `CardResolutionActionKind.ReceiveMoney` and `CardResolutionActionKind.PayMoney` affect only the resolved player.
+- `CardResolutionActionKind.PayMoney` deducts first; if the player's balance becomes negative, `BankruptcyManager.EliminateIfBankrupt` marks the player bankrupt/eliminated.
+- `CardEffectExecutor` does not draw, discard, reshuffle, advance turns, resolve landing tiles, start auctions, apply lockup status, grant held cards, or interact with loans.
 
 ## Next Recommended Chunk
 
@@ -191,8 +195,8 @@ Phase 4 follow-up - choose one narrow card integration slice only if explicitly 
 Possible next scopes:
 
 - Add deterministic deck state to `GameState`.
-- Add tile-to-deck draw integration without action execution.
-- Add card action execution only as a separately scoped chunk after the execution rules are explicitly requested.
+- Add tile-to-deck draw integration with the existing card resolver/executor, if explicitly requested.
+- Add specific out-of-scope card execution kinds one chunk at a time, such as move-to-tile or lockup behavior, if explicitly requested.
 
 Recommended validation:
 
@@ -212,9 +216,6 @@ Do not implement before its assigned chunk:
 - Debt recovery.
 - Asset liquidation.
 - Automatic card reshuffling.
-- Card action execution.
-- Movement from cards.
-- Money changes from cards.
 - Jail/lockup behavior from cards.
 - Mortgages.
 - Houses/upgrades.
@@ -229,4 +230,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 4.2 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 4.4 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.

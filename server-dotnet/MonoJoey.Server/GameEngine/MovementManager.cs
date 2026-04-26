@@ -6,11 +6,6 @@ public static class MovementManager
 {
     public static MovementResult MovePlayer(GameState gameState, PlayerId playerId, int steps)
     {
-        if (steps < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(steps), steps, "Movement steps cannot be negative.");
-        }
-
         if (gameState.Board.Tiles.Count == 0)
         {
             throw new InvalidOperationException("A board must have at least one tile before players can move.");
@@ -20,7 +15,7 @@ public static class MovementManager
         var player = gameState.Players[playerIndex];
         var currentTile = FindTileById(gameState.Board, player.CurrentTileId);
         var boardLength = gameState.Board.Tiles.Count;
-        var landingTileIndex = (currentTile.Index + steps) % boardLength;
+        var landingTileIndex = PositiveModulo(currentTile.Index + steps, boardLength);
         var landingTile = FindTileByIndex(gameState.Board, landingTileIndex);
         var movedPlayer = player with { CurrentTileId = landingTile.TileId };
         var players = gameState.Players.ToArray();
@@ -32,6 +27,11 @@ public static class MovementManager
             landingTile.TileId,
             landingTileIndex,
             steps > 0 && currentTile.Index + steps >= boardLength);
+    }
+
+    private static int PositiveModulo(int value, int divisor)
+    {
+        return ((value % divisor) + divisor) % divisor;
     }
 
     private static int FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)
