@@ -11,4 +11,5 @@ public sealed record Player(
     TileId CurrentTileId,
     IReadOnlySet<TileId> OwnedPropertyIds,
     IReadOnlySet<CardId> HeldCardIds,
-    bool IsBankrupt);
+    bool IsBankrupt,
+    bool IsEliminated);

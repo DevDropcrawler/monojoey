@@ -12,9 +12,15 @@ public static class TurnManager
             throw new InvalidOperationException("A game must have at least one player before turns can start.");
         }
 
+        var firstActivePlayer = gameState.Players.FirstOrDefault(player => !player.IsEliminated);
+        if (firstActivePlayer is null)
+        {
+            throw new InvalidOperationException("A game must have at least one active player before turns can start.");
+        }
+
         return gameState with
         {
-            CurrentTurnPlayerId = gameState.Players[0].PlayerId,
+            CurrentTurnPlayerId = firstActivePlayer.PlayerId,
             Phase = GamePhase.AwaitingRoll,
             TurnNumber = 1,
         };
@@ -27,7 +33,13 @@ public static class TurnManager
             throw new InvalidOperationException("No current turn player is set.");
         }
 
-        return gameState.Players.Single(player => player.PlayerId == gameState.CurrentTurnPlayerId.Value);
+        var currentPlayer = gameState.Players.Single(player => player.PlayerId == gameState.CurrentTurnPlayerId.Value);
+        if (currentPlayer.IsEliminated)
+        {
+            throw new InvalidOperationException("Eliminated players cannot take turns.");
+        }
+
+        return currentPlayer;
     }
 
     public static GameState AdvanceToNextTurn(GameState gameState)
@@ -43,7 +55,7 @@ public static class TurnManager
         }
 
         var currentIndex = FindCurrentPlayerIndex(gameState.Players, gameState.CurrentTurnPlayerId.Value);
-        var nextIndex = (currentIndex + 1) % gameState.Players.Count;
+        var nextIndex = FindNextActivePlayerIndex(gameState.Players, currentIndex);
 
         return gameState with
         {
@@ -64,5 +76,19 @@ public static class TurnManager
         }
 
         throw new InvalidOperationException("Current turn player must exist in the game player list.");
+    }
+
+    private static int FindNextActivePlayerIndex(IReadOnlyList<Player> players, int currentIndex)
+    {
+        for (var offset = 1; offset <= players.Count; offset++)
+        {
+            var nextIndex = (currentIndex + offset) % players.Count;
+            if (!players[nextIndex].IsEliminated)
+            {
+                return nextIndex;
+            }
+        }
+
+        throw new InvalidOperationException("A game must have at least one active player before turns can advance.");
     }
 }

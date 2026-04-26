@@ -105,6 +105,7 @@ public class MovementManagerTests
             new TileId(currentTileId),
             new HashSet<TileId>(),
             new HashSet<CardId>(),
-            IsBankrupt: false);
+            IsBankrupt: false,
+            IsEliminated: false);
     }
 }

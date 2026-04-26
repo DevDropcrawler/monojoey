@@ -73,7 +73,15 @@ public static class PropertyManager
         var rent = CalculateRent(tile);
         if (landingPlayer.Money.Amount < rent.Amount)
         {
-            throw new InvalidOperationException("Landing player must have enough money to pay rent.");
+            var eliminationResult = BankruptcyManager.EliminateForFailedPayment(gameState, landingPlayerId, rent);
+            return new RentPaymentResult(
+                eliminationResult.GameState,
+                landingPlayerId,
+                tile.TileId,
+                owner.PlayerId,
+                rent,
+                Money.Zero,
+                eliminationResult);
         }
 
         var players = gameState.Players.ToArray();

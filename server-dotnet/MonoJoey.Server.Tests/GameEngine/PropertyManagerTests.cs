@@ -163,16 +163,23 @@ public class PropertyManagerTests
     }
 
     [Fact]
-    public void PayRentForCurrentTile_RejectsRentThatWouldMakeLandingPlayerNegative()
+    public void PayRentForCurrentTile_EliminatesLandingPlayerWhenRentCannotBePaid()
     {
         var gameState = CreateGameState(
             CreatePlayer("player_1", "property_01", money: 1),
             CreatePlayer("player_2", "start", 1500, "property_01"));
 
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1")));
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
 
-        Assert.Equal("Landing player must have enough money to pay rent.", exception.Message);
+        Assert.False(result.RentCharged);
+        Assert.True(result.PlayerEliminated);
+        Assert.Equal(new Money(2), result.RentDue);
+        Assert.Equal(new Money(0), result.RentPaid);
+        Assert.True(result.GameState.Players[0].IsBankrupt);
+        Assert.True(result.GameState.Players[0].IsEliminated);
+        Assert.Equal(new Money(1), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1500), result.GameState.Players[1].Money);
+        Assert.Equal(EliminationReason.CannotFulfillPayment, result.EliminationResult?.Reason);
     }
 
     private static GameState CreateGameState(params Player[] players)
@@ -203,6 +210,7 @@ public class PropertyManagerTests
             new TileId(currentTileId),
             ownedPropertyIds.Select(propertyId => new TileId(propertyId)).ToHashSet(),
             new HashSet<CardId>(),
-            IsBankrupt: false);
+            IsBankrupt: false,
+            IsEliminated: false);
     }
 }

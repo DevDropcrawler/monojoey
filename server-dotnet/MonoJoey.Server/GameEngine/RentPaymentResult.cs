@@ -8,7 +8,10 @@ public sealed record RentPaymentResult(
     TileId TileId,
     PlayerId? OwnerId,
     Money RentDue,
-    Money RentPaid)
+    Money RentPaid,
+    PlayerEliminationResult? EliminationResult = null)
 {
     public bool RentCharged => RentPaid.Amount > 0;
+
+    public bool PlayerEliminated => EliminationResult?.WasEliminated == true;
 }
