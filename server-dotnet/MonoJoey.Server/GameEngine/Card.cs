@@ -5,4 +5,5 @@ using MonoJoey.Shared.Protocol;
 public sealed record Card(
     CardId CardId,
     string DisplayName,
-    CardActionKind ActionKind);
+    CardActionKind ActionKind,
+    CardActionParameters? Parameters = null);

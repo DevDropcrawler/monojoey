@@ -5,26 +5,27 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 4
-- Chunk: 4.2 Card drawing and deck state
-- Completion status: Chunk 4.2 complete; deterministic deck draw/discard state exists without card effects.
+- Chunk: 4.3 Card action resolution hooks
+- Completion status: Chunk 4.3 complete; drawn card metadata can be resolved into neutral structured effects without executing them.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `c9a9c74` - `phase-4-1: add placeholder card decks`
-- Last commit after this chunk: `phase-4-2: add card draw state`
-- Date/time: 2026-04-27 10:00 +12:00
+- Previous commit: `9998c11` - `phase-4-2: add card draw state`
+- Last commit after this chunk: `phase-4-3: add card resolution hooks`
+- Date/time: 2026-04-27 10:10 +12:00
 
 ## Last Completed Chunk
 
-Phase 4, Chunk 4.2 - Card drawing and deck state only.
+Phase 4, Chunk 4.3 - Card action resolution hooks only.
 
 Completed:
 
-- Added `CardDeckState` with deterministic draw pile and discard pile tracking.
-- Added `CardDeckState.FromDeck()` to create deck state from a passive `CardDeck`.
-- Added `CardDeckManager.Draw()` to remove and return the top draw-pile card through `CardDrawResult`.
-- Added `CardDeckManager.Discard()` to append a drawn card to the discard pile.
-- Added `CardDrawResultKind.Drawn` and `CardDrawResultKind.DrawPileEmpty`.
-- Empty draw piles are rejected deterministically with unchanged deck state; no reshuffle behavior exists yet.
-- Added focused tests for expected draw order, draw pile count changes, discard count changes, empty draw behavior, deterministic ordering, and immutable previous state.
+- Added `CardActionParameters` for passive card metadata such as target tile, step count, and amount.
+- Extended `Card` to carry optional passive parameters.
+- Added `CardResolutionActionKind` for neutral resolved card effects.
+- Added `CardResolutionResult` with `PlayerId`, `CardId`, resolved action kind, and optional parameters.
+- Added `CardResolver.ResolveCard(player, card)` to map a card to a structured result without reading or mutating `GameState`.
+- Mapped movement, money, lockup, release-from-lockup, nearest-property-type, and repair-style card action kinds to neutral result kinds.
+- Invalid, unspecified, undefined, or missing-required-parameter cards return `CardResolutionActionKind.InvalidCard` instead of throwing.
+- Added focused tests for every current `CardActionKind`, parameter pass-through, invalid card handling, placeholder deck validity, and no `GameState` mutation.
 
 Not included by explicit user scope:
 
@@ -39,11 +40,13 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResultKind.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardDeckManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardResolverTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -61,11 +64,15 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/BorrowPurpose.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResultKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
@@ -99,10 +106,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 109 tests passed.
+  - Output summary: 127 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with new card draw state files, new deck state tests, and this handover doc.
+  - Result before commit: `main...origin/main` with card resolution files, resolver tests, card metadata updates, and this handover doc.
 
 ## Known Issues
 
@@ -123,8 +130,10 @@ Not included by explicit user scope:
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Placeholder card IDs/display names from Chunk 4.1 are functional identifiers only, not final card names or text.
 - Placeholder card decks have fixed ordered definitions; `CardDeckState.FromDeck()` preserves that order for deterministic draw behavior.
+- Placeholder card action parameters are functional metadata only; tile targets and money amounts are not final card design.
 - Empty card draw piles return `CardDrawResultKind.DrawPileEmpty`; discards are not reshuffled yet.
 - Card deck state is standalone and is not stored in `GameState` yet.
+- `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; it does not mutate state or discard cards.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -165,11 +174,15 @@ Not included by explicit user scope:
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
 - Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
+- `CardActionParameters` are passive metadata only and do not execute movement, money changes, lockup changes, or held-card behavior.
 - Chance-style and Table-style placeholder decks each contain 16 cards, matching standard property-board-game deck size expectations without copying protected wording.
 - `CardActionKind.HoldForLater` marks retainable card functions only; it does not grant, revoke, or consume any held card behavior.
 - `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
+- `CardResolver.ResolveCard(player, card)` maps `CardActionKind` plus card parameters into `CardResolutionResult` only.
+- `CardResolver.ResolveCard(player, card)` does not accept `GameState`, does not mutate player state, and does not execute the resolved effect.
+- Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
 
 ## Next Recommended Chunk
 
@@ -179,7 +192,7 @@ Possible next scopes:
 
 - Add deterministic deck state to `GameState`.
 - Add tile-to-deck draw integration without action execution.
-- Add card action execution only as a separately scoped chunk.
+- Add card action execution only as a separately scoped chunk after the execution rules are explicitly requested.
 
 Recommended validation:
 

@@ -15,21 +15,21 @@ public static class PlaceholderCardDeckFactory
             new[]
             {
                 CreateCard("CHANCE_01_MOVE_TO_START", CardActionKind.MoveToStart),
-                CreateCard("CHANCE_02_MOVE_TO_EARLY_PROPERTY", CardActionKind.MoveToTile),
-                CreateCard("CHANCE_03_MOVE_TO_MID_PROPERTY", CardActionKind.MoveToTile),
-                CreateCard("CHANCE_04_MOVE_TO_LATE_PROPERTY", CardActionKind.MoveToTile),
+                CreateMoveToTileCard("CHANCE_02_MOVE_TO_EARLY_PROPERTY", "property_01"),
+                CreateMoveToTileCard("CHANCE_03_MOVE_TO_MID_PROPERTY", "property_03"),
+                CreateMoveToTileCard("CHANCE_04_MOVE_TO_LATE_PROPERTY", "transport_01"),
                 CreateCard("CHANCE_05_MOVE_TO_NEAREST_TRANSPORT", CardActionKind.MoveToNearestTransport),
                 CreateCard("CHANCE_06_MOVE_TO_NEAREST_TRANSPORT", CardActionKind.MoveToNearestTransport),
                 CreateCard("CHANCE_07_MOVE_TO_NEAREST_UTILITY", CardActionKind.MoveToNearestUtility),
-                CreateCard("CHANCE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
+                CreateMoneyCard("CHANCE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 50),
                 CreateCard("CHANCE_09_RELEASE_FROM_LOCKUP_HOLD", CardActionKind.HoldForLater),
-                CreateCard("CHANCE_10_MOVE_RELATIVE_BACK", CardActionKind.MoveRelative),
+                CreateMoveRelativeCard("CHANCE_10_MOVE_RELATIVE_BACK", -3),
                 CreateCard("CHANCE_11_GO_TO_LOCKUP", CardActionKind.GoToLockup),
-                CreateCard("CHANCE_12_PAY_BANK", CardActionKind.PayBank),
-                CreateCard("CHANCE_13_PAY_BANK", CardActionKind.PayBank),
-                CreateCard("CHANCE_14_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("CHANCE_15_PAY_EVERY_PLAYER", CardActionKind.PayEveryPlayer),
-                CreateCard("CHANCE_16_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
+                CreateMoneyCard("CHANCE_12_PAY_BANK", CardActionKind.PayBank, 15),
+                CreateMoneyCard("CHANCE_13_PAY_BANK", CardActionKind.PayBank, 50),
+                CreateMoneyCard("CHANCE_14_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 150),
+                CreateMoneyCard("CHANCE_15_PAY_EVERY_PLAYER", CardActionKind.PayEveryPlayer, 20),
+                CreateMoneyCard("CHANCE_16_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
             });
     }
 
@@ -40,22 +40,22 @@ public static class PlaceholderCardDeckFactory
             "Placeholder Table Deck",
             new[]
             {
-                CreateCard("TABLE_01_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_02_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_03_PAY_BANK", CardActionKind.PayBank),
-                CreateCard("TABLE_04_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
+                CreateMoneyCard("TABLE_01_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 25),
+                CreateMoneyCard("TABLE_02_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 50),
+                CreateMoneyCard("TABLE_03_PAY_BANK", CardActionKind.PayBank, 50),
+                CreateMoneyCard("TABLE_04_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
                 CreateCard("TABLE_05_RELEASE_FROM_LOCKUP_HOLD", CardActionKind.HoldForLater),
                 CreateCard("TABLE_06_GO_TO_LOCKUP", CardActionKind.GoToLockup),
-                CreateCard("TABLE_07_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_09_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_10_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_11_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
-                CreateCard("TABLE_12_PAY_BANK", CardActionKind.PayBank),
-                CreateCard("TABLE_13_PAY_BANK", CardActionKind.PayBank),
-                CreateCard("TABLE_14_REPAIR_OWNED_PROPERTIES", CardActionKind.RepairOwnedProperties),
-                CreateCard("TABLE_15_RECEIVE_FROM_EVERY_PLAYER", CardActionKind.ReceiveFromEveryPlayer),
-                CreateCard("TABLE_16_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank),
+                CreateMoneyCard("TABLE_07_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 20),
+                CreateMoneyCard("TABLE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 10),
+                CreateMoneyCard("TABLE_09_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
+                CreateMoneyCard("TABLE_10_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 20),
+                CreateMoneyCard("TABLE_11_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
+                CreateMoneyCard("TABLE_12_PAY_BANK", CardActionKind.PayBank, 100),
+                CreateMoneyCard("TABLE_13_PAY_BANK", CardActionKind.PayBank, 150),
+                CreateMoneyCard("TABLE_14_REPAIR_OWNED_PROPERTIES", CardActionKind.RepairOwnedProperties, 25),
+                CreateMoneyCard("TABLE_15_RECEIVE_FROM_EVERY_PLAYER", CardActionKind.ReceiveFromEveryPlayer, 10),
+                CreateMoneyCard("TABLE_16_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 200),
             });
     }
 
@@ -67,5 +67,32 @@ public static class PlaceholderCardDeckFactory
     private static Card CreateCard(string id, CardActionKind actionKind)
     {
         return new Card(new CardId(id), id, actionKind);
+    }
+
+    private static Card CreateMoveToTileCard(string id, string targetTileId)
+    {
+        return new Card(
+            new CardId(id),
+            id,
+            CardActionKind.MoveToTile,
+            new CardActionParameters(TargetTileId: new TileId(targetTileId)));
+    }
+
+    private static Card CreateMoveRelativeCard(string id, int stepCount)
+    {
+        return new Card(
+            new CardId(id),
+            id,
+            CardActionKind.MoveRelative,
+            new CardActionParameters(StepCount: stepCount));
+    }
+
+    private static Card CreateMoneyCard(string id, CardActionKind actionKind, int amount)
+    {
+        return new Card(
+            new CardId(id),
+            id,
+            actionKind,
+            new CardActionParameters(Amount: new Money(amount)));
     }
 }
