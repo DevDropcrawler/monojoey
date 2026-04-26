@@ -5,31 +5,29 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 4
-- Chunk: 4.1 Placeholder card model/deck foundation
-- Completion status: Chunk 4.1 complete; passive placeholder card and deck definitions exist with validation tests only.
+- Chunk: 4.2 Card drawing and deck state
+- Completion status: Chunk 4.2 complete; deterministic deck draw/discard state exists without card effects.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `e05bff7` - `phase-3-6: add anti-loop borrowing rules`
-- Last commit after this chunk: `phase-4-1: add placeholder card decks`
-- Date/time: 2026-04-27 09:51 +12:00
+- Previous commit: `c9a9c74` - `phase-4-1: add placeholder card decks`
+- Last commit after this chunk: `phase-4-2: add card draw state`
+- Date/time: 2026-04-27 10:00 +12:00
 
 ## Last Completed Chunk
 
-Phase 4, Chunk 4.1 - Placeholder card model/deck foundation only.
+Phase 4, Chunk 4.2 - Card drawing and deck state only.
 
 Completed:
 
-- Added `Card` as a passive card model with `CardId`, placeholder display name, and `CardActionKind`.
-- Added `CardDeck` as a passive deck model with deck ID, placeholder display name, and ordered card list.
-- Added `CardActionKind` values for standard property-board-game card functions without implementing effects.
-- Added `PlaceholderCardDeckFactory.CreateChanceDeck()` with 16 functional placeholder cards.
-- Added `PlaceholderCardDeckFactory.CreateTableDeck()` with 16 functional placeholder cards.
-- Added `PlaceholderCardDeckFactory.CreateAll()` for validation and future integration.
-- Placeholder card display names intentionally match the placeholder IDs; no final flavor text was added.
-- Added focused deck validation tests for card counts, global card ID uniqueness, valid action kinds, and placeholder-only names.
+- Added `CardDeckState` with deterministic draw pile and discard pile tracking.
+- Added `CardDeckState.FromDeck()` to create deck state from a passive `CardDeck`.
+- Added `CardDeckManager.Draw()` to remove and return the top draw-pile card through `CardDrawResult`.
+- Added `CardDeckManager.Discard()` to append a drawn card to the discard pile.
+- Added `CardDrawResultKind.Drawn` and `CardDrawResultKind.DrawPileEmpty`.
+- Empty draw piles are rejected deterministically with unchanged deck state; no reshuffle behavior exists yet.
+- Added focused tests for expected draw order, draw pile count changes, discard count changes, empty draw behavior, deterministic ordering, and immutable previous state.
 
 Not included by explicit user scope:
 
-- Card drawing or shuffling.
 - Card action execution.
 - Movement from cards.
 - Money changes from cards.
@@ -41,11 +39,11 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResultKind.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardDeckManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -64,6 +62,10 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResultKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
@@ -97,10 +99,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 102 tests passed.
+  - Output summary: 109 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with new card/deck files, new deck tests, and this handover doc.
+  - Result before commit: `main...origin/main` with new card draw state files, new deck state tests, and this handover doc.
 
 ## Known Issues
 
@@ -120,7 +122,9 @@ Not included by explicit user scope:
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Placeholder card IDs/display names from Chunk 4.1 are functional identifiers only, not final card names or text.
-- Placeholder card decks have fixed ordered definitions for validation only; they are not shuffled, drawn from, stored in `GameState`, or executed.
+- Placeholder card decks have fixed ordered definitions; `CardDeckState.FromDeck()` preserves that order for deterministic draw behavior.
+- Empty card draw piles return `CardDrawResultKind.DrawPileEmpty`; discards are not reshuffled yet.
+- Card deck state is standalone and is not stored in `GameState` yet.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -163,15 +167,18 @@ Not included by explicit user scope:
 - Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
 - Chance-style and Table-style placeholder decks each contain 16 cards, matching standard property-board-game deck size expectations without copying protected wording.
 - `CardActionKind.HoldForLater` marks retainable card functions only; it does not grant, revoke, or consume any held card behavior.
+- `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
+- Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
+- Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
 
 ## Next Recommended Chunk
 
-Phase 4 follow-up - choose one narrow card/deck integration slice only if explicitly requested.
+Phase 4 follow-up - choose one narrow card integration slice only if explicitly requested.
 
 Possible next scopes:
 
-- Add deterministic deck state to `GameState` without drawing effects.
-- Add card draw result metadata without action execution.
+- Add deterministic deck state to `GameState`.
+- Add tile-to-deck draw integration without action execution.
 - Add card action execution only as a separately scoped chunk.
 
 Recommended validation:
@@ -191,7 +198,7 @@ Do not implement before its assigned chunk:
 - Auction retry logic.
 - Debt recovery.
 - Asset liquidation.
-- Card drawing/shuffling.
+- Automatic card reshuffling.
 - Card action execution.
 - Movement from cards.
 - Money changes from cards.
@@ -209,4 +216,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 4.1 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 4.2 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
