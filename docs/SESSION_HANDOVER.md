@@ -4,28 +4,30 @@ This file must be updated at the end of every coding chunk.
 
 ## Current Status
 
-- Phase: 4
-- Chunk: 4.5 Lockup/Jail status system
-- Completion status: Chunk 4.5 complete; players can be locked up, hold a get-out-of-lockup escape card/token, consume it to clear lockup, and locked players are skipped/blocked by turn selection.
+- Phase: 5
+- Chunk: 5.1 Game session model only
+- Completion status: Chunk 5.1 complete; server-side sessions can be created, looked up, joined, and left, with connected-player metadata stored separately from the existing rules-engine `GameState`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `phase-4-4: execute card effects`
-- Last commit after this chunk: `phase-4-5: add lockup status system`
-- Date/time: 2026-04-27 10:29 +12:00
+- Previous commit: `phase-4-5: add lockup status system`
+- Last commit after this chunk: `phase-5-1: add session model`
+- Date/time: 2026-04-27 10:37 +12:00
 
 ## Last Completed Chunk
 
-Phase 4, Chunk 4.5 - Lockup/Jail status system only.
+Phase 5, Chunk 5.1 - Game session model only.
 
 Completed:
 
-- Added `Player.IsLockedUp` as server-side lockup/status state.
-- Added `LockupManager.SendToLockup(gameState, playerId)` to move a player directly to the placeholder lockup tile and mark them locked.
-- Added `LockupManager.GrantGetOutOfLockupEscape(gameState, playerId, escapeId)` using `Player.HeldCardIds` as the held escape card/token store.
-- Added `LockupManager.UseGetOutOfLockupEscape(gameState, playerId, escapeId)` with typed result kinds for cleared lockup, player-not-locked no-op, and missing-escape no-op.
-- Executed `CardResolutionActionKind.GoToLockup` through `LockupManager.SendToLockup`.
-- Executed `CardResolutionActionKind.GetOutOfLockup` through `LockupManager.GrantGetOutOfLockupEscape`.
-- Updated `TurnManager` so locked players are not turn-eligible; start/advance skip locked players, and `GetCurrentPlayer` rejects a locked current player with a clear error.
-- Added focused tests for sending a player to lockup, no pass-start money on lockup send, held escape state, using an escape to clear lockup, safe no-op/rejection result when using an escape while not locked or without holding it, turn skipping/blocking, executor hooks, and preserving eliminated-player state.
+- Added `GameSession` with `SessionId`, connected `Players`, existing engine `GameState`, and `GameSessionStatus`.
+- Added `GameSessionStatus` with `Lobby`, `InGame`, and `Finished`.
+- Added `PlayerConnection` with `PlayerId`, placeholder `ConnectionId`, and lobby `IsReady`.
+- Added `SessionManager.CreateSession()` to create a lobby session with a fresh session ID, default board, empty engine-player list, and lobby-phase `GameState`.
+- Added `SessionManager.JoinSession(sessionId, player)` to append a connected player and return the updated session.
+- Added `SessionManager.LeaveSession(sessionId, player)` to remove a connected player and return the updated session.
+- Added `SessionManager.GetSession(sessionId)` to return a stored session or `null` when missing.
+- Added duplicate-join handling keyed by `PlayerId`; a duplicate join is an idempotent no-op and does not replace the existing connection record.
+- Added invalid-session handling: `GetSession` returns `null`, while `JoinSession` and `LeaveSession` throw `InvalidOperationException` with `Session not found.`
+- Added focused tests for session creation, joining, leaving, player-list updates, duplicate joins, player-not-present leave no-op, and invalid-session behavior.
 
 Not included by explicit user scope:
 
@@ -33,24 +35,26 @@ Not included by explicit user scope:
 - Unity/UI.
 - Persistence.
 - Stats.
-- Advanced jail rules.
-- Paying to leave lockup.
-- Rolling doubles to leave lockup.
-- Final card text/flavour.
-- New custom cards beyond existing placeholder hooks.
+- WebSockets.
+- Message handling.
+- Turn execution over network.
+- Scaling.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResultKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LockupManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardEffectExecutorTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameSessionStatus.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
+
+## Existing Session Files
+
+- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameSessionStatus.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 
 ## Existing Engine Files
 
@@ -113,10 +117,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 145 tests passed.
+  - Output summary: 154 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with lockup manager/result files, player status state, card executor updates, turn manager updates, lockup/executor/turn tests, and this handover doc.
+  - Result before commit: `main...origin/main` with new session model files, session manager tests, and this handover doc.
 
 ## Known Issues
 
@@ -127,6 +131,13 @@ Not included by explicit user scope:
 
 ## Placeholders Introduced Or Preserved
 
+- Session IDs are generated as GUID `N` strings and are not yet public lobby codes or persisted identifiers.
+- `PlayerConnection.ConnectionId` is a string placeholder only; no transport, WebSocket, or reconnect protocol exists yet.
+- `PlayerConnection.IsReady` is lobby metadata only; no ready-check transition starts a game yet.
+- `GameSession.Players` tracks connected players only and is intentionally separate from `GameState.Players`; joining a session does not create an engine player yet.
+- `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
+- Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
+- Leaving with a player not present in the session is a safe no-op.
 - `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
 - `AuctionConfig.BidResetSeconds` defaults to `3`; valid bids now copy this value into `AuctionState.CountdownDurationSeconds`, but no actual time passes.
 - `AuctionConfig.MinimumBidIncrement` defaults to `1`; bid validation now uses it after the first bid.
@@ -155,6 +166,10 @@ Not included by explicit user scope:
 
 - Server-authoritative rules state.
 - Unity remains untouched.
+- Session state lives under `server-dotnet/MonoJoey.Server/Sessions` and stays outside `GameEngine`.
+- A `GameSession` owns the current rules-engine `GameState` but does not execute turns, resolve messages, or mutate gameplay over a network.
+- New sessions start with `GameSessionStatus.Lobby`, `GamePhase.Lobby`, a default board, no connected players, and no engine players.
+- Missing sessions are lookup-safe through `GetSession(sessionId) == null`; mutating missing sessions through join/leave is rejected with a clear exception.
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
 - Auctions still produce standalone `AuctionState`; `GameState` is not mutated and does not yet store active auction state.
 - `AuctionManager.PlaceBid` returns a new `AuctionState` inside `AuctionBidResult`; rejected bids return the unchanged auction state.
@@ -209,13 +224,13 @@ Not included by explicit user scope:
 
 ## Next Recommended Chunk
 
-Phase 4 follow-up - choose one narrow card integration slice only if explicitly requested.
+Phase 5 follow-up - choose the next narrow server-session slice only if explicitly requested.
 
 Possible next scopes:
 
-- Add deterministic deck state to `GameState`.
-- Add tile-to-deck draw integration with the existing card resolver/executor, if explicitly requested.
-- Add specific out-of-scope card execution kinds one chunk at a time, such as move-to-tile or nearest-property behavior, if explicitly requested.
+- Add lobby-to-engine player mapping/start-game transition.
+- Add a narrow message DTO layer without transport.
+- Add WebSocket transport only when the networking chunk is explicitly assigned.
 
 Recommended validation:
 
@@ -229,6 +244,13 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
+- Networking.
+- WebSockets.
+- Message handling.
+- Turn execution over network.
+- UI.
+- Persistence.
+- Scaling.
 - Borrowing to cover auctions beyond the explicit `BorrowPurpose.AuctionBid` context marker.
 - Loan repayment.
 - Auction retry logic.
@@ -240,12 +262,10 @@ Do not implement before its assigned chunk:
 - Houses/upgrades.
 - Trading.
 - Taxes/fines money changes.
-- Lobbies.
-- WebSockets.
 - Database persistence.
 - Stats.
 - Unity scenes, prefabs, assets, project settings, metadata, animations, or editor UI.
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 4.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 5.1 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
