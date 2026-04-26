@@ -5,42 +5,45 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 2
-- Chunk: 2.4 movement system
-- Completion status: Chunk 2.4 complete; movement-only scope implemented and ready for the next explicitly requested chunk.
+- Chunk: 2.5 tile resolution hooks
+- Completion status: Chunk 2.5 complete; tile resolution result hooks implemented and ready for the next explicitly requested chunk.
 - Branch: `main` tracking `origin/main`; local has this chunk staged/committed after final validation.
-- Previous commit: `5489bb1` - `phase-2-3: add dice system`
-- Commit: pending at handover write time; see `git log -1` after the Chunk 2.4 commit.
-- Date/time: 2026-04-26 18:40 +12:00
+- Previous commit: `9c0e4e4` - `phase-2-4: add movement system`
+- Commit: pending at handover write time; see `git log -1` after the Chunk 2.5 commit.
+- Date/time: 2026-04-26 19:02 +12:00
 
 ## Last Completed Chunk
 
-Phase 2, Chunk 2.4 - server-side movement system only.
+Phase 2, Chunk 2.5 - server-side tile resolution hooks only.
 
 Completed:
 
-- Added deterministic player movement by an explicit step count.
-- Wrapped movement around the board using the board tile count.
-- Updated only the moved player's `CurrentTileId`.
-- Returned landing tile ID, landing tile index, moved player ID, updated game state, and a `PassedStart` flag.
-- Tracked pass-start for normal wrap, exact landing on start after a full lap, and multiple-wrap moves.
-- Added focused tests for normal movement, wrap-around movement, exact landing position, multiple wraps, pass-start detection, and preserving other players.
+- Added a server-side tile resolver for the player's current board tile.
+- Added a neutral tile resolution result with player ID, tile ID, tile index, tile type, action requirement flag, no-action helper, and placeholder action kind.
+- Added placeholder action categories for no action, start, property-like purchasable tiles, deck tiles, tax tiles, and go-to-lockup tiles.
+- Added validation for unknown players and players whose current tile is not present on the board.
+- Added focused tests for no-op tile resolution, property placeholder resolution, Start tile resolution, invalid player/tile handling, and non-mutation of money, ownership, player location, phase, turn number, and game end state.
 
 Not included by explicit user scope:
 
-- Tile effects or tile resolution.
-- Pass-start reward payment.
-- Rent or property ownership behavior.
+- Rent.
+- Buying property.
 - Auctions.
 - Loan Shark.
-- Cards.
-- Jail/lockup behavior.
-- Networking, Unity/UI, stats, or persistence.
+- Card draws or card effects.
+- Jail/status logic.
+- Taxes/fines money changes.
+- Networking.
+- Unity/UI.
+- Stats.
+- Persistence.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MovementResult.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/MovementManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolver.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TileResolverTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Phase 2 Engine Files
@@ -57,6 +60,9 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Tile.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolutionResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TileResolver.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 
 ## Validation Commands Run
@@ -67,12 +73,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 22 tests passed.
+  - Output summary: 28 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `rg -n "Rent|Loan|Auction|Card|TileResolved|OwnedProperty|DbContext|WebSocket|Lobby|Unity|Purchase|PropertyOwner|Jail|Lockup|Tax|Chance|Table" server-dotnet\MonoJoey.Server\GameEngine server-dotnet\MonoJoey.Server.Tests\GameEngine`
-  - Result: only existing passive model/config fields, board placeholders, and test setup values were found; no out-of-scope behavior was added.
 - `git status --short --branch`
-  - Run before final staging/commit and after final validation as requested.
+  - Run after build/test and before final staging/commit as requested.
 
 ## Known Issues
 
@@ -84,27 +88,30 @@ Not included by explicit user scope:
 ## Placeholders Introduced Or Preserved
 
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
+- New tile resolution action kinds are placeholders only and do not apply game effects.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 - No deterministic production dice sequence was introduced; deterministic dice behavior remains represented by test injection through `IDiceRoller`.
-- No tile-resolution, ownership, rent, reward, jail/lockup, auction, card, or loan behavior was introduced.
+- No ownership, rent, reward, jail/lockup status, auction, card, loan, tax/fine money, networking, Unity, stats, or persistence behavior was introduced.
 
 ## Important Decisions Preserved
 
 - Server-authoritative rules state.
 - Unity remains untouched.
-- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, tile-resolution behavior, property/rent behavior, card behavior, pass-start reward payment, lockup behavior, or bankruptcy behavior was added.
+- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, property/rent behavior, card behavior, pass-start reward payment, lockup behavior, or bankruptcy behavior was added.
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
+- Tile resolution currently returns neutral metadata only and does not mutate `GameState`.
 
 ## Next Recommended Chunk
 
-Phase 2 follow-up - tile resolution or pass-start reward handling, only if explicitly requested.
+Phase 2 follow-up - choose one narrow rules slice, only if explicitly requested.
 
-Recommended scope:
+Possible next scopes:
 
-- Choose one narrow rules slice before coding.
-- Keep rent, auctions, cards, loans, networking, Unity, stats, and persistence out of scope unless explicitly requested.
+- Pass-start reward handling.
+- Property purchase offer flow.
+- End-turn transition after resolution.
 
 Recommended validation:
 
@@ -116,13 +123,13 @@ Recommended validation:
 
 Do not implement before its assigned chunk:
 
-- Tile resolution behavior.
-- Pass-start reward payment.
 - Property ownership or rent.
 - Bankruptcy/elimination behavior.
 - Auctions.
 - Loan Shark.
 - Cards.
+- Taxes/fines money changes.
+- Jail/lockup status behavior.
 - Lobbies.
 - WebSockets.
 - Database persistence.
@@ -131,4 +138,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 2.4 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 2.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
