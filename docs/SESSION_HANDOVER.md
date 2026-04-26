@@ -5,36 +5,36 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 3
-- Chunk: 3.3 auction finalization
-- Completion status: Chunk 3.3 complete; deterministic auction finalization, winner selection, payment, ownership transfer, failed-payment elimination, and no-winner outcomes are implemented.
+- Chunk: 3.4 Loan Shark foundation
+- Completion status: Chunk 3.4 complete; deterministic loan state, borrowing, escalating stored interest rates, and loan rejection outcomes are implemented.
 - Branch: `main` tracking `origin/main`; local has this chunk committed after final validation.
-- Previous commit: `95f679e` - `phase-3-2: add auction bidding transitions`
-- Commit: `phase-3-3: add auction finalization`
-- Date/time: 2026-04-27 00:08 +12:00
+- Previous commit: `654dec7` - `phase-3-3: add auction finalization`
+- Commit: `phase-3-4: add loan shark foundation`
+- Date/time: 2026-04-27 00:18 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.3 - auction finalization only.
+Phase 3, Chunk 3.4 - Loan Shark foundation only.
 
 Completed:
 
-- Added `AuctionFinalizationResult` and `AuctionFinalizationResultKind` for typed auction resolution outcomes.
-- Added `AuctionManager.FinalizeAuction` as a deterministic finalization method for auctions the caller has already ended.
-- Finalizes no-bid auctions with no winner and no game-state mutation.
-- Selects the highest non-eliminated bidder from bid history as the winner.
-- Deducts the winning bid from an affordable winner and assigns the property through `PropertyManager.AssignOwner`.
-- Rejects eliminated bidders during finalization, including when they previously placed a bid before elimination.
-- Handles unaffordable winning bids by calling `BankruptcyManager.EliminateForFailedPayment`; the property remains unowned and the winner does not pay.
-- Returns a safe invalid-auction result for invalid finalization input such as a missing auction tile.
-- Added focused tests for no bids, single bid, multiple bids, payment deduction, ownership transfer, failed-payment elimination, eliminated-bidder exclusion, eliminated-only no-winner, and invalid auction state.
+- Added `PlayerLoanState` for per-player loan tracking.
+- Added optional `Player.LoanState` so existing test fixtures and player construction remain stable.
+- Added `LoanTakeResult` and `LoanTakeResultKind` for deterministic accepted/rejected borrowing outcomes.
+- Added `LoanManager.TakeLoan` to grant money immediately and return a new immutable `GameState`.
+- Tracks `TotalBorrowed`, `CurrentInterestRatePercent`, `NextTurnInterestDue`, and `LoanTier`.
+- Stores interest rates explicitly at borrow time; rates are not recomputed dynamically by consumers.
+- Escalates interest rates deterministically: first borrow 20%, second 30%, third 50%, then +10% per tier capped at 100%.
+- Rejects zero/negative loan amounts without mutating game state.
+- Rejects eliminated players without mutating game state.
+- Added focused tests for money increase, loan-state creation, multi-loan escalation, explicit tier rates, state persistence, invalid amount rejection, and eliminated-player rejection.
 
 Not included by explicit user scope:
 
-- Real wall-clock timers.
-- Async countdown loop.
-- Auction retry logic.
-- Loan Shark.
-- Borrowing to cover auctions.
+- Interest payment.
+- Start-of-turn deductions or enforcement.
+- Repayment system.
+- Preventing borrowing or anti-loop rules beyond basic invalid amount and eliminated-player rejection.
 - Networking.
 - Unity/UI.
 - Persistence.
@@ -42,9 +42,11 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionFinalizationResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerLoanState.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -65,11 +67,14 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/EliminationReason.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Money.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/MovementResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PlayerEliminationResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerLoanState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyPurchaseResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
@@ -88,11 +93,11 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 74 tests passed.
+  - Output summary: 82 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
   - Run after build/test as requested.
-  - Output showed `main...origin/main` with modified auction manager/tests and new `AuctionFinalizationResult.cs`.
+  - Output showed `main...origin/main` with modified/new loan files before docs update and commit.
 
 ## Known Issues
 
@@ -113,6 +118,8 @@ Not included by explicit user scope:
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
+- Loan interest due is stored as deterministic metadata only; it is not deducted, compounded, collected, or enforced.
+- Loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
 ## Important Decisions Preserved
@@ -138,16 +145,22 @@ Not included by explicit user scope:
 - Tile resolution remains neutral metadata only and does not mutate `GameState`.
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
+- Loan state lives on `Player.LoanState` and is optional until a player first borrows.
+- `LoanManager.TakeLoan` mutates only the borrowing player's money and loan state through a returned `GameState`.
+- Loan rejection results return the unchanged `GameState`.
+- `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
+- Loan foundation does not interact with auctions, bankruptcy, turn advancement, networking, UI, persistence, or stats.
 
 ## Next Recommended Chunk
 
-Phase 3 follow-up - choose one narrow auction or landing-integration slice, only if explicitly requested.
+Phase 3 follow-up - choose one narrow loan repayment/enforcement or landing-integration slice, only if explicitly requested.
 
 Possible next scopes:
 
 - Hook unowned property landing resolution into `AuctionManager.StartMandatoryAuction`.
 - Add active-auction storage to `GameState`, if needed before integration.
-- Add Loan Shark/borrowing behavior only if explicitly assigned in a later chunk.
+- Add loan interest payment/start-of-turn enforcement only if explicitly assigned in a later chunk.
+- Add repayment behavior only if explicitly assigned in a later chunk.
 
 Recommended validation:
 
@@ -161,8 +174,10 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Loan Shark.
 - Borrowing to cover auctions.
+- Loan repayment.
+- Loan interest payment or start-of-turn enforcement.
+- Anti-loop loan prevention beyond current invalid amount and eliminated-player checks.
 - Auction retry logic.
 - Debt recovery.
 - Asset liquidation.

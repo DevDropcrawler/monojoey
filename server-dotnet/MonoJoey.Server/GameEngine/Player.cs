@@ -12,4 +12,7 @@ public sealed record Player(
     IReadOnlySet<TileId> OwnedPropertyIds,
     IReadOnlySet<CardId> HeldCardIds,
     bool IsBankrupt,
-    bool IsEliminated);
+    bool IsEliminated)
+{
+    public PlayerLoanState? LoanState { get; init; }
+}
