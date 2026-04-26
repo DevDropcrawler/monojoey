@@ -4,33 +4,36 @@ This file must be updated at the end of every coding chunk.
 
 ## Current Status
 
-- Phase: 3
-- Chunk: 3.6 Anti-loop borrowing rules
-- Completion status: Chunk 3.6 complete; borrowing is context-aware and loan-payment borrowing purposes are rejected before cash or loan state can mutate.
-- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated, not committed in this session.
-- Previous commit: `654dec7` - `phase-3-3: add auction finalization`
-- Last commit: `phase-3-4: add loan shark foundation`
-- Date/time: 2026-04-27 00:32 +12:00
+- Phase: 4
+- Chunk: 4.1 Placeholder card model/deck foundation
+- Completion status: Chunk 4.1 complete; passive placeholder card and deck definitions exist with validation tests only.
+- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
+- Previous commit: `e05bff7` - `phase-3-6: add anti-loop borrowing rules`
+- Last commit after this chunk: `phase-4-1: add placeholder card decks`
+- Date/time: 2026-04-27 09:51 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.6 - Anti-loop borrowing rules only.
+Phase 4, Chunk 4.1 - Placeholder card model/deck foundation only.
 
 Completed:
 
-- Added `BorrowPurpose` as the explicit context for borrowing.
-- Changed `LoanManager.TakeLoan` to require a `BorrowPurpose`.
-- `LoanTakeResult` now records the attempted borrow purpose.
-- Added `LoanTakeResultKind.DisallowedBorrowPurpose`.
-- Allows borrowing for `AuctionBid`, `RentPayment`, `TaxPayment`, `CardPenalty`, and `Fine`.
-- Rejects borrowing for `LoanInterest`, `LoanPrincipalRepayment`, and `ExistingLoanDebt`.
-- Rejected anti-loop borrow attempts return the unchanged `GameState`; player money and existing loan state are not mutated.
-- Existing invalid amount, eliminated player, player-not-in-game, loan state, and interest escalation behavior remain unchanged apart from requiring a purpose argument.
-- Added focused `LoanManagerTests` proving every allowed purpose is accepted and every blocked loan-payment purpose is rejected.
+- Added `Card` as a passive card model with `CardId`, placeholder display name, and `CardActionKind`.
+- Added `CardDeck` as a passive deck model with deck ID, placeholder display name, and ordered card list.
+- Added `CardActionKind` values for standard property-board-game card functions without implementing effects.
+- Added `PlaceholderCardDeckFactory.CreateChanceDeck()` with 16 functional placeholder cards.
+- Added `PlaceholderCardDeckFactory.CreateTableDeck()` with 16 functional placeholder cards.
+- Added `PlaceholderCardDeckFactory.CreateAll()` for validation and future integration.
+- Placeholder card display names intentionally match the placeholder IDs; no final flavor text was added.
+- Added focused deck validation tests for card counts, global card ID uniqueness, valid action kinds, and placeholder-only names.
 
 Not included by explicit user scope:
 
-- Repayment system.
+- Card drawing or shuffling.
+- Card action execution.
+- Movement from cards.
+- Money changes from cards.
+- Jail/lockup behavior from cards.
 - Networking.
 - Unity/UI.
 - Persistence.
@@ -38,10 +41,11 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/BorrowPurpose.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -57,6 +61,9 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/BankruptcyManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Board.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/BorrowPurpose.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Card.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
@@ -71,6 +78,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PlayerEliminationResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PlayerLoanState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyPurchaseResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
@@ -89,10 +97,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 97 tests passed.
+  - Output summary: 102 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result: `main...origin/main` with modified Phase 3.6 files and this handover doc.
+  - Result before commit: `main...origin/main` with new card/deck files, new deck tests, and this handover doc.
 
 ## Known Issues
 
@@ -111,6 +119,8 @@ Not included by explicit user scope:
 - `AuctionState.CountdownDurationSeconds` stores deterministic countdown duration metadata only.
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - Tile resolution action kinds remain placeholders and do not apply game effects.
+- Placeholder card IDs/display names from Chunk 4.1 are functional identifiers only, not final card names or text.
+- Placeholder card decks have fixed ordered definitions for validation only; they are not shuffled, drawn from, stored in `GameState`, or executed.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -150,16 +160,19 @@ Not included by explicit user scope:
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
+- Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
+- Chance-style and Table-style placeholder decks each contain 16 cards, matching standard property-board-game deck size expectations without copying protected wording.
+- `CardActionKind.HoldForLater` marks retainable card functions only; it does not grant, revoke, or consume any held card behavior.
 
 ## Next Recommended Chunk
 
-Phase 3 follow-up - choose one narrow loan repayment or landing-integration slice, only if explicitly requested.
+Phase 4 follow-up - choose one narrow card/deck integration slice only if explicitly requested.
 
 Possible next scopes:
 
-- Hook unowned property landing resolution into `AuctionManager.StartMandatoryAuction`.
-- Add active-auction storage to `GameState`, if needed before integration.
-- Add repayment behavior only if explicitly assigned in a later chunk.
+- Add deterministic deck state to `GameState` without drawing effects.
+- Add card draw result metadata without action execution.
+- Add card action execution only as a separately scoped chunk.
 
 Recommended validation:
 
@@ -178,7 +191,11 @@ Do not implement before its assigned chunk:
 - Auction retry logic.
 - Debt recovery.
 - Asset liquidation.
-- Cards.
+- Card drawing/shuffling.
+- Card action execution.
+- Movement from cards.
+- Money changes from cards.
+- Jail/lockup behavior from cards.
 - Mortgages.
 - Houses/upgrades.
 - Trading.
@@ -192,4 +209,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 3.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 4.1 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
