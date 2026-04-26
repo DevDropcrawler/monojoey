@@ -5,47 +5,41 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 2
-- Chunk: 2.1 core domain models
-- Completion status: Chunk 2.1 complete; ready for Chunk 2.2 turn system.
-- Branch: `main` tracking `origin/main`
-- Previous commit: `9c81b54` - `phase-1-4: complete phase 1 audit`
-- Commit: pending at handover write time; see `git log -1` after the Chunk 2.1 commit.
-- Date/time: 2026-04-26 16:51 +12:00
+- Chunk: 2.2 turn system
+- Completion status: Chunk 2.2 complete; ready for Chunk 2.3 dice system.
+- Branch: `main` tracking `origin/main`; local is ahead by 1 before this chunk commit.
+- Previous commit: `421203f` - `phase-2-1: add core game state models`
+- Commit: pending at handover write time; see `git log -1` after the Chunk 2.2 commit.
+- Date/time: 2026-04-26 17:01 +12:00
 
 ## Last Completed Chunk
 
-Phase 2, Chunk 2.1 - core server-side domain models.
+Phase 2, Chunk 2.2 - minimal turn system.
 
 Completed:
 
-- Added minimal server-side game engine model records:
-  - `GameState`
-  - `Player`
-  - `Board`
-  - `Tile`
-  - `Money`
-- Added `DefaultBoardFactory` with placeholder board data only.
-- Added tests for default board validity:
-  - board ID and start tile at index 0
-  - unique tile IDs
-  - sequential tile indexes
-  - purchasable placeholder tiles have prices and auctionable flags
-- Re-enabled `MonoJoey.Server` as a solution build participant so solution validation compiles the new server code.
-- Updated the test project to reference `MonoJoey.Server`; shared contracts are consumed transitively through the server project.
+- Added `TurnManager` for server-side turn order only.
+- Implemented first-turn selection.
+- Implemented current-player lookup.
+- Implemented next-turn advancement in player-list order.
+- Implemented wrap-around from the last player back to the first player.
+- Added focused tests for first turn, next turn, wrap-around, and current-player lookup.
 
-## Files Changed
+## Files Changed In This Chunk
 
-- `Directory.Build.props`
-- `server-dotnet/MonoJoey.sln`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
+- `docs/SESSION_HANDOVER.md`
+
+## Existing Phase 2 Engine Files
+
 - `server-dotnet/MonoJoey.Server/GameEngine/Board.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Money.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Tile.cs`
-- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/DefaultBoardFactoryTests.cs`
-- `docs/SESSION_HANDOVER.md`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 
 ## Validation Commands Run
 
@@ -53,52 +47,47 @@ Completed:
   - Result: succeeded.
   - Output: `codex-cli 0.125.0`
   - Note: emitted PATH update warning: `Access is denied. (os error 5)`.
-- `dotnet build .\server-dotnet\MonoJoey.sln`
-  - Initial result: failed due a self-inflicted parallel build/test file lock when preflight commands were started at the same time.
-  - Sequential retry before edits: succeeded with 2 `NU1900` warnings.
-- `dotnet test .\server-dotnet\MonoJoey.sln`
-  - Preflight result before edits: succeeded, 2 tests passed.
 - `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
-  - Result after edits: succeeded.
+  - Preflight result before edits: succeeded.
+  - Post-implementation result: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
-  - Result after edits: succeeded.
-  - Output summary: 5 tests passed, 0 failed, 0 skipped.
+  - Preflight result before edits: succeeded, 5 tests passed.
+  - Post-implementation result: succeeded, 9 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `rg -n "Auction|Loan|WebSocket|DbContext|Lobby|Unity|Dice|Move" server-dotnet\MonoJoey.Server\GameEngine server-dotnet\MonoJoey.Server.Tests\GameEngine`
-  - Result: only `IsAuctionable` model/config fields were found; no auction logic, loan logic, networking, database, UI, dice, or movement code was added.
+- `rg -n "Dice|Move|Rent|Loan|WebSocket|DbContext|Lobby|Unity|Bankrupt|Auction" server-dotnet\MonoJoey.Server\GameEngine server-dotnet\MonoJoey.Server.Tests\GameEngine`
+  - Result: only passive model/config fields and test setup values were found; no out-of-scope behavior was added.
 
 ## Known Issues
 
 - Plain `dotnet build .\server-dotnet\MonoJoey.sln` and plain `dotnet test .\server-dotnet\MonoJoey.sln` can fail in this Windows shell with no MSBuild errors once the server project participates in the solution graph.
 - Serialized validation with `-m:1` succeeds and should be used for Phase 2 chunks unless the build harness is revisited.
-- `Directory.Build.props` now sets `BuildInParallel=false` to reduce MSBuild project-reference contention, but the command-line `-m:1` flag is still required in this environment.
 - `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 
 ## Placeholders Introduced Or Preserved
 
-- `DefaultBoardFactory` uses placeholder IDs and display names only.
+- Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
-- `IsAuctionable` is a passive tile config flag only; no auction system or auction behavior was implemented.
+- `TurnManager` does not skip bankrupt players yet; bankruptcy/elimination remains a later chunk.
 
 ## Important Decisions Preserved
 
 - Server-authoritative rules state.
 - Unity remains untouched.
-- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, dice, movement, or tile-resolution behavior was added.
+- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, dice, movement, tile-resolution behavior, property/rent behavior, or bankruptcy behavior was added.
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
 
 ## Next Recommended Chunk
 
-Phase 2, Chunk 2.2 - turn system.
+Phase 2, Chunk 2.3 - dice system.
 
 Recommended scope:
 
-- Add current player / turn order state behavior.
-- Add next-turn logic.
-- Skip no players yet unless the chunk explicitly handles inactive/bankrupt placeholders.
-- Keep dice, movement, tile resolution, property/rent, auctions, Loan Shark, networking, UI, stats, and persistence out of scope.
+- Add server-owned dice roll abstraction.
+- Add deterministic injectable dice/random source for tests.
+- Add dice range tests.
+- Do not move players yet unless the user explicitly combines dice and movement; movement is the next separate chunk in the current user plan.
 
 Recommended validation:
 
@@ -110,7 +99,7 @@ Recommended validation:
 
 Do not implement before its assigned chunk:
 
-- Dice or movement resolution
+- Movement resolution
 - Tile resolution behavior
 - Property ownership or rent
 - Bankruptcy/elimination behavior
@@ -125,4 +114,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-No. Context is still manageable after Chunk 2.1, but stop after Chunk 2.2 if the turn system expands beyond the intended small scope.
+Yes. Two Phase 2 chunks are now complete, and a fresh session should continue from this handover before starting Chunk 2.3.
