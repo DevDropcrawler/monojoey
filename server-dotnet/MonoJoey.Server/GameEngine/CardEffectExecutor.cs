@@ -20,6 +20,13 @@ public static class CardEffectExecutor
                 gameState,
                 cardResolution.PlayerId,
                 RequireAmount(cardResolution)),
+            CardResolutionActionKind.GoToLockup => LockupManager.SendToLockup(
+                gameState,
+                cardResolution.PlayerId),
+            CardResolutionActionKind.GetOutOfLockup => LockupManager.GrantGetOutOfLockupEscape(
+                gameState,
+                cardResolution.PlayerId,
+                cardResolution.CardId),
             _ => gameState,
         };
     }

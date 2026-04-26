@@ -12,10 +12,10 @@ public static class TurnManager
             throw new InvalidOperationException("A game must have at least one player before turns can start.");
         }
 
-        var firstActivePlayer = gameState.Players.FirstOrDefault(player => !player.IsEliminated);
+        var firstActivePlayer = gameState.Players.FirstOrDefault(IsTurnEligible);
         if (firstActivePlayer is null)
         {
-            throw new InvalidOperationException("A game must have at least one active player before turns can start.");
+            throw new InvalidOperationException("A game must have at least one unlocked active player before turns can start.");
         }
 
         var startedGameState = gameState with
@@ -39,6 +39,11 @@ public static class TurnManager
         if (currentPlayer.IsEliminated)
         {
             throw new InvalidOperationException("Eliminated players cannot take turns.");
+        }
+
+        if (currentPlayer.IsLockedUp)
+        {
+            throw new InvalidOperationException("Locked up players cannot take normal turns.");
         }
 
         return currentPlayer;
@@ -88,12 +93,17 @@ public static class TurnManager
         for (var offset = 1; offset <= players.Count; offset++)
         {
             var nextIndex = (currentIndex + offset) % players.Count;
-            if (!players[nextIndex].IsEliminated)
+            if (IsTurnEligible(players[nextIndex]))
             {
                 return nextIndex;
             }
         }
 
-        throw new InvalidOperationException("A game must have at least one active player before turns can advance.");
+        throw new InvalidOperationException("A game must have at least one unlocked active player before turns can advance.");
+    }
+
+    private static bool IsTurnEligible(Player player)
+    {
+        return !player.IsEliminated && !player.IsLockedUp;
     }
 }

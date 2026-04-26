@@ -5,42 +5,51 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 4
-- Chunk: 4.4 Execute card effects
-- Completion status: Chunk 4.4 complete; resolved movement-to-start, relative movement, receive-money, and pay-money card effects can execute against `GameState`.
+- Chunk: 4.5 Lockup/Jail status system
+- Completion status: Chunk 4.5 complete; players can be locked up, hold a get-out-of-lockup escape card/token, consume it to clear lockup, and locked players are skipped/blocked by turn selection.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `phase-4-3: add card resolution hooks`
-- Last commit after this chunk: `phase-4-4: execute card effects`
-- Date/time: 2026-04-27 10:18 +12:00
+- Previous commit: `phase-4-4: execute card effects`
+- Last commit after this chunk: `phase-4-5: add lockup status system`
+- Date/time: 2026-04-27 10:29 +12:00
 
 ## Last Completed Chunk
 
-Phase 4, Chunk 4.4 - Execute card effects, movement and money only.
+Phase 4, Chunk 4.5 - Lockup/Jail status system only.
 
 Completed:
 
-- Added `CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution)`.
-- Executed `CardResolutionActionKind.MoveToStart` by calculating forward steps to the start tile and routing through `MovementManager`.
-- Executed `CardResolutionActionKind.MoveSteps` by routing the resolved step count through `MovementManager`.
-- Extended `MovementManager.MovePlayer` to support negative relative steps with positive modulo board wrapping.
-- Executed `CardResolutionActionKind.ReceiveMoney` by increasing only the resolved player's balance.
-- Executed `CardResolutionActionKind.PayMoney` by deducting from only the resolved player's balance.
-- Routed negative post-payment balances through `BankruptcyManager.EliminateIfBankrupt`, preserving existing hard-elimination bankruptcy behavior.
-- Left unsupported/out-of-scope card resolution kinds as no-ops for this chunk.
-- Added focused tests for move-to-start, backward move-steps, receiving money, paying money, pay-money negative-balance elimination, and no unrelated state mutation.
+- Added `Player.IsLockedUp` as server-side lockup/status state.
+- Added `LockupManager.SendToLockup(gameState, playerId)` to move a player directly to the placeholder lockup tile and mark them locked.
+- Added `LockupManager.GrantGetOutOfLockupEscape(gameState, playerId, escapeId)` using `Player.HeldCardIds` as the held escape card/token store.
+- Added `LockupManager.UseGetOutOfLockupEscape(gameState, playerId, escapeId)` with typed result kinds for cleared lockup, player-not-locked no-op, and missing-escape no-op.
+- Executed `CardResolutionActionKind.GoToLockup` through `LockupManager.SendToLockup`.
+- Executed `CardResolutionActionKind.GetOutOfLockup` through `LockupManager.GrantGetOutOfLockupEscape`.
+- Updated `TurnManager` so locked players are not turn-eligible; start/advance skip locked players, and `GetCurrentPlayer` rejects a locked current player with a clear error.
+- Added focused tests for sending a player to lockup, no pass-start money on lockup send, held escape state, using an escape to clear lockup, safe no-op/rejection result when using an escape while not locked or without holding it, turn skipping/blocking, executor hooks, and preserving eliminated-player state.
 
 Not included by explicit user scope:
 
-- Jail/lockup behavior from cards.
 - Networking.
 - Unity/UI.
 - Persistence.
 - Stats.
+- Advanced jail rules.
+- Paying to leave lockup.
+- Rolling doubles to leave lockup.
+- Final card text/flavour.
+- New custom cards beyond existing placeholder hooks.
 
 ## Files Changed In This Chunk
 
+- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResultKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LockupManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardEffectExecutorTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -74,6 +83,9 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/EliminationReason.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResultKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Money.cs`
@@ -101,10 +113,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 133 tests passed.
+  - Output summary: 145 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with card effect executor, movement manager update, executor tests, and this handover doc.
+  - Result before commit: `main...origin/main` with lockup manager/result files, player status state, card executor updates, turn manager updates, lockup/executor/turn tests, and this handover doc.
 
 ## Known Issues
 
@@ -130,6 +142,9 @@ Not included by explicit user scope:
 - Card deck state is standalone and is not stored in `GameState` yet.
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; it does not mutate state or discard cards.
 - `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged in this chunk.
+- Lockup uses the placeholder `lockup_01` tile ID only; there is no advanced jail location selection or custom board lookup beyond requiring that tile to exist.
+- Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
+- Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -167,12 +182,14 @@ Not included by explicit user scope:
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
 - Start-of-turn loan interest also uses total borrowed and the stored current interest rate using the same integer money arithmetic.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` skip players whose `IsLockedUp` flag is true.
+- `TurnManager.GetCurrentPlayer` rejects a locked current player with `Locked up players cannot take normal turns.`
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
 - Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
 - `CardActionParameters` are passive metadata only and do not execute movement, money changes, lockup changes, or held-card behavior.
 - Chance-style and Table-style placeholder decks each contain 16 cards, matching standard property-board-game deck size expectations without copying protected wording.
-- `CardActionKind.HoldForLater` marks retainable card functions only; it does not grant, revoke, or consume any held card behavior.
+- `CardActionKind.HoldForLater` maps to `CardResolutionActionKind.GetOutOfLockup`; the card definition/resolver path is still passive, and `CardEffectExecutor` is the boundary that grants the held escape.
 - `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
@@ -186,7 +203,9 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.MoveSteps` execution can move forward or backward through `MovementManager`.
 - `CardResolutionActionKind.ReceiveMoney` and `CardResolutionActionKind.PayMoney` affect only the resolved player.
 - `CardResolutionActionKind.PayMoney` deducts first; if the player's balance becomes negative, `BankruptcyManager.EliminateIfBankrupt` marks the player bankrupt/eliminated.
-- `CardEffectExecutor` does not draw, discard, reshuffle, advance turns, resolve landing tiles, start auctions, apply lockup status, grant held cards, or interact with loans.
+- `CardResolutionActionKind.GoToLockup` directly moves the resolved player to `lockup_01` and marks `IsLockedUp = true`; it does not use `MovementManager` and does not create pass-start money.
+- `CardResolutionActionKind.GetOutOfLockup` grants the resolved card ID into `HeldCardIds`; actual escape consumption is performed explicitly through `LockupManager.UseGetOutOfLockupEscape`.
+- `CardEffectExecutor` does not draw, discard, reshuffle, advance turns, resolve landing tiles, start auctions, consume lockup escapes, or interact with loans.
 
 ## Next Recommended Chunk
 
@@ -196,7 +215,7 @@ Possible next scopes:
 
 - Add deterministic deck state to `GameState`.
 - Add tile-to-deck draw integration with the existing card resolver/executor, if explicitly requested.
-- Add specific out-of-scope card execution kinds one chunk at a time, such as move-to-tile or lockup behavior, if explicitly requested.
+- Add specific out-of-scope card execution kinds one chunk at a time, such as move-to-tile or nearest-property behavior, if explicitly requested.
 
 Recommended validation:
 
@@ -216,12 +235,11 @@ Do not implement before its assigned chunk:
 - Debt recovery.
 - Asset liquidation.
 - Automatic card reshuffling.
-- Jail/lockup behavior from cards.
+- Advanced jail/lockup rules beyond the simple status and escape consumption now in place.
 - Mortgages.
 - Houses/upgrades.
 - Trading.
 - Taxes/fines money changes.
-- Jail/lockup status behavior.
 - Lobbies.
 - WebSockets.
 - Database persistence.
@@ -230,4 +248,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 4.4 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 4.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.

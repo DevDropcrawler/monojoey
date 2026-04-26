@@ -90,6 +90,39 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_GoToLockupSendsPlayerToLockup()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "go_to_lockup_01"));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.GoToLockup,
+            parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal("lockup_01", result.Players[0].CurrentTileId.Value);
+        Assert.True(result.Players[0].IsLockedUp);
+        Assert.Equal(new Money(1500), result.Players[0].Money);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_GetOutOfLockupStoresHeldEscape()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "start"));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.GetOutOfLockup,
+            parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Contains(cardResolution.CardId, result.Players[0].HeldCardIds);
+        Assert.False(result.Players[0].IsLockedUp);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_DoesNotMutateOutsideExpectedFields()
     {
         var playerId = new PlayerId("player_1");

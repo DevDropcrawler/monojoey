@@ -15,4 +15,6 @@ public sealed record Player(
     bool IsEliminated)
 {
     public PlayerLoanState? LoanState { get; init; }
+
+    public bool IsLockedUp { get; init; }
 }
