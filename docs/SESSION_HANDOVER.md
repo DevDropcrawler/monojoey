@@ -5,34 +5,32 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 3
-- Chunk: 3.4 Loan Shark foundation
-- Completion status: Chunk 3.4 complete; deterministic loan state, borrowing, escalating stored interest rates, and loan rejection outcomes are implemented.
-- Branch: `main` tracking `origin/main`; local has this chunk committed after final validation.
+- Chunk: 3.5 Start-of-turn loan interest enforcement
+- Completion status: Chunk 3.5 complete; start-of-turn loan interest is enforced before roll/movement/actions through turn start and advancement.
+- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated, not committed in this session.
 - Previous commit: `654dec7` - `phase-3-3: add auction finalization`
-- Commit: `phase-3-4: add loan shark foundation`
-- Date/time: 2026-04-27 00:18 +12:00
+- Last commit: `phase-3-4: add loan shark foundation`
+- Date/time: 2026-04-27 00:25 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.4 - Loan Shark foundation only.
+Phase 3, Chunk 3.5 - Start-of-turn loan interest enforcement only.
 
 Completed:
 
-- Added `PlayerLoanState` for per-player loan tracking.
-- Added optional `Player.LoanState` so existing test fixtures and player construction remain stable.
-- Added `LoanTakeResult` and `LoanTakeResultKind` for deterministic accepted/rejected borrowing outcomes.
-- Added `LoanManager.TakeLoan` to grant money immediately and return a new immutable `GameState`.
-- Tracks `TotalBorrowed`, `CurrentInterestRatePercent`, `NextTurnInterestDue`, and `LoanTier`.
-- Stores interest rates explicitly at borrow time; rates are not recomputed dynamically by consumers.
-- Escalates interest rates deterministically: first borrow 20%, second 30%, third 50%, then +10% per tier capped at 100%.
-- Rejects zero/negative loan amounts without mutating game state.
-- Rejects eliminated players without mutating game state.
-- Added focused tests for money increase, loan-state creation, multi-loan escalation, explicit tier rates, state persistence, invalid amount rejection, and eliminated-player rejection.
+- Added `LoanManager.StartTurnInterestCheck`.
+- Start-turn interest recalculates from `PlayerLoanState.TotalBorrowed` and the stored `CurrentInterestRatePercent`.
+- Interest uses existing integer `Money` arithmetic: `totalBorrowed * currentInterestRate / 100`.
+- Deducts start-turn interest from player money.
+- Refreshes `NextTurnInterestDue` to the calculated deterministic interest amount.
+- Runs existing `BankruptcyManager.EliminateIfBankrupt` after deduction; players whose interest charge makes money negative are marked bankrupt/eliminated before they can roll.
+- Integrated the interest check into `TurnManager.StartFirstTurn`.
+- Integrated the interest check into `TurnManager.AdvanceToNextTurn`.
+- Added focused `LoanManagerTests` for no-loan no-op, stored-rate deduction, deterministic rounding, and elimination on unpaid interest.
+- Added focused `TurnManagerTests` proving interest is charged before first-turn roll and next-turn roll, and failed interest eliminates before `GetCurrentPlayer` can return the player.
 
 Not included by explicit user scope:
 
-- Interest payment.
-- Start-of-turn deductions or enforcement.
 - Repayment system.
 - Preventing borrowing or anti-loop rules beyond basic invalid amount and eliminated-player rejection.
 - Networking.
@@ -43,10 +41,9 @@ Not included by explicit user scope:
 ## Files Changed In This Chunk
 
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerLoanState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Engine Files
@@ -93,11 +90,13 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 82 tests passed.
+  - Output summary: 89 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
+- `dotnet test .\server-dotnet\MonoJoey.sln -m:1 --filter "FullyQualifiedName~LoanManagerTests|FullyQualifiedName~TurnManagerTests"`
+  - Result: succeeded.
+  - Output summary: 25 tests passed.
 - `git status --short --branch`
-  - Run after build/test as requested.
-  - Output showed `main...origin/main` with modified/new loan files before docs update and commit.
+  - Result: `main...origin/main` with modified Phase 3.5 files and this handover doc.
 
 ## Known Issues
 
@@ -118,7 +117,7 @@ Not included by explicit user scope:
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
-- Loan interest due is stored as deterministic metadata only; it is not deducted, compounded, collected, or enforced.
+- Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
 - Loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
@@ -149,17 +148,19 @@ Not included by explicit user scope:
 - `LoanManager.TakeLoan` mutates only the borrowing player's money and loan state through a returned `GameState`.
 - Loan rejection results return the unchanged `GameState`.
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
-- Loan foundation does not interact with auctions, bankruptcy, turn advancement, networking, UI, persistence, or stats.
+- Start-of-turn loan interest also uses total borrowed and the stored current interest rate using the same integer money arithmetic.
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
+- Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
+- Loan enforcement does not interact with auctions, repayment, borrowing restrictions, anti-loop logic, networking, UI, persistence, or stats.
 
 ## Next Recommended Chunk
 
-Phase 3 follow-up - choose one narrow loan repayment/enforcement or landing-integration slice, only if explicitly requested.
+Phase 3 follow-up - choose one narrow loan repayment or landing-integration slice, only if explicitly requested.
 
 Possible next scopes:
 
 - Hook unowned property landing resolution into `AuctionManager.StartMandatoryAuction`.
 - Add active-auction storage to `GameState`, if needed before integration.
-- Add loan interest payment/start-of-turn enforcement only if explicitly assigned in a later chunk.
 - Add repayment behavior only if explicitly assigned in a later chunk.
 
 Recommended validation:
@@ -176,7 +177,6 @@ Do not implement before its assigned chunk:
 - Async countdown loop.
 - Borrowing to cover auctions.
 - Loan repayment.
-- Loan interest payment or start-of-turn enforcement.
 - Anti-loop loan prevention beyond current invalid amount and eliminated-player checks.
 - Auction retry logic.
 - Debt recovery.
@@ -195,4 +195,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 3.3 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 3.5 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.

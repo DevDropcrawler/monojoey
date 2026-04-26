@@ -18,12 +18,14 @@ public static class TurnManager
             throw new InvalidOperationException("A game must have at least one active player before turns can start.");
         }
 
-        return gameState with
+        var startedGameState = gameState with
         {
             CurrentTurnPlayerId = firstActivePlayer.PlayerId,
             Phase = GamePhase.AwaitingRoll,
             TurnNumber = 1,
         };
+
+        return LoanManager.StartTurnInterestCheck(startedGameState, firstActivePlayer.PlayerId);
     }
 
     public static Player GetCurrentPlayer(GameState gameState)
@@ -57,12 +59,15 @@ public static class TurnManager
         var currentIndex = FindCurrentPlayerIndex(gameState.Players, gameState.CurrentTurnPlayerId.Value);
         var nextIndex = FindNextActivePlayerIndex(gameState.Players, currentIndex);
 
-        return gameState with
+        var nextPlayerId = gameState.Players[nextIndex].PlayerId;
+        var nextGameState = gameState with
         {
-            CurrentTurnPlayerId = gameState.Players[nextIndex].PlayerId,
+            CurrentTurnPlayerId = nextPlayerId,
             Phase = GamePhase.AwaitingRoll,
             TurnNumber = gameState.TurnNumber + 1,
         };
+
+        return LoanManager.StartTurnInterestCheck(nextGameState, nextPlayerId);
     }
 
     private static int FindCurrentPlayerIndex(IReadOnlyList<Player> players, PlayerId currentTurnPlayerId)

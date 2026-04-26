@@ -116,6 +116,73 @@ public class LoanManagerTests
         Assert.Null(result.GameState.Players[0].LoanState);
     }
 
+    [Fact]
+    public void StartTurnInterestCheck_WhenPlayerHasNoLoanDoesNotMutateState()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+
+        Assert.Same(gameState, result);
+        Assert.Equal(new Money(1500), result.Players[0].Money);
+        Assert.Null(result.Players[0].LoanState);
+    }
+
+    [Fact]
+    public void StartTurnInterestCheck_DeductsInterestUsingStoredInterestRate()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: Money.Zero,
+            LoanTier: 2);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+
+        Assert.Equal(new Money(1440), result.Players[0].Money);
+        Assert.Equal(new Money(60), result.Players[0].LoanState?.NextTurnInterestDue);
+        Assert.Equal(30, result.Players[0].LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(new Money(1500), gameState.Players[0].Money);
+    }
+
+    [Fact]
+    public void StartTurnInterestCheck_RoundsInterestWithIntegerMoneyArithmetic()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(101),
+            CurrentInterestRatePercent: 20,
+            NextTurnInterestDue: Money.Zero,
+            LoanTier: 1);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+
+        Assert.Equal(new Money(1480), result.Players[0].Money);
+        Assert.Equal(new Money(20), result.Players[0].LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
+    public void StartTurnInterestCheck_WhenInterestCannotBePaidEliminatesPlayer()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(100),
+            CurrentInterestRatePercent: 20,
+            NextTurnInterestDue: Money.Zero,
+            LoanTier: 1);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 5, loanState: loanState));
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+
+        Assert.Equal(new Money(-15), result.Players[0].Money);
+        Assert.True(result.Players[0].IsBankrupt);
+        Assert.True(result.Players[0].IsEliminated);
+    }
+
     private static GameState CreateGameState(params Player[] players)
     {
         return new GameState(
@@ -129,7 +196,11 @@ public class LoanManagerTests
             EndedAtUtc: null);
     }
 
-    private static Player CreatePlayer(string playerId, int money, bool isEliminated = false)
+    private static Player CreatePlayer(
+        string playerId,
+        int money,
+        bool isEliminated = false,
+        PlayerLoanState? loanState = null)
     {
         return new Player(
             new PlayerId(playerId),
@@ -141,6 +212,9 @@ public class LoanManagerTests
             new HashSet<TileId>(),
             new HashSet<CardId>(),
             IsBankrupt: isEliminated,
-            IsEliminated: isEliminated);
+            IsEliminated: isEliminated)
+        {
+            LoanState = loanState,
+        };
     }
 }

@@ -10,6 +10,31 @@ public static class LoanManager
     private const int AdditionalBorrowInterestRateStepPercent = 10;
     private const int MaximumInterestRatePercent = 100;
 
+    public static GameState StartTurnInterestCheck(GameState gameState, PlayerId playerId)
+    {
+        var playerIndex = FindPlayerIndex(gameState.Players, playerId);
+        var player = gameState.Players[playerIndex];
+        var loanState = player.LoanState;
+        if (loanState is null)
+        {
+            return gameState;
+        }
+
+        var interestDue = CalculateInterestDue(loanState.TotalBorrowed, loanState.CurrentInterestRatePercent);
+        var players = gameState.Players.ToArray();
+        players[playerIndex] = player with
+        {
+            Money = new Money(player.Money.Amount - interestDue.Amount),
+            LoanState = loanState with
+            {
+                NextTurnInterestDue = interestDue,
+            },
+        };
+
+        var paidGameState = gameState with { Players = players };
+        return BankruptcyManager.EliminateIfBankrupt(paidGameState, playerId).GameState;
+    }
+
     public static LoanTakeResult TakeLoan(GameState gameState, PlayerId playerId, Money amount)
     {
         var playerIndex = FindPlayerIndexOrNull(gameState.Players, playerId);
@@ -113,5 +138,18 @@ public static class LoanManager
         }
 
         return null;
+    }
+
+    private static int FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)
+    {
+        for (var index = 0; index < players.Count; index++)
+        {
+            if (players[index].PlayerId == playerId)
+            {
+                return index;
+            }
+        }
+
+        throw new InvalidOperationException("Loan player must exist in the game player list.");
     }
 }
