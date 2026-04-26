@@ -4,6 +4,8 @@ using MonoJoey.Shared.Protocol;
 
 public static class AuctionManager
 {
+    private const string InvalidAuctionStateMessage = "Auction state is invalid and cannot be finalized.";
+
     public static AuctionStartResult StartMandatoryAuction(
         GameState gameState,
         PlayerId triggeringPlayerId,
@@ -115,6 +117,93 @@ public static class AuctionManager
         return new AuctionBidResult(AuctionBidResultKind.Accepted, nextState, "Auction bid accepted.");
     }
 
+    public static AuctionFinalizationResult FinalizeAuction(GameState gameState, AuctionState auctionState)
+    {
+        if (!IsKnownAuctionStatus(auctionState.Status))
+        {
+            return FinalizationFailed(gameState, auctionState);
+        }
+
+        var propertyTile = FindTileByIdOrNull(gameState.Board, auctionState.PropertyTileId);
+        if (propertyTile is null || !propertyTile.IsPurchasable || !propertyTile.IsAuctionable)
+        {
+            return FinalizationFailed(gameState, auctionState);
+        }
+
+        if (FindPropertyOwnerIndex(gameState.Players, auctionState.PropertyTileId) is not null)
+        {
+            return FinalizationFailed(gameState, auctionState);
+        }
+
+        if (auctionState.Bids.Count == 0)
+        {
+            return new AuctionFinalizationResult(
+                AuctionFinalizationResultKind.FinalizedNoWinner,
+                gameState,
+                auctionState,
+                auctionState.PropertyTileId,
+                WinnerId: null,
+                WinningBid: null,
+                EliminationResult: null,
+                "Auction finalized with no winner.");
+        }
+
+        var winner = FindHighestEligibleBid(gameState.Players, auctionState.Bids);
+        if (winner is null)
+        {
+            return new AuctionFinalizationResult(
+                AuctionFinalizationResultKind.FinalizedNoWinner,
+                gameState,
+                auctionState,
+                auctionState.PropertyTileId,
+                WinnerId: null,
+                WinningBid: null,
+                EliminationResult: null,
+                "Auction finalized with no eligible winner.");
+        }
+
+        var (winnerIndex, winningBid) = winner.Value;
+        var winningPlayer = gameState.Players[winnerIndex];
+        if (winningPlayer.Money.Amount < winningBid.Amount)
+        {
+            var eliminationResult = BankruptcyManager.EliminateForFailedPayment(
+                gameState,
+                winningPlayer.PlayerId,
+                winningBid);
+
+            return new AuctionFinalizationResult(
+                AuctionFinalizationResultKind.WinnerFailedToPay,
+                eliminationResult.GameState,
+                auctionState,
+                auctionState.PropertyTileId,
+                winningPlayer.PlayerId,
+                winningBid,
+                eliminationResult,
+                "Auction winner could not pay the winning bid.");
+        }
+
+        var players = gameState.Players.ToArray();
+        players[winnerIndex] = winningPlayer with
+        {
+            Money = new Money(winningPlayer.Money.Amount - winningBid.Amount),
+        };
+        var paidGameState = gameState with { Players = players };
+        var finalizedGameState = PropertyManager.AssignOwner(
+            paidGameState,
+            auctionState.PropertyTileId,
+            winningPlayer.PlayerId);
+
+        return new AuctionFinalizationResult(
+            AuctionFinalizationResultKind.FinalizedWithWinner,
+            finalizedGameState,
+            auctionState,
+            auctionState.PropertyTileId,
+            winningPlayer.PlayerId,
+            winningBid,
+            EliminationResult: null,
+            "Auction finalized with a winning bidder.");
+    }
+
     private static AuctionStartResult NoAuction(AuctionStartResultKind resultKind, string message)
     {
         return new AuctionStartResult(resultKind, AuctionState: null, message);
@@ -126,6 +215,19 @@ public static class AuctionManager
         string message)
     {
         return new AuctionBidResult(resultKind, auctionState, message);
+    }
+
+    private static AuctionFinalizationResult FinalizationFailed(GameState gameState, AuctionState auctionState)
+    {
+        return new AuctionFinalizationResult(
+            AuctionFinalizationResultKind.InvalidAuctionState,
+            gameState,
+            auctionState,
+            auctionState.PropertyTileId,
+            WinnerId: null,
+            WinningBid: null,
+            EliminationResult: null,
+            InvalidAuctionStateMessage);
     }
 
     private static int FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)
@@ -168,6 +270,33 @@ public static class AuctionManager
         return highestBid;
     }
 
+    private static (int WinnerIndex, Money WinningBid)? FindHighestEligibleBid(
+        IReadOnlyList<Player> players,
+        IReadOnlyList<AuctionBid> bids)
+    {
+        (int WinnerIndex, Money WinningBid)? winner = null;
+        foreach (var bid in bids)
+        {
+            var bidderIndex = FindPlayerIndexOrNull(players, bid.BidderId);
+            if (bidderIndex is null || players[bidderIndex.Value].IsEliminated)
+            {
+                continue;
+            }
+
+            if (winner is null || bid.Amount.Amount > winner.Value.WinningBid.Amount)
+            {
+                winner = (bidderIndex.Value, bid.Amount);
+            }
+        }
+
+        return winner;
+    }
+
+    private static bool IsKnownAuctionStatus(AuctionStatus status)
+    {
+        return status is AuctionStatus.AwaitingInitialBid or AuctionStatus.ActiveBidCountdown;
+    }
+
     private static int? FindPropertyOwnerIndex(IReadOnlyList<Player> players, TileId propertyTileId)
     {
         int? ownerIndex = null;
@@ -200,5 +329,31 @@ public static class AuctionManager
         }
 
         throw new InvalidOperationException("Auction tile must exist on the board.");
+    }
+
+    private static Tile? FindTileByIdOrNull(Board board, TileId tileId)
+    {
+        foreach (var tile in board.Tiles)
+        {
+            if (tile.TileId == tileId)
+            {
+                return tile;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? FindPlayerIndexOrNull(IReadOnlyList<Player> players, PlayerId playerId)
+    {
+        for (var index = 0; index < players.Count; index++)
+        {
+            if (players[index].PlayerId == playerId)
+            {
+                return index;
+            }
+        }
+
+        return null;
     }
 }

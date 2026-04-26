@@ -5,38 +5,36 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 3
-- Chunk: 3.2 auction bidding and timer state transitions
-- Completion status: Chunk 3.2 complete; deterministic bid placement validation, active bid countdown transitions, highest-bid tracking, and bid history are implemented.
+- Chunk: 3.3 auction finalization
+- Completion status: Chunk 3.3 complete; deterministic auction finalization, winner selection, payment, ownership transfer, failed-payment elimination, and no-winner outcomes are implemented.
 - Branch: `main` tracking `origin/main`; local has this chunk committed after final validation.
-- Previous commit: `8553048` - `phase-3-1: add auction foundation`
-- Commit: `phase-3-2: add auction bidding transitions`
-- Date/time: 2026-04-26 23:56 +12:00
+- Previous commit: `95f679e` - `phase-3-2: add auction bidding transitions`
+- Commit: `phase-3-3: add auction finalization`
+- Date/time: 2026-04-27 00:08 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.2 - auction bidding and timer state transitions only.
+Phase 3, Chunk 3.3 - auction finalization only.
 
 Completed:
 
-- Added `AuctionBidResult` and `AuctionBidResultKind` for accepted and rejected bid outcomes.
-- Added `AuctionManager.PlaceBid` as a pure deterministic state transition method.
-- Added bidder eligibility rejection for bidders not in the game and eliminated players.
-- Added first-bid validation against `AuctionState.StartingBid`.
-- Added later-bid validation against current highest bid plus `AuctionState.MinimumBidIncrement`.
-- Added `AuctionStatus.ActiveBidCountdown`.
-- Added `AuctionState.HighestBid`, `AuctionState.HighestBidderId`, and `AuctionState.CountdownDurationSeconds`.
-- Made the first valid bid switch from `AwaitingInitialBid` to `ActiveBidCountdown`.
-- Made every valid bid reset countdown duration metadata to `BidResetSeconds`.
-- Preserved bid history using caller-supplied deterministic bid timestamps.
-- Added focused tests for valid first bid, below-starting-bid rejection, below-increment rejection, later bid updates, countdown reset, missing bidder rejection, eliminated bidder rejection, and bid history.
+- Added `AuctionFinalizationResult` and `AuctionFinalizationResultKind` for typed auction resolution outcomes.
+- Added `AuctionManager.FinalizeAuction` as a deterministic finalization method for auctions the caller has already ended.
+- Finalizes no-bid auctions with no winner and no game-state mutation.
+- Selects the highest non-eliminated bidder from bid history as the winner.
+- Deducts the winning bid from an affordable winner and assigns the property through `PropertyManager.AssignOwner`.
+- Rejects eliminated bidders during finalization, including when they previously placed a bid before elimination.
+- Handles unaffordable winning bids by calling `BankruptcyManager.EliminateForFailedPayment`; the property remains unowned and the winner does not pay.
+- Returns a safe invalid-auction result for invalid finalization input such as a missing auction tile.
+- Added focused tests for no bids, single bid, multiple bids, payment deduction, ownership transfer, failed-payment elimination, eliminated-bidder exclusion, eliminated-only no-winner, and invalid auction state.
 
 Not included by explicit user scope:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Winner finalization.
-- Property transfer/payment.
+- Auction retry logic.
 - Loan Shark.
+- Borrowing to cover auctions.
 - Networking.
 - Unity/UI.
 - Persistence.
@@ -44,10 +42,8 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionFinalizationResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionStatus.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -56,6 +52,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionBid.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionConfig.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionFinalizationResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionStartResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionState.cs`
@@ -91,11 +88,11 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 65 tests passed.
+  - Output summary: 74 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
   - Run after build/test as requested.
-  - Output showed `main...origin/main` with modified auction manager/state/status/tests and new `AuctionBidResult.cs`.
+  - Output showed `main...origin/main` with modified auction manager/tests and new `AuctionFinalizationResult.cs`.
 
 ## Known Issues
 
@@ -126,28 +123,31 @@ Not included by explicit user scope:
 - Auctions still produce standalone `AuctionState`; `GameState` is not mutated and does not yet store active auction state.
 - `AuctionManager.PlaceBid` returns a new `AuctionState` inside `AuctionBidResult`; rejected bids return the unchanged auction state.
 - `AuctionManager.PlaceBid` requires a caller-supplied `DateTimeOffset` for bid history and does not read wall-clock time.
-- Bid validation does not check bidder cash balance because payment and transfer are out of scope for this chunk.
+- Bid validation still does not check bidder cash balance; finalization handles payment failure deterministically.
+- `AuctionManager.FinalizeAuction` assumes the auction has already ended; it does not read wall-clock time or advance timers.
+- Auction finalization selects the highest non-eliminated bidder from bid history.
+- Affordable auction winners pay the winning bid and receive ownership through `PropertyManager.AssignOwner`.
+- Unaffordable auction winners are eliminated through `BankruptcyManager.EliminateForFailedPayment`; no money is deducted and the property remains unowned.
 - `AuctionManager.StartMandatoryAuction` treats `Tile.IsPurchasable && Tile.IsAuctionable` as auction eligibility.
 - Disabled mandatory auctions return a typed no-auction result before player/tile lookup.
 - Owned properties and non-auctionable tiles return typed no-auction results instead of throwing.
 - Unknown triggering players and unknown tiles still throw `InvalidOperationException`, consistent with existing manager validation style.
 - Unknown auction bidders return `AuctionBidResultKind.BidderNotInGame` instead of throwing, per Chunk 3.2 rejection scope.
 - Ownership continues to live on `Player.OwnedPropertyIds`; no new persistence or aggregate ownership store was added.
-- `PropertyManager.AssignOwner` remains the future ownership hook for auction resolution, but this chunk does not call it.
+- `PropertyManager.AssignOwner` is now used for successful auction ownership transfer.
 - Tile resolution remains neutral metadata only and does not mutate `GameState`.
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
 
 ## Next Recommended Chunk
 
-Phase 3 follow-up - choose one narrow auction slice, only if explicitly requested.
+Phase 3 follow-up - choose one narrow auction or landing-integration slice, only if explicitly requested.
 
 Possible next scopes:
 
 - Hook unowned property landing resolution into `AuctionManager.StartMandatoryAuction`.
-- Add deterministic auction timeout/resolution result without payment/transfer.
-- Add winner payment and property transfer after resolution exists.
 - Add active-auction storage to `GameState`, if needed before integration.
+- Add Loan Shark/borrowing behavior only if explicitly assigned in a later chunk.
 
 Recommended validation:
 
@@ -161,9 +161,9 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Winner finalization.
-- Property transfer/payment.
 - Loan Shark.
+- Borrowing to cover auctions.
+- Auction retry logic.
 - Debt recovery.
 - Asset liquidation.
 - Cards.
@@ -180,4 +180,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 3.2 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 3.3 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.

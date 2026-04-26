@@ -331,6 +331,222 @@ public class AuctionManagerTests
             });
     }
 
+    [Fact]
+    public void FinalizeAuction_WithNoBidsReturnsNoWinner()
+    {
+        var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
+        var auctionState = StartAuction(gameState);
+
+        var result = AuctionManager.FinalizeAuction(gameState, auctionState);
+
+        Assert.True(result.FinalizedWithoutWinner);
+        Assert.Equal(AuctionFinalizationResultKind.FinalizedNoWinner, result.ResultKind);
+        Assert.Null(result.WinnerId);
+        Assert.Null(result.WinningBid);
+        Assert.Empty(result.GameState.Players[0].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WithSingleBidSelectsBidderAsWinner()
+    {
+        var bidderId = new PlayerId("player_2");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start"));
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            bidderId,
+            new Money(100),
+            FirstBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+
+        Assert.True(result.FinalizedWithWinner);
+        Assert.Equal(bidderId, result.WinnerId);
+        Assert.Equal(new Money(100), result.WinningBid);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WithMultipleBidsSelectsHighestBidder()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start"));
+        var auctionState = StartAuction(gameState);
+        var firstBid = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_1"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+        var secondBid = AuctionManager.PlaceBid(
+            gameState,
+            firstBid,
+            new PlayerId("player_2"),
+            new Money(125),
+            SecondBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, secondBid);
+
+        Assert.True(result.FinalizedWithWinner);
+        Assert.Equal(new PlayerId("player_2"), result.WinnerId);
+        Assert.Equal(new Money(125), result.WinningBid);
+    }
+
+    [Fact]
+    public void FinalizeAuction_DeductsWinningBidFromWinner()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 1500));
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(250),
+            FirstBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+
+        Assert.Equal(new Money(1250), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void FinalizeAuction_TransfersOwnershipToWinner()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start"));
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+
+        Assert.Contains(propertyTileId, result.GameState.Players[1].OwnedPropertyIds);
+        Assert.Empty(result.GameState.Players[0].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WhenWinnerCannotAffordBidEliminatesWinnerAndLeavesPropertyUnowned()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 50));
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+
+        Assert.True(result.WinnerFailedToPay);
+        Assert.Equal(AuctionFinalizationResultKind.WinnerFailedToPay, result.ResultKind);
+        Assert.Equal(new PlayerId("player_2"), result.WinnerId);
+        Assert.Equal(new Money(100), result.WinningBid);
+        Assert.True(result.EliminationResult?.WasEliminated);
+        Assert.Equal(EliminationReason.CannotFulfillPayment, result.EliminationResult?.Reason);
+        Assert.True(result.GameState.Players[1].IsBankrupt);
+        Assert.True(result.GameState.Players[1].IsEliminated);
+        Assert.Equal(new Money(50), result.GameState.Players[1].Money);
+        Assert.DoesNotContain(propertyTileId, result.GameState.Players[0].OwnedPropertyIds);
+        Assert.DoesNotContain(propertyTileId, result.GameState.Players[1].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_DoesNotLetEliminatedHighestBidderWin()
+    {
+        var gameStateForBids = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start"));
+        var auctionState = StartAuction(gameStateForBids);
+        var firstBid = AuctionManager.PlaceBid(
+            gameStateForBids,
+            auctionState,
+            new PlayerId("player_1"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+        var secondBid = AuctionManager.PlaceBid(
+            gameStateForBids,
+            firstBid,
+            new PlayerId("player_2"),
+            new Money(125),
+            SecondBidTime).AuctionState;
+        var finalizationState = gameStateForBids with
+        {
+            Players = new[]
+            {
+                gameStateForBids.Players[0],
+                gameStateForBids.Players[1] with { IsBankrupt = true, IsEliminated = true },
+            },
+        };
+
+        var result = AuctionManager.FinalizeAuction(finalizationState, secondBid);
+
+        Assert.True(result.FinalizedWithWinner);
+        Assert.Equal(new PlayerId("player_1"), result.WinnerId);
+        Assert.Equal(new Money(100), result.WinningBid);
+        Assert.Contains(new TileId("property_01"), result.GameState.Players[0].OwnedPropertyIds);
+        Assert.Empty(result.GameState.Players[1].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WithOnlyEliminatedBiddersReturnsNoWinner()
+    {
+        var gameStateForBids = CreateGameState(CreatePlayer("player_1", "property_01"));
+        var auctionState = StartAuction(gameStateForBids);
+        var bidState = AuctionManager.PlaceBid(
+            gameStateForBids,
+            auctionState,
+            new PlayerId("player_1"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+        var finalizationState = gameStateForBids with
+        {
+            Players = new[]
+            {
+                gameStateForBids.Players[0] with { IsBankrupt = true, IsEliminated = true },
+            },
+        };
+
+        var result = AuctionManager.FinalizeAuction(finalizationState, bidState);
+
+        Assert.True(result.FinalizedWithoutWinner);
+        Assert.Null(result.WinnerId);
+        Assert.Null(result.WinningBid);
+        Assert.Empty(result.GameState.Players[0].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WithInvalidAuctionStateReturnsSafeFailure()
+    {
+        var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
+        var auctionState = StartAuction(gameState) with
+        {
+            PropertyTileId = new TileId("missing_property"),
+        };
+
+        var result = AuctionManager.FinalizeAuction(gameState, auctionState);
+
+        Assert.Equal(AuctionFinalizationResultKind.InvalidAuctionState, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Null(result.WinnerId);
+        Assert.Null(result.WinningBid);
+        Assert.Empty(result.GameState.Players[0].OwnedPropertyIds);
+    }
+
     private static GameState CreateGameState(params Player[] players)
     {
         return new GameState(
