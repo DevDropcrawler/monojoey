@@ -4,52 +4,48 @@ This file must be updated at the end of every coding chunk.
 
 ## Current Status
 
-- Phase: 1
-- Chunk: 1.4 final Phase 1 audit
-- Completion status: Phase 1 complete.
-- Branch: `main` (`origin/main` is 3 commits ahead of local; local is 3 commits ahead before this chunk commit)
-- Previous commits:
-  - `cac8157` - `phase-1-1: add dotnet server skeleton`
-  - `eb9f674` - `phase-1-2: add shared contract placeholders`
-  - `5c1618d` - `phase-1-3: document server test harness conventions`
-- Commit: pending at handover write time; see `git log -1` after the final audit commit.
-- Date/time: 2026-04-26 10:10 +12:00
+- Phase: 2
+- Chunk: 2.1 core domain models
+- Completion status: Chunk 2.1 complete; ready for Chunk 2.2 turn system.
+- Branch: `main` tracking `origin/main`
+- Previous commit: `9c81b54` - `phase-1-4: complete phase 1 audit`
+- Commit: pending at handover write time; see `git log -1` after the Chunk 2.1 commit.
+- Date/time: 2026-04-26 16:51 +12:00
 
 ## Last Completed Chunk
 
-Phase 1, Chunk 1.4 - final Phase 1 audit.
+Phase 2, Chunk 2.1 - core server-side domain models.
 
 Completed:
 
-- Verified required Phase 1 repo structure exists.
-- Verified `client-unity/` remains README-only.
-- Verified `tools/` remains README-only.
-- Verified no gameplay/rules engine implementation was introduced.
-- Verified no lobbies, WebSockets, database, stats, Unity scenes, or animation systems were introduced.
-- Re-ran build/test validation.
-- Re-ran server project build validation because the server project is not directly built by the solution in this environment.
+- Added minimal server-side game engine model records:
+  - `GameState`
+  - `Player`
+  - `Board`
+  - `Tile`
+  - `Money`
+- Added `DefaultBoardFactory` with placeholder board data only.
+- Added tests for default board validity:
+  - board ID and start tile at index 0
+  - unique tile IDs
+  - sequential tile indexes
+  - purchasable placeholder tiles have prices and auctionable flags
+- Re-enabled `MonoJoey.Server` as a solution build participant so solution validation compiles the new server code.
+- Updated the test project to reference `MonoJoey.Server`; shared contracts are consumed transitively through the server project.
 
-## Phase 1 Deliverables
+## Files Changed
 
-- `server-dotnet/MonoJoey.sln`
-- `server-dotnet/MonoJoey.Server/`
-- `server-dotnet/MonoJoey.Server.Tests/`
-- `shared/MonoJoey.Shared/`
-- `client-unity/README.md`
-- `tools/README.md`
-- Root `.gitignore`
-- Root `Directory.Build.props`
-- Updated `docs/SESSION_HANDOVER.md`
-
-## Files/Folders Created Across Phase 1
-
-- `.gitignore`
 - `Directory.Build.props`
 - `server-dotnet/MonoJoey.sln`
-- `server-dotnet/MonoJoey.Server/`
-- `server-dotnet/MonoJoey.Server.Tests/`
-- `server-dotnet/MonoJoey.Server.Tests/README.md`
-- `shared/MonoJoey.Shared/`
+- `server-dotnet/MonoJoey.Server/GameEngine/Board.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/DefaultBoardFactory.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Money.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Tile.cs`
+- `server-dotnet/MonoJoey.Server.Tests/MonoJoey.Server.Tests.csproj`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/DefaultBoardFactoryTests.cs`
+- `docs/SESSION_HANDOVER.md`
 
 ## Validation Commands Run
 
@@ -57,90 +53,76 @@ Completed:
   - Result: succeeded.
   - Output: `codex-cli 0.125.0`
   - Note: emitted PATH update warning: `Access is denied. (os error 5)`.
-- `dotnet --version`
-  - Result: succeeded.
-  - Output: `8.0.420`
-- `git status --short --branch`
-  - Result: succeeded.
-  - Initial output: `## main...origin/main [ahead 3, behind 3]`.
-- `rg --files server-dotnet shared client-unity tools -g '!**/bin/**' -g '!**/obj/**'`
-  - Result: succeeded.
-  - Confirmed only expected Phase 1 files.
-- `rg -n "class .*Auction|class .*Loan|class .*Lobby|WebSocket|DbContext|Npgsql|MatchState|Dice|Rent|Bankrupt|CardResolver|TurnManager" server-dotnet shared -g '!**/bin/**' -g '!**/obj/**'`
-  - Result: succeeded.
-  - Findings were limited to expected shared enum names and a README naming example, not implementations.
 - `dotnet build .\server-dotnet\MonoJoey.sln`
-  - Result: succeeded.
+  - Initial result: failed due a self-inflicted parallel build/test file lock when preflight commands were started at the same time.
+  - Sequential retry before edits: succeeded with 2 `NU1900` warnings.
+- `dotnet test .\server-dotnet\MonoJoey.sln`
+  - Preflight result before edits: succeeded, 2 tests passed.
+- `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
+  - Result after edits: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
-- `dotnet test .\server-dotnet\MonoJoey.sln`
-  - Result: succeeded.
-  - Output summary: 2 tests passed, 0 failed, 0 skipped.
+- `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
+  - Result after edits: succeeded.
+  - Output summary: 5 tests passed, 0 failed, 0 skipped.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj`
-  - Result: succeeded.
-  - Output summary: `MonoJoey.Shared` and `MonoJoey.Server` built successfully, 0 warnings, 0 errors.
-- `git status --short --branch`
-  - Result before handover update: succeeded.
-  - Output: `## main...origin/main [ahead 3, behind 3]`.
+- `rg -n "Auction|Loan|WebSocket|DbContext|Lobby|Unity|Dice|Move" server-dotnet\MonoJoey.Server\GameEngine server-dotnet\MonoJoey.Server.Tests\GameEngine`
+  - Result: only `IsAuctionable` model/config fields were found; no auction logic, loan logic, networking, database, UI, dice, or movement code was added.
 
 ## Known Issues
 
-- `MonoJoey.Server` is listed in the solution, but its `Build.0` entries remain disabled.
-- `MonoJoey.Shared` is intentionally not listed in the solution after testing showed the same parallel MSBuild cancellation when it directly participated in solution builds.
-- `MonoJoey.Shared` is still built by `dotnet build .\server-dotnet\MonoJoey.sln` through the test project reference and by `dotnet build .\server-dotnet\MonoJoey.Server\MonoJoey.Server.csproj` through the server project reference.
-- Reason: in this Windows shell, direct multi-project solution builds consistently cancel parallel MSBuild child builds, sometimes with zero errors. Project-reference builds are stable.
-- `NU1900` warnings appear because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json` from this environment. Package restore/build still succeeds from the local package cache.
-- Local branch is behind `origin/main` by 3 commits. No pull was performed because the user did not request it.
+- Plain `dotnet build .\server-dotnet\MonoJoey.sln` and plain `dotnet test .\server-dotnet\MonoJoey.sln` can fail in this Windows shell with no MSBuild errors once the server project participates in the solution graph.
+- Serialized validation with `-m:1` succeeds and should be used for Phase 2 chunks unless the build harness is revisited.
+- `Directory.Build.props` now sets `BuildInParallel=false` to reduce MSBuild project-reference contention, but the command-line `-m:1` flag is still required in this environment.
+- `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 
 ## Placeholders Introduced Or Preserved
 
-- `ServerAssemblyMarker` is a server assembly placeholder only.
-- Shared protocol/contracts are placeholders only.
-- Baseline xUnit tests are smoke tests only.
-- Unity remains README-only.
-- Tools remain README-only.
+- `DefaultBoardFactory` uses placeholder IDs and display names only.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
+- `IsAuctionable` is a passive tile config flag only; no auction system or auction behavior was implemented.
 
 ## Important Decisions Preserved
 
-- Unity PC client later.
-- C#/.NET authoritative server.
-- WebSockets V1 later.
-- Server-owned rules state.
-- Client remains presentation-only later.
-- Mandatory auctions and Loan Shark mode remain future first-class toggleable systems.
-- PostgreSQL remains later, after stable in-memory server core.
+- Server-authoritative rules state.
+- Unity remains untouched.
+- No networking, lobbies, stats, persistence, auctions, Loan Shark logic, dice, movement, or tile-resolution behavior was added.
+- Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
 
 ## Next Recommended Chunk
 
-Start Phase 2, Chunk 2.1 in a fresh Codex session.
+Phase 2, Chunk 2.2 - turn system.
 
-Recommended first reads for Phase 2:
+Recommended scope:
 
-- `docs/README.md`
-- `docs/AGENT_RULES.md`
-- `docs/BUILD_PHASES.md`
-- `docs/SESSION_HANDOVER.md`
-- `docs/RULES_ENGINE.md`
-- `docs/DATA_SCHEMAS.md`
+- Add current player / turn order state behavior.
+- Add next-turn logic.
+- Skip no players yet unless the chunk explicitly handles inactive/bankrupt placeholders.
+- Keep dice, movement, tile resolution, property/rent, auctions, Loan Shark, networking, UI, stats, and persistence out of scope.
 
-Phase 2 should start with server-side state models only. Do not implement auctions, loans, cards, lobbies, WebSockets, database, stats, Unity scenes, or animation systems in Chunk 2.1.
+Recommended validation:
+
+- `codex.cmd --version`
+- `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
+- `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
 
 ## Do Not Touch Notes
 
 Do not implement before its assigned chunk:
 
-- Dice/movement resolution
+- Dice or movement resolution
+- Tile resolution behavior
+- Property ownership or rent
+- Bankruptcy/elimination behavior
 - Auctions
 - Loan Shark
 - Cards
 - Lobbies
 - WebSockets
-- Database
+- Database persistence
 - Stats
 - Unity scenes, prefabs, assets, project settings, metadata, animations, or editor UI
 
 ## Fresh-Session Recommendation
 
-Yes. Phase 1 is complete; start a fresh Codex session before Phase 2 to keep context clean.
+No. Context is still manageable after Chunk 2.1, but stop after Chunk 2.2 if the turn system expands beyond the intended small scope.

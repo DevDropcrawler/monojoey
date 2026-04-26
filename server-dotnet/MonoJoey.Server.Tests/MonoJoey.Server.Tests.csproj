@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\shared\MonoJoey.Shared\MonoJoey.Shared.csproj" />
+    <ProjectReference Include="..\MonoJoey.Server\MonoJoey.Server.csproj" />
   </ItemGroup>
 
 </Project>

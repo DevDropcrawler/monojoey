@@ -1,0 +1,14 @@
+namespace MonoJoey.Server.GameEngine;
+
+using MonoJoey.Shared.Protocol;
+
+public sealed record Player(
+    PlayerId PlayerId,
+    string Username,
+    string TokenId,
+    string ColorId,
+    Money Money,
+    TileId CurrentTileId,
+    IReadOnlySet<TileId> OwnedPropertyIds,
+    IReadOnlySet<CardId> HeldCardIds,
+    bool IsBankrupt);
