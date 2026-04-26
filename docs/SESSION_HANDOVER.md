@@ -5,49 +5,63 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.1 Game session model only
-- Completion status: Chunk 5.1 complete; server-side sessions can be created, looked up, joined, and left, with connected-player metadata stored separately from the existing rules-engine `GameState`.
+- Chunk: 5.2 WebSocket server foundation
+- Completion status: Chunk 5.2 complete; the .NET server is now an ASP.NET Core host with `/health` and `/ws`, WebSocket upgrades are accepted and tracked by server-generated connection IDs, and active sockets are removed on disconnect.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
 - Previous commit: `phase-4-5: add lockup status system`
-- Last commit after this chunk: `phase-5-1: add session model`
-- Date/time: 2026-04-27 10:37 +12:00
+- Last commit before this chunk: `phase-5-1: add session model`
+- Last commit after this chunk: not committed
+- Date/time: 2026-04-27 10:46 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.1 - Game session model only.
+Phase 5, Chunk 5.2 - WebSocket server foundation.
 
 Completed:
 
-- Added `GameSession` with `SessionId`, connected `Players`, existing engine `GameState`, and `GameSessionStatus`.
-- Added `GameSessionStatus` with `Lobby`, `InGame`, and `Finished`.
-- Added `PlayerConnection` with `PlayerId`, placeholder `ConnectionId`, and lobby `IsReady`.
-- Added `SessionManager.CreateSession()` to create a lobby session with a fresh session ID, default board, empty engine-player list, and lobby-phase `GameState`.
-- Added `SessionManager.JoinSession(sessionId, player)` to append a connected player and return the updated session.
-- Added `SessionManager.LeaveSession(sessionId, player)` to remove a connected player and return the updated session.
-- Added `SessionManager.GetSession(sessionId)` to return a stored session or `null` when missing.
-- Added duplicate-join handling keyed by `PlayerId`; a duplicate join is an idempotent no-op and does not replace the existing connection record.
-- Added invalid-session handling: `GetSession` returns `null`, while `JoinSession` and `LeaveSession` throw `InvalidOperationException` with `Session not found.`
-- Added focused tests for session creation, joining, leaving, player-list updates, duplicate joins, player-not-present leave no-op, and invalid-session behavior.
+- Converted `MonoJoey.Server` from `Microsoft.NET.Sdk` to `Microsoft.NET.Sdk.Web`.
+- Replaced the marker-only `Program.cs` with an ASP.NET Core host entry point while preserving `ServerAssemblyMarker`.
+- Registered `IWebSocketConnectionManager` and `WebSocketConnectionHandler` in DI.
+- Enabled ASP.NET Core WebSocket middleware.
+- Added `GET /health` returning `healthy`.
+- Added `/ws` endpoint that accepts only WebSocket upgrade requests and returns HTTP 400 for non-WebSocket requests.
+- Added `Realtime/WebSocketConnection` with `ConnectionId`, `WebSocket`, and `ConnectedAtUtc`.
+- Added `Realtime/IWebSocketConnectionManager` as the transport tracking seam.
+- Added `Realtime/WebSocketConnectionManager` using thread-safe in-memory storage.
+- Added `Realtime/WebSocketConnectionHandler` that registers accepted sockets, reads until close/error/cancellation, removes the connection, and closes cleanly when possible.
+- Added focused unit tests for add/get/remove/count/snapshot behavior and distinct generated connection IDs.
 
 Not included by explicit user scope:
 
-- Networking.
 - Unity/UI.
 - Persistence.
 - Stats.
-- WebSockets.
 - Message handling.
 - Turn execution over network.
 - Scaling.
+- Lobby membership.
+- Broadcasts.
+- Request parsing.
+- Protocol DTO changes.
+- Reconnect identity.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/GameSessionStatus.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
+- `server-dotnet/MonoJoey.Server/Program.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnection.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/IWebSocketConnectionManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
+
+## Existing Realtime Files
+
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnection.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/IWebSocketConnectionManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
 
 ## Existing Session Files
 
@@ -117,10 +131,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 154 tests passed.
+  - Output summary: 158 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result before commit: `main...origin/main` with new session model files, session manager tests, and this handover doc.
+  - Result after validation: modified server project/host/handover files and new realtime source/test directories.
 
 ## Known Issues
 
@@ -128,11 +142,16 @@ Not included by explicit user scope:
 - Serialized validation with `-m:1` succeeds and should be used unless the build harness is revisited.
 - `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
+- No endpoint integration test was added because the existing test project does not include ASP.NET Core test host packages and this chunk avoided adding NuGet dependencies.
 
 ## Placeholders Introduced Or Preserved
 
 - Session IDs are generated as GUID `N` strings and are not yet public lobby codes or persisted identifiers.
-- `PlayerConnection.ConnectionId` is a string placeholder only; no transport, WebSocket, or reconnect protocol exists yet.
+- WebSocket connection IDs are generated as GUID `N` strings and are transport-local only.
+- WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
+- `/ws` reads frames only to keep the connection alive and observe disconnects; inbound payloads are ignored in this chunk.
+- `/health` returns a minimal plain-text `healthy` response.
+- `PlayerConnection.ConnectionId` is still a session-layer placeholder only; it is not bound to the WebSocket transport connection ID or reconnect protocol yet.
 - `PlayerConnection.IsReady` is lobby metadata only; no ready-check transition starts a game yet.
 - `GameSession.Players` tracks connected players only and is intentionally separate from `GameState.Players`; joining a session does not create an engine player yet.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
@@ -166,6 +185,11 @@ Not included by explicit user scope:
 
 - Server-authoritative rules state.
 - Unity remains untouched.
+- WebSocket transport lives under `server-dotnet/MonoJoey.Server/Realtime` and is intentionally separate from `Sessions` and `GameEngine`.
+- `/ws` is the only WebSocket endpoint.
+- WebSocket transport connection IDs are not bound to `PlayerConnection`, sessions, lobbies, players, or reconnect identity yet.
+- Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
+- The server host exposes a `Program.BuildApp(args)` seam for host construction without starting `Run()`.
 - Session state lives under `server-dotnet/MonoJoey.Server/Sessions` and stays outside `GameEngine`.
 - A `GameSession` owns the current rules-engine `GameState` but does not execute turns, resolve messages, or mutate gameplay over a network.
 - New sessions start with `GameSessionStatus.Lobby`, `GamePhase.Lobby`, a default board, no connected players, and no engine players.
@@ -224,13 +248,14 @@ Not included by explicit user scope:
 
 ## Next Recommended Chunk
 
-Phase 5 follow-up - choose the next narrow server-session slice only if explicitly requested.
+Phase 5 follow-up - choose the next narrow networking/session slice only if explicitly requested.
 
 Possible next scopes:
 
 - Add lobby-to-engine player mapping/start-game transition.
 - Add a narrow message DTO layer without transport.
-- Add WebSocket transport only when the networking chunk is explicitly assigned.
+- Add a narrow WebSocket message receive/dispatch layer without gameplay execution.
+- Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 
 Recommended validation:
 
@@ -244,9 +269,10 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Networking.
-- WebSockets.
 - Message handling.
+- Broadcasts.
+- Lobby membership over WebSocket.
+- WebSocket authentication or reconnect tokens.
 - Turn execution over network.
 - UI.
 - Persistence.
