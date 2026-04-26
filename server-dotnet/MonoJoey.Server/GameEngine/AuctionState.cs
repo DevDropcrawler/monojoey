@@ -10,4 +10,7 @@ public sealed record AuctionState(
     Money MinimumBidIncrement,
     int InitialPreBidSeconds,
     int BidResetSeconds,
-    IReadOnlyList<AuctionBid> Bids);
+    IReadOnlyList<AuctionBid> Bids,
+    Money? HighestBid,
+    PlayerId? HighestBidderId,
+    int? CountdownDurationSeconds);

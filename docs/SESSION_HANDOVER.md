@@ -5,35 +5,37 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 3
-- Chunk: 3.1 mandatory auction foundation
-- Completion status: Chunk 3.1 complete; server-side auction config, state models, no-start results, and mandatory auction start validation are implemented.
+- Chunk: 3.2 auction bidding and timer state transitions
+- Completion status: Chunk 3.2 complete; deterministic bid placement validation, active bid countdown transitions, highest-bid tracking, and bid history are implemented.
 - Branch: `main` tracking `origin/main`; local has this chunk committed after final validation.
-- Previous commit: `5c0fdfd` - `phase-2-7: add bankruptcy and elimination`
-- Commit: `phase-3-1: add auction foundation`
-- Date/time: 2026-04-26 23:44 +12:00
+- Previous commit: `8553048` - `phase-3-1: add auction foundation`
+- Commit: `phase-3-2: add auction bidding transitions`
+- Date/time: 2026-04-26 23:56 +12:00
 
 ## Last Completed Chunk
 
-Phase 3, Chunk 3.1 - mandatory auction foundation only.
+Phase 3, Chunk 3.2 - auction bidding and timer state transitions only.
 
 Completed:
 
-- Added `AuctionConfig` with mandatory-auction enablement plus placeholder timer and bid config values.
-- Added `AuctionState`, `AuctionStatus`, and `AuctionBid` as the server-side auction domain surface.
-- Added `AuctionStartResult` and `AuctionStartResultKind` so the manager can return clear no-auction outcomes.
-- Added `AuctionManager.StartMandatoryAuction` for creating an initial auction state for an enabled, unowned, auctionable property tile.
-- Added validation for unknown triggering players and unknown auction tiles.
-- Added no-auction outcomes for disabled mandatory auctions, already-owned properties, and non-auctionable/non-property tiles.
-- Added focused tests for default config values, valid auction start, disabled auctions, owned property, non-property tile, unknown player, and unknown tile.
+- Added `AuctionBidResult` and `AuctionBidResultKind` for accepted and rejected bid outcomes.
+- Added `AuctionManager.PlaceBid` as a pure deterministic state transition method.
+- Added bidder eligibility rejection for bidders not in the game and eliminated players.
+- Added first-bid validation against `AuctionState.StartingBid`.
+- Added later-bid validation against current highest bid plus `AuctionState.MinimumBidIncrement`.
+- Added `AuctionStatus.ActiveBidCountdown`.
+- Added `AuctionState.HighestBid`, `AuctionState.HighestBidderId`, and `AuctionState.CountdownDurationSeconds`.
+- Made the first valid bid switch from `AwaitingInitialBid` to `ActiveBidCountdown`.
+- Made every valid bid reset countdown duration metadata to `BidResetSeconds`.
+- Preserved bid history using caller-supplied deterministic bid timestamps.
+- Added focused tests for valid first bid, below-starting-bid rejection, below-increment rejection, later bid updates, countdown reset, missing bidder rejection, eliminated bidder rejection, and bid history.
 
 Not included by explicit user scope:
 
-- Timer countdown logic.
-- 9-second pre-bid timer behavior.
-- 3-second bid reset timer behavior.
-- Bid placement or bid validation.
-- Auction resolution.
-- Winner payment or property transfer.
+- Real wall-clock timers.
+- Async countdown loop.
+- Winner finalization.
+- Property transfer/payment.
 - Loan Shark.
 - Networking.
 - Unity/UI.
@@ -42,10 +44,8 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBid.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionConfig.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionStartResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionStatus.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
@@ -54,6 +54,7 @@ Not included by explicit user scope:
 ## Existing Engine Files
 
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionBid.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionConfig.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/AuctionStartResult.cs`
@@ -90,11 +91,11 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 57 tests passed.
+  - Output summary: 65 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Run after build/test and before final staging/commit as requested.
-  - Output showed `main...origin/main` with seven new auction files untracked.
+  - Run after build/test as requested.
+  - Output showed `main...origin/main` with modified auction manager/state/status/tests and new `AuctionBidResult.cs`.
 
 ## Known Issues
 
@@ -105,12 +106,12 @@ Not included by explicit user scope:
 
 ## Placeholders Introduced Or Preserved
 
-- `AuctionConfig.InitialPreBidSeconds` defaults to `9`, but no countdown behavior exists yet.
-- `AuctionConfig.BidResetSeconds` defaults to `3`, but no bid reset behavior exists yet.
-- `AuctionConfig.MinimumBidIncrement` defaults to `1`, but no bid placement validation exists yet.
-- `AuctionConfig.StartingBid` defaults to `0`, but no bidding or resolution behavior exists yet.
-- `AuctionState.Bids` starts empty and is not mutated by the foundation manager.
-- `AuctionStatus.AwaitingInitialBid` is the only auction status currently used.
+- `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
+- `AuctionConfig.BidResetSeconds` defaults to `3`; valid bids now copy this value into `AuctionState.CountdownDurationSeconds`, but no actual time passes.
+- `AuctionConfig.MinimumBidIncrement` defaults to `1`; bid validation now uses it after the first bid.
+- `AuctionConfig.StartingBid` defaults to `0`; first-bid validation now uses it.
+- `AuctionStatus.ActiveBidCountdown` is metadata only; it does not trigger asynchronous behavior.
+- `AuctionState.CountdownDurationSeconds` stores deterministic countdown duration metadata only.
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
@@ -122,11 +123,15 @@ Not included by explicit user scope:
 - Server-authoritative rules state.
 - Unity remains untouched.
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
-- Auctions currently produce standalone `AuctionState`; `GameState` is not mutated and does not yet store active auction state.
+- Auctions still produce standalone `AuctionState`; `GameState` is not mutated and does not yet store active auction state.
+- `AuctionManager.PlaceBid` returns a new `AuctionState` inside `AuctionBidResult`; rejected bids return the unchanged auction state.
+- `AuctionManager.PlaceBid` requires a caller-supplied `DateTimeOffset` for bid history and does not read wall-clock time.
+- Bid validation does not check bidder cash balance because payment and transfer are out of scope for this chunk.
 - `AuctionManager.StartMandatoryAuction` treats `Tile.IsPurchasable && Tile.IsAuctionable` as auction eligibility.
 - Disabled mandatory auctions return a typed no-auction result before player/tile lookup.
 - Owned properties and non-auctionable tiles return typed no-auction results instead of throwing.
-- Unknown triggering players and unknown tiles throw `InvalidOperationException`, consistent with existing manager validation style.
+- Unknown triggering players and unknown tiles still throw `InvalidOperationException`, consistent with existing manager validation style.
+- Unknown auction bidders return `AuctionBidResultKind.BidderNotInGame` instead of throwing, per Chunk 3.2 rejection scope.
 - Ownership continues to live on `Player.OwnedPropertyIds`; no new persistence or aggregate ownership store was added.
 - `PropertyManager.AssignOwner` remains the future ownership hook for auction resolution, but this chunk does not call it.
 - Tile resolution remains neutral metadata only and does not mutate `GameState`.
@@ -140,9 +145,9 @@ Phase 3 follow-up - choose one narrow auction slice, only if explicitly requeste
 Possible next scopes:
 
 - Hook unowned property landing resolution into `AuctionManager.StartMandatoryAuction`.
-- Add bid placement validation without timers.
-- Add auction resolution without payment/transfer, if staged separately.
-- Add winner payment and property transfer after bid validation exists.
+- Add deterministic auction timeout/resolution result without payment/transfer.
+- Add winner payment and property transfer after resolution exists.
+- Add active-auction storage to `GameState`, if needed before integration.
 
 Recommended validation:
 
@@ -154,12 +159,10 @@ Recommended validation:
 
 Do not implement before its assigned chunk:
 
-- Timer countdown logic.
-- 9-second pre-bid timer behavior.
-- 3-second bid reset timer behavior.
-- Bid placement unless explicitly assigned.
-- Auction resolution unless explicitly assigned.
-- Winner payment/property transfer unless explicitly assigned.
+- Real wall-clock timers.
+- Async countdown loop.
+- Winner finalization.
+- Property transfer/payment.
 - Loan Shark.
 - Debt recovery.
 - Asset liquidation.
@@ -177,4 +180,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 3.1 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
+Yes. Chunk 3.2 is complete, and a fresh session should continue from this handover before starting the next rules-engine chunk.
