@@ -5,55 +5,55 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.2 WebSocket server foundation
-- Completion status: Chunk 5.2 complete; the .NET server is now an ASP.NET Core host with `/health` and `/ws`, WebSocket upgrades are accepted and tracked by server-generated connection IDs, and active sockets are removed on disconnect.
+- Chunk: 5.3 Lobby messages over WebSocket only
+- Completion status: Chunk 5.3 complete; `/ws` now accepts minimal lobby JSON messages, routes create/join/leave to `SessionManager`, returns direct `lobby_state` or `error` responses, binds each socket to one player ID, and removes the bound lobby player on disconnect.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `phase-4-5: add lockup status system`
-- Last commit before this chunk: `phase-5-1: add session model`
-- Last commit after this chunk: not committed
-- Date/time: 2026-04-27 10:46 +12:00
+- Previous commit: `phase-5-2: add websocket server foundation`
+- Last commit before this chunk: `phase-5-2: add websocket server foundation`
+- Last commit after this chunk: `phase-5-3: add lobby websocket messages`
+- Date/time: 2026-04-27 12:20 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.2 - WebSocket server foundation.
+Phase 5, Chunk 5.3 - Lobby messages over WebSocket only.
 
 Completed:
 
-- Converted `MonoJoey.Server` from `Microsoft.NET.Sdk` to `Microsoft.NET.Sdk.Web`.
-- Replaced the marker-only `Program.cs` with an ASP.NET Core host entry point while preserving `ServerAssemblyMarker`.
-- Registered `IWebSocketConnectionManager` and `WebSocketConnectionHandler` in DI.
-- Enabled ASP.NET Core WebSocket middleware.
-- Added `GET /health` returning `healthy`.
-- Added `/ws` endpoint that accepts only WebSocket upgrade requests and returns HTTP 400 for non-WebSocket requests.
-- Added `Realtime/WebSocketConnection` with `ConnectionId`, `WebSocket`, and `ConnectedAtUtc`.
-- Added `Realtime/IWebSocketConnectionManager` as the transport tracking seam.
-- Added `Realtime/WebSocketConnectionManager` using thread-safe in-memory storage.
-- Added `Realtime/WebSocketConnectionHandler` that registers accepted sockets, reads until close/error/cancellation, removes the connection, and closes cleanly when possible.
-- Added focused unit tests for add/get/remove/count/snapshot behavior and distinct generated connection IDs.
+- Added server-local lobby WebSocket message handling under `Realtime`.
+- Added minimal snake-case JSON envelope support for `create_lobby`, `join_lobby`, and `leave_lobby`.
+- Added direct sender responses using only `lobby_state` and `error` server envelopes.
+- Added validation and readable errors for invalid JSON, unknown types, unsupported client-sent server message types, invalid payloads, missing sessions, and player switching attempts.
+- Wired lobby message handling to existing `SessionManager.CreateSession`, `JoinSession`, and `LeaveSession`.
+- Bound each WebSocket connection to one `playerId` after a successful join.
+- Rejected attempts by the same WebSocket connection to join or leave as a different player.
+- Removed the bound player from the known session on WebSocket disconnect to avoid lobby ghost players.
+- Preserved sender-only behavior; no lobby broadcasts were added.
+- Added focused tests for lobby message parsing, handler behavior, idempotent duplicate joins, error responses, player switch rejection, and disconnect cleanup through the WebSocket handler.
 
 Not included by explicit user scope:
 
 - Unity/UI.
 - Persistence.
 - Stats.
-- Message handling.
 - Turn execution over network.
 - Scaling.
-- Lobby membership.
 - Broadcasts.
-- Request parsing.
 - Protocol DTO changes.
 - Reconnect identity.
+- Ready state transitions.
+- Game start.
+- Authentication.
+- Unity client.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/MonoJoey.Server.csproj`
 - `server-dotnet/MonoJoey.Server/Program.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnection.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/IWebSocketConnectionManager.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyConnectionContext.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -62,6 +62,9 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/Realtime/IWebSocketConnectionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyConnectionContext.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 
 ## Existing Session Files
 
@@ -131,10 +134,10 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 158 tests passed.
+  - Output summary: 171 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git status --short --branch`
-  - Result after validation: modified server project/host/handover files and new realtime source/test directories.
+  - Result after validation: modified server host/realtime/handover files and new realtime source/test files pending commit.
 
 ## Known Issues
 
@@ -149,9 +152,16 @@ Not included by explicit user scope:
 - Session IDs are generated as GUID `N` strings and are not yet public lobby codes or persisted identifiers.
 - WebSocket connection IDs are generated as GUID `N` strings and are transport-local only.
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
-- `/ws` reads frames only to keep the connection alive and observe disconnects; inbound payloads are ignored in this chunk.
+- `/ws` handles complete text messages as one JSON lobby request each and sends one direct response to the sender.
+- `/ws` rejects binary messages with an `invalid_message` error response.
+- Lobby wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `lobby_state`, and `error`.
+- `create_lobby` returns an empty lobby state and does not automatically join the creator.
+- `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
+- `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
+- On WebSocket disconnect, the bound player is removed from the known session if the session still exists.
+- Lobby responses are sender-only; no other connected clients receive state updates in this chunk.
 - `/health` returns a minimal plain-text `healthy` response.
-- `PlayerConnection.ConnectionId` is still a session-layer placeholder only; it is not bound to the WebSocket transport connection ID or reconnect protocol yet.
+- `PlayerConnection.ConnectionId` is now populated from the WebSocket transport connection ID for lobby joins, but there is still no reconnect protocol or authenticated identity.
 - `PlayerConnection.IsReady` is lobby metadata only; no ready-check transition starts a game yet.
 - `GameSession.Players` tracks connected players only and is intentionally separate from `GameState.Players`; joining a session does not create an engine player yet.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
@@ -187,7 +197,9 @@ Not included by explicit user scope:
 - Unity remains untouched.
 - WebSocket transport lives under `server-dotnet/MonoJoey.Server/Realtime` and is intentionally separate from `Sessions` and `GameEngine`.
 - `/ws` is the only WebSocket endpoint.
-- WebSocket transport connection IDs are not bound to `PlayerConnection`, sessions, lobbies, players, or reconnect identity yet.
+- WebSocket transport connection IDs are bound to `PlayerConnection.ConnectionId` only for the active lobby membership created by `join_lobby`.
+- One WebSocket connection may bind to only one `playerId`; attempts to switch players are rejected.
+- Lobby messages are direct request/response only; broadcasts are intentionally deferred.
 - Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
 - The server host exposes a `Program.BuildApp(args)` seam for host construction without starting `Run()`.
 - Session state lives under `server-dotnet/MonoJoey.Server/Sessions` and stays outside `GameEngine`.
@@ -253,9 +265,9 @@ Phase 5 follow-up - choose the next narrow networking/session slice only if expl
 Possible next scopes:
 
 - Add lobby-to-engine player mapping/start-game transition.
-- Add a narrow message DTO layer without transport.
-- Add a narrow WebSocket message receive/dispatch layer without gameplay execution.
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
+- Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
+- Add ready-state handling only if explicitly assigned.
 
 Recommended validation:
 
@@ -269,9 +281,8 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Message handling.
 - Broadcasts.
-- Lobby membership over WebSocket.
+- Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
 - Turn execution over network.
 - UI.

@@ -1,6 +1,7 @@
 namespace MonoJoey.Server;
 
 using MonoJoey.Server.Realtime;
+using MonoJoey.Server.Sessions;
 
 public sealed class Program
 {
@@ -15,6 +16,8 @@ public sealed class Program
         var builder = WebApplication.CreateBuilder(args);
 
         builder.Services.AddSingleton<IWebSocketConnectionManager, WebSocketConnectionManager>();
+        builder.Services.AddSingleton<SessionManager>();
+        builder.Services.AddSingleton<LobbyMessageHandler>();
         builder.Services.AddSingleton<WebSocketConnectionHandler>();
 
         var app = builder.Build();
