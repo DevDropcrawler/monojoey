@@ -1,5 +1,6 @@
 namespace MonoJoey.Server.Tests.Sessions;
 
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Sessions;
 using MonoJoey.Shared.Protocol;
 using MonoJoey.Shared.Schemas;
@@ -100,6 +101,172 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public void SetReady_MarksTargetPlayerReadyAndPreservesOthers()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var firstPlayer = CreatePlayerConnection("player_1");
+        var secondPlayer = CreatePlayerConnection("player_2");
+        _ = sessionManager.JoinSession(session.SessionId, firstPlayer);
+        _ = sessionManager.JoinSession(session.SessionId, secondPlayer);
+
+        var updatedSession = sessionManager.SetReady(session.SessionId, firstPlayer.PlayerId, isReady: true);
+
+        Assert.True(updatedSession.Players[0].IsReady);
+        Assert.False(updatedSession.Players[1].IsReady);
+        Assert.Equal(secondPlayer, updatedSession.Players[1]);
+    }
+
+    [Fact]
+    public void SetReady_CanSetReadyBackToFalse()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var player = CreatePlayerConnection("player_1");
+        _ = sessionManager.JoinSession(session.SessionId, player);
+        _ = sessionManager.SetReady(session.SessionId, player.PlayerId, isReady: true);
+
+        var updatedSession = sessionManager.SetReady(session.SessionId, player.PlayerId, isReady: false);
+
+        Assert.False(updatedSession.Players[0].IsReady);
+    }
+
+    [Fact]
+    public void SetReady_InvalidSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetReady("missing_session", new PlayerId("player_1"), isReady: true));
+
+        Assert.Equal("Session not found.", exception.Message);
+    }
+
+    [Fact]
+    public void SetReady_PlayerNotInLobbyThrows()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetReady(session.SessionId, new PlayerId("player_1"), isReady: true));
+
+        Assert.Equal("Player is not in lobby.", exception.Message);
+    }
+
+    [Fact]
+    public void SetReady_StartedSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetReady(startedSession.SessionId, new PlayerId("player_1"), isReady: false));
+
+        Assert.Equal("Session is not in lobby status.", exception.Message);
+    }
+
+    [Fact]
+    public void StartGame_RejectsFewerThanTwoPlayers()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var player = CreatePlayerConnection("player_1", isReady: true);
+        _ = sessionManager.JoinSession(session.SessionId, player);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.StartGame(session.SessionId));
+
+        Assert.Equal("Not enough players to start the game.", exception.Message);
+    }
+
+    [Fact]
+    public void StartGame_RejectsWhenAnyPlayerIsNotReady()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_1", isReady: true));
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_2"));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.StartGame(session.SessionId));
+
+        Assert.Equal("All players must be ready to start the game.", exception.Message);
+    }
+
+    [Fact]
+    public void StartGame_TransitionsToInGameAndInitializesPlayersInLobbyOrder()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_1", isReady: true));
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_2", isReady: true));
+
+        var startedSession = sessionManager.StartGame(session.SessionId);
+
+        Assert.Equal(GameSessionStatus.InGame, startedSession.Status);
+        Assert.Equal(GamePhase.AwaitingRoll, startedSession.GameState.Phase);
+        Assert.Equal(1, startedSession.GameState.TurnNumber);
+        Assert.Equal("player_1", startedSession.GameState.CurrentTurnPlayerId?.Value);
+        Assert.Same(session.GameState.Board, startedSession.GameState.Board);
+
+        Assert.Collection(
+            startedSession.GameState.Players,
+            player => AssertStartedPlayer(player, "player_1"),
+            player => AssertStartedPlayer(player, "player_2"));
+    }
+
+    [Fact]
+    public void StartGame_InvalidSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.StartGame("missing_session"));
+
+        Assert.Equal("Session not found.", exception.Message);
+    }
+
+    [Fact]
+    public void StartGame_StartedSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.StartGame(startedSession.SessionId));
+
+        Assert.Equal("Session is not in lobby status.", exception.Message);
+    }
+
+    [Fact]
+    public void JoinSession_StartedSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.JoinSession(startedSession.SessionId, CreatePlayerConnection("player_3")));
+
+        Assert.Equal("Session is not in lobby status.", exception.Message);
+    }
+
+    [Fact]
+    public void LeaveSession_AfterStartDoesNotRemoveGameStatePlayer()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var updatedSession = sessionManager.LeaveSession(
+            startedSession.SessionId,
+            CreatePlayerConnection("player_1", isReady: true));
+
+        Assert.Single(updatedSession.Players);
+        Assert.Equal(2, updatedSession.GameState.Players.Count);
+        Assert.Contains(updatedSession.GameState.Players, player => player.PlayerId.Value == "player_1");
+    }
+
+    [Fact]
     public void GetSession_InvalidSessionReturnsNull()
     {
         var sessionManager = new SessionManager();
@@ -133,11 +300,34 @@ public class SessionManagerTests
         Assert.Equal("Session not found.", exception.Message);
     }
 
-    private static PlayerConnection CreatePlayerConnection(string playerId)
+    private static GameSession CreateReadyStartedSession(SessionManager sessionManager)
+    {
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_1", isReady: true));
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_2", isReady: true));
+
+        return sessionManager.StartGame(session.SessionId);
+    }
+
+    private static void AssertStartedPlayer(Player player, string expectedPlayerId)
+    {
+        Assert.Equal(expectedPlayerId, player.PlayerId.Value);
+        Assert.Equal(expectedPlayerId, player.Username);
+        Assert.Equal($"token_{expectedPlayerId}", player.TokenId);
+        Assert.Equal($"color_{expectedPlayerId}", player.ColorId);
+        Assert.Equal("start", player.CurrentTileId.Value);
+        Assert.Equal(new Money(1500), player.Money);
+        Assert.Empty(player.OwnedPropertyIds);
+        Assert.Empty(player.HeldCardIds);
+        Assert.False(player.IsBankrupt);
+        Assert.False(player.IsEliminated);
+    }
+
+    private static PlayerConnection CreatePlayerConnection(string playerId, bool isReady = false)
     {
         return new PlayerConnection(
             new PlayerId(playerId),
             $"connection_{playerId}",
-            IsReady: false);
+            isReady);
     }
 }

@@ -5,30 +5,31 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.3 Lobby messages over WebSocket only
-- Completion status: Chunk 5.3 complete; `/ws` now accepts minimal lobby JSON messages, routes create/join/leave to `SessionManager`, returns direct `lobby_state` or `error` responses, binds each socket to one player ID, and removes the bound lobby player on disconnect.
+- Chunk: 5.4 Game start and ready state
+- Completion status: Chunk 5.4 complete; `/ws` now accepts `set_ready` and `start_game`, returns direct `lobby_state`, `game_started`, or `error` responses, requires the sender connection to be bound to the requested session/player, and starts a deterministic lobby-order game once at least 2 lobby players are ready.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
 - Previous commit: `phase-5-2: add websocket server foundation`
-- Last commit before this chunk: `phase-5-2: add websocket server foundation`
-- Last commit after this chunk: `phase-5-3: add lobby websocket messages`
-- Date/time: 2026-04-27 12:20 +12:00
+- Last commit before this chunk: `phase-5-3: add lobby websocket messages`
+- Last commit after this chunk: pending
+- Date/time: 2026-04-27 15:02 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.3 - Lobby messages over WebSocket only.
+Phase 5, Chunk 5.4 - Game start and ready state.
 
 Completed:
 
-- Added server-local lobby WebSocket message handling under `Realtime`.
-- Added minimal snake-case JSON envelope support for `create_lobby`, `join_lobby`, and `leave_lobby`.
-- Added direct sender responses using only `lobby_state` and `error` server envelopes.
-- Added validation and readable errors for invalid JSON, unknown types, unsupported client-sent server message types, invalid payloads, missing sessions, and player switching attempts.
-- Wired lobby message handling to existing `SessionManager.CreateSession`, `JoinSession`, and `LeaveSession`.
-- Bound each WebSocket connection to one `playerId` after a successful join.
-- Rejected attempts by the same WebSocket connection to join or leave as a different player.
-- Removed the bound player from the known session on WebSocket disconnect to avoid lobby ghost players.
-- Preserved sender-only behavior; no lobby broadcasts were added.
-- Added focused tests for lobby message parsing, handler behavior, idempotent duplicate joins, error responses, player switch rejection, and disconnect cleanup through the WebSocket handler.
+- Added server-local `set_ready` and `start_game` lobby WebSocket message handling.
+- Added direct `game_started` response payloads containing session status, game phase, current turn player, and initialized engine players.
+- Added ready-state mutation through `SessionManager.SetReady`, preserving lobby player order and connection IDs.
+- Added `SessionManager.StartGame`, requiring lobby status, at least 2 players, and all players ready.
+- Initialized engine `GameState.Players` from lobby players in deterministic lobby order with temporary player/profile placeholders.
+- Reused the existing session board, set the match to `InGame`, and used `TurnManager.StartFirstTurn` so the first turn is deterministic and starts at `AwaitingRoll`.
+- Rejected joins and ready changes after a session has started.
+- Kept disconnect cleanup from removing lobby membership after game start; only the socket binding is cleared.
+- Preserved started engine players when `LeaveSession` is called after game start.
+- Preserved sender-only behavior; no lobby or match broadcasts were added.
+- Added focused session manager and realtime handler tests for ready state, start validation, successful start payloads, post-start guards, bound-connection checks, and post-start disconnect cleanup.
 
 Not included by explicit user scope:
 
@@ -40,20 +41,16 @@ Not included by explicit user scope:
 - Broadcasts.
 - Protocol DTO changes.
 - Reconnect identity.
-- Ready state transitions.
-- Game start.
 - Authentication.
 - Unity client.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/Program.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyConnectionContext.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -134,10 +131,13 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 171 tests passed.
+  - Output summary: 200 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
+- `git diff --check`
+  - Result: succeeded.
+  - Output summary: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings.
 - `git status --short --branch`
-  - Result after validation: modified server host/realtime/handover files and new realtime source/test files pending commit.
+  - Result after validation: modified realtime/session source files, focused tests, and handover file pending commit.
 
 ## Known Issues
 
@@ -154,19 +154,23 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Lobby wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `lobby_state`, and `error`.
+- Lobby wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `lobby_state`, `game_started`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
-- On WebSocket disconnect, the bound player is removed from the known session if the session still exists.
+- On WebSocket disconnect, the bound player is removed from the known session only while the session is still in lobby status; after game start, cleanup clears only the socket binding.
 - Lobby responses are sender-only; no other connected clients receive state updates in this chunk.
 - `/health` returns a minimal plain-text `healthy` response.
 - `PlayerConnection.ConnectionId` is now populated from the WebSocket transport connection ID for lobby joins, but there is still no reconnect protocol or authenticated identity.
-- `PlayerConnection.IsReady` is lobby metadata only; no ready-check transition starts a game yet.
-- `GameSession.Players` tracks connected players only and is intentionally separate from `GameState.Players`; joining a session does not create an engine player yet.
+- `PlayerConnection.IsReady` is lobby metadata only; `start_game` requires every lobby player to be ready.
+- `GameSession.Players` tracks lobby connection metadata and is intentionally separate from `GameState.Players`; joining a session does not create an engine player.
+- `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
+- Started engine players use temporary deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
+- `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
+- Leaving after game start can remove lobby connection metadata, but it does not remove any player from `GameState.Players`.
 - `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
 - `AuctionConfig.BidResetSeconds` defaults to `3`; valid bids now copy this value into `AuctionState.CountdownDurationSeconds`, but no actual time passes.
 - `AuctionConfig.MinimumBidIncrement` defaults to `1`; bid validation now uses it after the first bid.
@@ -199,6 +203,10 @@ Not included by explicit user scope:
 - `/ws` is the only WebSocket endpoint.
 - WebSocket transport connection IDs are bound to `PlayerConnection.ConnectionId` only for the active lobby membership created by `join_lobby`.
 - One WebSocket connection may bind to only one `playerId`; attempts to switch players are rejected.
+- `set_ready` and `start_game` require the WebSocket connection to be bound to the same `sessionId` and `playerId` named in the payload.
+- Game start is deterministic: engine players are created in lobby order and `TurnManager.StartFirstTurn` selects the first eligible lobby-order player.
+- A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
+- Disconnect cleanup after game start does not mutate match membership or remove engine players.
 - Lobby messages are direct request/response only; broadcasts are intentionally deferred.
 - Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
 - The server host exposes a `Program.BuildApp(args)` seam for host construction without starting `Run()`.
@@ -264,10 +272,9 @@ Phase 5 follow-up - choose the next narrow networking/session slice only if expl
 
 Possible next scopes:
 
-- Add lobby-to-engine player mapping/start-game transition.
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
-- Add ready-state handling only if explicitly assigned.
+- Add a gameplay snapshot or turn-action WebSocket slice only if explicitly assigned.
 
 Recommended validation:
 
@@ -305,4 +312,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.1 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.4 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

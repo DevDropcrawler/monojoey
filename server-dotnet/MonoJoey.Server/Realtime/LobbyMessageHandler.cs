@@ -3,6 +3,7 @@ namespace MonoJoey.Server.Realtime;
 using System.Text.Json;
 using MonoJoey.Server.Sessions;
 using MonoJoey.Shared.Protocol;
+using MonoJoey.Shared.Schemas;
 
 public sealed class LobbyMessageHandler
 {
@@ -50,12 +51,15 @@ public sealed class LobbyMessageHandler
             var session = sessionManager.GetSession(connectionContext.SessionId);
             if (session is not null)
             {
-                _ = sessionManager.LeaveSession(
-                    connectionContext.SessionId,
-                    new PlayerConnection(
-                        new PlayerId(connectionContext.PlayerId),
-                        connectionContext.ConnectionId,
-                        IsReady: false));
+                if (session.Status == GameSessionStatus.Lobby)
+                {
+                    _ = sessionManager.LeaveSession(
+                        connectionContext.SessionId,
+                        new PlayerConnection(
+                            new PlayerId(connectionContext.PlayerId),
+                            connectionContext.ConnectionId,
+                            IsReady: false));
+                }
             }
 
             connectionContext.ClearBinding();
@@ -88,7 +92,9 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.CreateLobby => HandleCreateLobby(),
             LobbyMessageTypes.JoinLobby => HandleJoinLobby(root, connectionContext),
             LobbyMessageTypes.LeaveLobby => HandleLeaveLobby(root, connectionContext),
-            LobbyMessageTypes.LobbyState or LobbyMessageTypes.Error => CreateError(
+            LobbyMessageTypes.SetReady => HandleSetReady(root, connectionContext),
+            LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
+            LobbyMessageTypes.LobbyState or LobbyMessageTypes.GameStarted or LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
             _ => CreateError(
@@ -148,6 +154,13 @@ public sealed class LobbyMessageHandler
                     LobbyErrorCodes.SessionNotFound,
                     "Session not found.");
             }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session is not in lobby status.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
         }
     }
 
@@ -172,11 +185,11 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!string.Equals(connectionContext.PlayerId, playerId, StringComparison.Ordinal))
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
-                    "This connection is not bound to that playerId.");
+                    "This connection is not bound to that session and playerId.");
             }
 
             var updatedSession = sessionManager.LeaveSession(
@@ -192,6 +205,128 @@ public sealed class LobbyMessageHandler
             }
 
             return CreateLobbyState(updatedSession);
+        }
+    }
+
+    private LobbyServerEnvelope HandleSetReady(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadSetReadyPayload(root, out var sessionId, out var playerId, out var isReady))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "set_ready requires payload.sessionId, payload.playerId, and boolean payload.isReady.");
+        }
+
+        if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.PlayerSwitchRejected,
+                "This connection is not bound to that session and playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            try
+            {
+                var updatedSession = sessionManager.SetReady(sessionId, new PlayerId(playerId), isReady);
+
+                return CreateLobbyState(updatedSession);
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session not found.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.SessionNotFound,
+                    "Session not found.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session is not in lobby status.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Player is not in lobby.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotInLobby,
+                    "Player is not in lobby.");
+            }
+        }
+    }
+
+    private LobbyServerEnvelope HandleStartGame(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "start_game requires payload.sessionId and payload.playerId.");
+        }
+
+        if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.PlayerSwitchRejected,
+                "This connection is not bound to that session and playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.SessionNotFound,
+                    "Session not found.");
+            }
+
+            if (session.Players.All(player => player.PlayerId.Value != playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotInLobby,
+                    "Player is not in lobby.");
+            }
+
+            try
+            {
+                var updatedSession = sessionManager.StartGame(sessionId);
+
+                return CreateGameStarted(updatedSession);
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session not found.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.SessionNotFound,
+                    "Session not found.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session is not in lobby status.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Not enough players to start the game.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotEnoughPlayers,
+                    "Not enough players to start the game.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "All players must be ready to start the game.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayersNotReady,
+                    "All players must be ready to start the game.");
+            }
         }
     }
 
@@ -212,12 +347,15 @@ public sealed class LobbyMessageHandler
             return;
         }
 
-        _ = sessionManager.LeaveSession(
-            connectionContext.SessionId,
-            new PlayerConnection(
-                new PlayerId(playerId),
-                connectionContext.ConnectionId,
-                IsReady: false));
+        if (previousSession.Status == GameSessionStatus.Lobby)
+        {
+            _ = sessionManager.LeaveSession(
+                connectionContext.SessionId,
+                new PlayerConnection(
+                    new PlayerId(playerId),
+                    connectionContext.ConnectionId,
+                    IsReady: false));
+        }
     }
 
     private static JsonDocument? ParseMessage(string messageJson)
@@ -251,6 +389,30 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadSetReadyPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out bool isReady)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        isReady = false;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !payload.TryGetProperty("isReady", out var isReadyProperty) ||
+            isReadyProperty.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return false;
+        }
+
+        isReady = isReadyProperty.GetBoolean();
+        return true;
+    }
+
     private static bool TryReadString(JsonElement element, string propertyName, out string value)
     {
         value = string.Empty;
@@ -277,7 +439,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.LobbyState,
             new LobbyStatePayload(
                 session.SessionId,
-                session.Status.ToString().ToLowerInvariant(),
+                FormatSessionStatus(session.Status),
                 session.Players
                     .Select(player => new LobbyPlayerPayload(
                         player.PlayerId.Value,
@@ -286,10 +448,64 @@ public sealed class LobbyMessageHandler
                     .ToArray()));
     }
 
+    private static LobbyServerEnvelope CreateGameStarted(GameSession session)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.GameStarted,
+            new GameStartedPayload(
+                session.SessionId,
+                FormatSessionStatus(session.Status),
+                FormatGamePhase(session.GameState.Phase),
+                session.GameState.CurrentTurnPlayerId?.Value,
+                session.GameState.Players
+                    .Select(player => new GameStartedPlayerPayload(
+                        player.PlayerId.Value,
+                        player.Username,
+                        player.TokenId,
+                        player.ColorId,
+                        player.CurrentTileId.Value,
+                        player.Money.Amount))
+                    .ToArray()));
+    }
+
     private static LobbyServerEnvelope CreateError(string code, string message)
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.Error,
             new LobbyErrorPayload(code, message));
+    }
+
+    private static bool IsBoundToSessionPlayer(
+        LobbyConnectionContext connectionContext,
+        string sessionId,
+        string playerId)
+    {
+        return string.Equals(connectionContext.SessionId, sessionId, StringComparison.Ordinal) &&
+            string.Equals(connectionContext.PlayerId, playerId, StringComparison.Ordinal);
+    }
+
+    private static string FormatSessionStatus(GameSessionStatus status)
+    {
+        return status switch
+        {
+            GameSessionStatus.Lobby => "lobby",
+            GameSessionStatus.InGame => "in_game",
+            GameSessionStatus.Finished => "finished",
+            _ => status.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatGamePhase(GamePhase phase)
+    {
+        return phase switch
+        {
+            GamePhase.Lobby => "lobby",
+            GamePhase.AwaitingRoll => "awaiting_roll",
+            GamePhase.ResolvingTurn => "resolving_turn",
+            GamePhase.Auction => "auction",
+            GamePhase.AwaitingEndTurn => "awaiting_end_turn",
+            GamePhase.Completed => "completed",
+            _ => phase.ToString().ToLowerInvariant(),
+        };
     }
 }
