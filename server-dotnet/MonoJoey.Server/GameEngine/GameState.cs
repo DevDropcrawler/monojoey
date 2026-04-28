@@ -11,4 +11,7 @@ public sealed record GameState(
     PlayerId? CurrentTurnPlayerId,
     int TurnNumber,
     DateTimeOffset StartedAtUtc,
-    DateTimeOffset? EndedAtUtc);
+    DateTimeOffset? EndedAtUtc)
+{
+    public bool HasRolledThisTurn { get; init; }
+}

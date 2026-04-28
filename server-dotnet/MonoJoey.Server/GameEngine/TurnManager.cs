@@ -23,6 +23,7 @@ public static class TurnManager
             CurrentTurnPlayerId = firstActivePlayer.PlayerId,
             Phase = GamePhase.AwaitingRoll,
             TurnNumber = 1,
+            HasRolledThisTurn = false,
         };
 
         return LoanManager.StartTurnInterestCheck(startedGameState, firstActivePlayer.PlayerId);
@@ -70,6 +71,7 @@ public static class TurnManager
             CurrentTurnPlayerId = nextPlayerId,
             Phase = GamePhase.AwaitingRoll,
             TurnNumber = gameState.TurnNumber + 1,
+            HasRolledThisTurn = false,
         };
 
         return LoanManager.StartTurnInterestCheck(nextGameState, nextPlayerId);

@@ -167,6 +167,19 @@ public sealed class SessionManager
             : null;
     }
 
+    public GameSession UpdateGameState(string sessionId, GameState gameState)
+    {
+        var session = FindSession(sessionId);
+        var updatedSession = session with
+        {
+            GameState = gameState,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return updatedSession;
+    }
+
     private GameSession FindSession(string sessionId)
     {
         if (sessions.TryGetValue(sessionId, out var session))

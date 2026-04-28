@@ -1,6 +1,7 @@
 namespace MonoJoey.Server.Realtime;
 
 using System.Text.Json;
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Sessions;
 using MonoJoey.Shared.Protocol;
 using MonoJoey.Shared.Schemas;
@@ -10,11 +11,18 @@ public sealed class LobbyMessageHandler
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly object sessionLock = new();
+    private readonly DiceService diceService;
     private readonly SessionManager sessionManager;
 
     public LobbyMessageHandler(SessionManager sessionManager)
+        : this(sessionManager, new DiceService(new RandomDiceRoller()))
+    {
+    }
+
+    public LobbyMessageHandler(SessionManager sessionManager, DiceService diceService)
     {
         this.sessionManager = sessionManager;
+        this.diceService = diceService;
     }
 
     public string HandleTextMessage(string messageJson, LobbyConnectionContext connectionContext)
@@ -94,7 +102,11 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.LeaveLobby => HandleLeaveLobby(root, connectionContext),
             LobbyMessageTypes.SetReady => HandleSetReady(root, connectionContext),
             LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
-            LobbyMessageTypes.LobbyState or LobbyMessageTypes.GameStarted or LobbyMessageTypes.Error => CreateError(
+            LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
+            LobbyMessageTypes.LobbyState or
+                LobbyMessageTypes.GameStarted or
+                LobbyMessageTypes.RollResult or
+                LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
             _ => CreateError(
@@ -110,6 +122,94 @@ public sealed class LobbyMessageHandler
             var session = sessionManager.CreateSession();
 
             return CreateLobbyState(session);
+        }
+    }
+
+    private LobbyServerEnvelope HandleRollDice(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "roll_dice requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot roll dice.");
+            }
+
+            if (player.IsLockedUp)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerLocked,
+                    "Locked players cannot roll dice.");
+            }
+
+            if (session.GameState.HasRolledThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player has already rolled this turn.");
+            }
+
+            var dice = diceService.RollDice();
+            var movementResult = MovementManager.MovePlayer(
+                session.GameState,
+                player.PlayerId,
+                dice.Total);
+            var updatedGameState = movementResult.GameState with
+            {
+                HasRolledThisTurn = true,
+            };
+
+            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+
+            return CreateRollResult(dice, movementResult, updatedGameState.HasRolledThisTurn);
         }
     }
 
@@ -466,6 +566,21 @@ public sealed class LobbyMessageHandler
                         player.CurrentTileId.Value,
                         player.Money.Amount))
                     .ToArray()));
+    }
+
+    private static LobbyServerEnvelope CreateRollResult(
+        DiceRoll dice,
+        MovementResult movementResult,
+        bool hasRolledThisTurn)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.RollResult,
+            new RollResultPayload(
+                movementResult.PlayerId.Value,
+                new[] { dice.FirstDie, dice.SecondDie },
+                movementResult.LandingTileId.Value,
+                movementResult.PassedStart,
+                hasRolledThisTurn));
     }
 
     private static LobbyServerEnvelope CreateError(string code, string message)

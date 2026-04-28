@@ -7,8 +7,10 @@ public static class LobbyMessageTypes
     public const string LeaveLobby = "leave_lobby";
     public const string SetReady = "set_ready";
     public const string StartGame = "start_game";
+    public const string RollDice = "roll_dice";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
+    public const string RollResult = "roll_result";
     public const string Error = "error";
 }
 
@@ -24,6 +26,12 @@ public static class LobbyErrorCodes
     public const string InvalidSessionStatus = "invalid_session_status";
     public const string NotEnoughPlayers = "not_enough_players";
     public const string PlayersNotReady = "players_not_ready";
+    public const string InvalidSession = "invalid_session";
+    public const string InvalidSessionState = "invalid_session_state";
+    public const string NotYourTurn = "not_your_turn";
+    public const string PlayerNotFound = "player_not_found";
+    public const string PlayerEliminated = "player_eliminated";
+    public const string PlayerLocked = "player_locked";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -58,3 +66,10 @@ public sealed record GameStartedPlayerPayload(
     string ColorId,
     string CurrentTileId,
     int Money);
+
+public sealed record RollResultPayload(
+    string PlayerId,
+    IReadOnlyList<int> Dice,
+    string NewPosition,
+    bool PassedStart,
+    bool HasRolledThisTurn);

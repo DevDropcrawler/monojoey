@@ -208,6 +208,7 @@ public class SessionManagerTests
         Assert.Equal(GamePhase.AwaitingRoll, startedSession.GameState.Phase);
         Assert.Equal(1, startedSession.GameState.TurnNumber);
         Assert.Equal("player_1", startedSession.GameState.CurrentTurnPlayerId?.Value);
+        Assert.False(startedSession.GameState.HasRolledThisTurn);
         Assert.Same(session.GameState.Board, startedSession.GameState.Board);
 
         Assert.Collection(
@@ -274,6 +275,32 @@ public class SessionManagerTests
         var session = sessionManager.GetSession("missing_session");
 
         Assert.Null(session);
+    }
+
+    [Fact]
+    public void UpdateGameState_ReplacesSessionGameState()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var updatedGameState = startedSession.GameState with { HasRolledThisTurn = true };
+
+        var updatedSession = sessionManager.UpdateGameState(startedSession.SessionId, updatedGameState);
+
+        Assert.Same(updatedGameState, updatedSession.GameState);
+        Assert.Same(updatedGameState, sessionManager.GetSession(startedSession.SessionId)?.GameState);
+        Assert.Equal(GameSessionStatus.InGame, updatedSession.Status);
+    }
+
+    [Fact]
+    public void UpdateGameState_InvalidSessionThrows()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.UpdateGameState("missing_session", session.GameState));
+
+        Assert.Equal("Session not found.", exception.Message);
     }
 
     [Fact]

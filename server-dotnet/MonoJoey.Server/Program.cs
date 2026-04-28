@@ -1,5 +1,6 @@
 namespace MonoJoey.Server;
 
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Realtime;
 using MonoJoey.Server.Sessions;
 
@@ -16,6 +17,8 @@ public sealed class Program
         var builder = WebApplication.CreateBuilder(args);
 
         builder.Services.AddSingleton<IWebSocketConnectionManager, WebSocketConnectionManager>();
+        builder.Services.AddSingleton<IDiceRoller, RandomDiceRoller>();
+        builder.Services.AddSingleton<DiceService>();
         builder.Services.AddSingleton<SessionManager>();
         builder.Services.AddSingleton<LobbyMessageHandler>();
         builder.Services.AddSingleton<WebSocketConnectionHandler>();

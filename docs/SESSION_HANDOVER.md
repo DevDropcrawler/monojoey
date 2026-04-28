@@ -5,38 +5,39 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.4 Game start and ready state
-- Completion status: Chunk 5.4 complete; `/ws` now accepts `set_ready` and `start_game`, returns direct `lobby_state`, `game_started`, or `error` responses, requires the sender connection to be bound to the requested session/player, and starts a deterministic lobby-order game once at least 2 lobby players are ready.
+- Chunk: 5.5 Turn actions over WebSocket - roll dice only
+- Completion status: Chunk 5.5 complete; `/ws` now accepts sender-only `roll_dice`, validates the bound in-game current player, executes server-owned dice plus movement only, persists `HasRolledThisTurn`, and returns a direct `roll_result` or `error` response.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
 - Previous commit: `phase-5-2: add websocket server foundation`
 - Last commit before this chunk: `phase-5-3: add lobby websocket messages`
-- Last commit after this chunk: pending
-- Date/time: 2026-04-27 15:02 +12:00
+- Last commit after this chunk: `phase-5-5: add roll dice websocket action`
+- Date/time: 2026-04-28 17:20 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.4 - Game start and ready state.
+Phase 5, Chunk 5.5 - WebSocket roll dice action only.
 
 Completed:
 
-- Added server-local `set_ready` and `start_game` lobby WebSocket message handling.
-- Added direct `game_started` response payloads containing session status, game phase, current turn player, and initialized engine players.
-- Added ready-state mutation through `SessionManager.SetReady`, preserving lobby player order and connection IDs.
-- Added `SessionManager.StartGame`, requiring lobby status, at least 2 players, and all players ready.
-- Initialized engine `GameState.Players` from lobby players in deterministic lobby order with temporary player/profile placeholders.
-- Reused the existing session board, set the match to `InGame`, and used `TurnManager.StartFirstTurn` so the first turn is deterministic and starts at `AwaitingRoll`.
-- Rejected joins and ready changes after a session has started.
-- Kept disconnect cleanup from removing lobby membership after game start; only the socket binding is cleared.
-- Preserved started engine players when `LeaveSession` is called after game start.
-- Preserved sender-only behavior; no lobby or match broadcasts were added.
-- Added focused session manager and realtime handler tests for ready state, start validation, successful start payloads, post-start guards, bound-connection checks, and post-start disconnect cleanup.
+- Added server-local `roll_dice` WebSocket message handling.
+- Added direct `roll_result` response payloads containing `playerId`, dice values, `newPosition`, `passedStart`, and `hasRolledThisTurn`.
+- Added `GameState.HasRolledThisTurn` and reset it when `TurnManager.StartFirstTurn` or `TurnManager.AdvanceToNextTurn` starts an awaiting-roll turn.
+- Added `SessionManager.UpdateGameState` as the narrow persistence seam for game-state updates after movement.
+- Registered `IDiceRoller`, `RandomDiceRoller`, and `DiceService` in the server host.
+- Reused existing `DiceService` and `MovementManager`; no duplicate dice or movement logic was added.
+- Validated roll requests for session existence, in-game status, bound connection/session/player, current turn player, eliminated player, locked player, and duplicate same-turn roll.
+- Preserved the current `GamePhase`; rolling does not transition to resolving, auction, card, or end-turn phases.
+- Preserved sender-only behavior; no broadcasts were added.
+- Added deterministic handler and transport tests for successful rolls, movement, pass-start reporting, duplicate roll rejection, player/session guards, and one response per roll request.
 
 Not included by explicit user scope:
 
 - Unity/UI.
 - Persistence.
 - Stats.
-- Turn execution over network.
+- Tile resolution.
+- Tile effects.
+- Turn advancement or end-turn handling.
 - Scaling.
 - Broadcasts.
 - Protocol DTO changes.
@@ -48,8 +49,13 @@ Not included by explicit user scope:
 
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server/Program.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -131,7 +137,7 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 200 tests passed.
+  - Output summary: 215 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git diff --check`
   - Result: succeeded.
@@ -152,9 +158,9 @@ Not included by explicit user scope:
 - Session IDs are generated as GUID `N` strings and are not yet public lobby codes or persisted identifiers.
 - WebSocket connection IDs are generated as GUID `N` strings and are transport-local only.
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
-- `/ws` handles complete text messages as one JSON lobby request each and sends one direct response to the sender.
+- `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Lobby wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `lobby_state`, `game_started`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `lobby_state`, `game_started`, `roll_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -167,6 +173,10 @@ Not included by explicit user scope:
 - `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
 - Started engine players use temporary deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
+- `roll_dice` is the only gameplay action handled over WebSocket; it rolls dice and moves the current player only.
+- `roll_result` contains the rolling `playerId`, two dice values, landing tile ID as `newPosition`, `passedStart`, and `hasRolledThisTurn`.
+- `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, broadcast state, or change `GamePhase`.
+- A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
@@ -208,6 +218,10 @@ Not included by explicit user scope:
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not mutate match membership or remove engine players.
 - Lobby messages are direct request/response only; broadcasts are intentionally deferred.
+- Gameplay `roll_dice` messages are also direct request/response only; broadcasts remain intentionally deferred.
+- Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
+- Roll execution sets `GameState.HasRolledThisTurn = true` after movement and does not mutate `GamePhase`.
+- `HasRolledThisTurn` is reset to false by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
 - Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
 - The server host exposes a `Program.BuildApp(args)` seam for host construction without starting `Run()`.
 - Session state lives under `server-dotnet/MonoJoey.Server/Sessions` and stays outside `GameEngine`.
@@ -274,7 +288,7 @@ Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
-- Add a gameplay snapshot or turn-action WebSocket slice only if explicitly assigned.
+- Add end-turn, tile resolution, gameplay snapshots, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
 
@@ -291,7 +305,9 @@ Do not implement before its assigned chunk:
 - Broadcasts.
 - Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
-- Turn execution over network.
+- Non-roll turn execution over network.
+- Tile resolution or tile effects from WebSocket roll handling.
+- WebSocket end-turn handling.
 - UI.
 - Persistence.
 - Scaling.

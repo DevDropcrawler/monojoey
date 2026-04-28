@@ -9,13 +9,17 @@ public class TurnManagerTests
     [Fact]
     public void StartFirstTurn_SelectsFirstPlayerAndAwaitingRollPhase()
     {
-        var gameState = CreateGameState("player_1", "player_2");
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            HasRolledThisTurn = true,
+        };
 
         var started = TurnManager.StartFirstTurn(gameState);
 
         Assert.Equal("player_1", started.CurrentTurnPlayerId?.Value);
         Assert.Equal(GamePhase.AwaitingRoll, started.Phase);
         Assert.Equal(1, started.TurnNumber);
+        Assert.False(started.HasRolledThisTurn);
     }
 
     [Fact]
@@ -102,13 +106,17 @@ public class TurnManagerTests
     [Fact]
     public void AdvanceToNextTurn_SelectsNextPlayerInOrder()
     {
-        var gameState = TurnManager.StartFirstTurn(CreateGameState("player_1", "player_2", "player_3"));
+        var gameState = TurnManager.StartFirstTurn(CreateGameState("player_1", "player_2", "player_3")) with
+        {
+            HasRolledThisTurn = true,
+        };
 
         var next = TurnManager.AdvanceToNextTurn(gameState);
 
         Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
         Assert.Equal(2, next.TurnNumber);
         Assert.Equal(GamePhase.AwaitingRoll, next.Phase);
+        Assert.False(next.HasRolledThisTurn);
     }
 
     [Fact]

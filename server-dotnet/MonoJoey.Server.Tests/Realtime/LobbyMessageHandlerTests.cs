@@ -1,8 +1,11 @@
 namespace MonoJoey.Server.Tests.Realtime;
 
 using System.Text.Json;
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Realtime;
 using MonoJoey.Server.Sessions;
+using MonoJoey.Shared.Protocol;
+using MonoJoey.Shared.Schemas;
 
 public class LobbyMessageHandlerTests
 {
@@ -197,6 +200,190 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_ReturnsRollResultAndUpdatesPlayerPosition()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 5));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var dice = payload.GetProperty("dice").EnumerateArray().Select(value => value.GetInt32()).ToArray();
+        var updatedSession = sessionManager.GetSession(started.Session.SessionId);
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(new[] { 3, 5 }, dice);
+        Assert.Equal("table_01", payload.GetProperty("newPosition").GetString());
+        Assert.False(payload.GetProperty("passedStart").GetBoolean());
+        Assert.True(payload.GetProperty("hasRolledThisTurn").GetBoolean());
+        Assert.Equal("table_01", updatedSession?.GameState.Players[0].CurrentTileId.Value);
+        Assert.True(updatedSession?.GameState.HasRolledThisTurn);
+        Assert.Equal(GamePhase.AwaitingRoll, updatedSession?.GameState.Phase);
+    }
+
+    [Fact]
+    public void RollDice_ReturnsPassedStartFromMovement()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 1));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { CurrentTileId = new TileId("go_to_lockup_01") });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+
+        Assert.Equal("property_01", payload.GetProperty("newPosition").GetString());
+        Assert.True(payload.GetProperty("passedStart").GetBoolean());
+    }
+
+    [Fact]
+    public void RollDice_SecondRollInSameTurnReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void RollDice_NonCurrentPlayerReturnsNotYourTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            RollDiceMessage(started.Session.SessionId, "player_2"));
+
+        AssertError(response, "not_your_turn");
+    }
+
+    [Fact]
+    public void RollDice_EliminatedCurrentPlayerReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void RollDice_LockedCurrentPlayerReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_locked");
+    }
+
+    [Fact]
+    public void RollDice_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, RollDiceMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void RollDice_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, RollDiceMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void RollDice_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+        _ = sessionManager.UpdateGameState(
+            session.SessionId,
+            session.GameState with
+            {
+                Players = session.GameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void RollDice_UnboundContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var unboundContext = new LobbyConnectionContext("connection_3");
+
+        using var response = Handle(
+            handler,
+            unboundContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
     public void StartGame_ReturnsNotEnoughPlayersForOnePlayerLobby()
     {
         var sessionManager = new SessionManager();
@@ -288,6 +475,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""leave_lobby"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""start_game"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""start_game"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""roll_dice"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""roll_dice"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -405,6 +594,46 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1500, player.GetProperty("money").GetInt32());
     }
 
+    private static LobbyMessageHandler CreateHandler(SessionManager sessionManager, DiceRoll diceRoll)
+    {
+        return new LobbyMessageHandler(sessionManager, new DiceService(new FixedDiceRoller(diceRoll)));
+    }
+
+    private static StartedRealtimeGame StartReadyGame(
+        SessionManager sessionManager,
+        LobbyMessageHandler handler)
+    {
+        var session = sessionManager.CreateSession();
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+        _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
+
+        return new StartedRealtimeGame(
+            sessionManager.GetSession(session.SessionId)!,
+            firstContext,
+            secondContext);
+    }
+
+    private static GameSession UpdateEnginePlayer(
+        SessionManager sessionManager,
+        string sessionId,
+        string playerId,
+        Func<Player, Player> updatePlayer)
+    {
+        var session = sessionManager.GetSession(sessionId)!;
+        var updatedPlayers = session.GameState.Players
+            .Select(player => player.PlayerId.Value == playerId ? updatePlayer(player) : player)
+            .ToArray();
+
+        return sessionManager.UpdateGameState(
+            sessionId,
+            session.GameState with { Players = updatedPlayers });
+    }
+
     private static string JoinMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""join_lobby"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
@@ -424,5 +653,30 @@ public class LobbyMessageHandlerTests
     private static string StartGameMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""start_game"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string RollDiceMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""roll_dice"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private sealed record StartedRealtimeGame(
+        GameSession Session,
+        LobbyConnectionContext FirstContext,
+        LobbyConnectionContext SecondContext);
+
+    private sealed class FixedDiceRoller : IDiceRoller
+    {
+        private readonly DiceRoll diceRoll;
+
+        public FixedDiceRoller(DiceRoll diceRoll)
+        {
+            this.diceRoll = diceRoll;
+        }
+
+        public DiceRoll Roll()
+        {
+            return diceRoll;
+        }
     }
 }

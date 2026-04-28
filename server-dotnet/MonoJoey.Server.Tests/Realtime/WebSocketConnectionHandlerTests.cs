@@ -3,8 +3,10 @@ namespace MonoJoey.Server.Tests.Realtime;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Realtime;
 using MonoJoey.Server.Sessions;
+using MonoJoey.Shared.Protocol;
 
 public class WebSocketConnectionHandlerTests
 {
@@ -29,6 +31,36 @@ public class WebSocketConnectionHandlerTests
         Assert.Equal("lobby_state", response.RootElement.GetProperty("type").GetString());
     }
 
+    [Fact]
+    public async Task RollDice_SendsOneResponseForRollMessage()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_1"), "existing_connection_1", IsReady: false));
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_2"), "existing_connection_2", IsReady: true));
+        var connectionManager = new WebSocketConnectionManager();
+        var lobbyMessageHandler = new LobbyMessageHandler(
+            sessionManager,
+            new DiceService(new FixedDiceRoller(new DiceRoll(1, 2))));
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(JoinMessage(session.SessionId, "player_1")),
+            TextFrame(SetReadyMessage(session.SessionId, "player_1", isReady: true)),
+            TextFrame(StartGameMessage(session.SessionId, "player_1")),
+            TextFrame(RollDiceMessage(session.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        Assert.Equal(4, webSocket.SentTextMessages.Count);
+        using var rollResponse = JsonDocument.Parse(webSocket.SentTextMessages[3]);
+        Assert.Equal("roll_result", rollResponse.RootElement.GetProperty("type").GetString());
+    }
+
     private static ReceivedFrame TextFrame(string message)
     {
         return new ReceivedFrame(
@@ -48,6 +80,22 @@ public class WebSocketConnectionHandlerTests
     private static string JoinMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""join_lobby"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string SetReadyMessage(string sessionId, string playerId, bool isReady)
+    {
+        var readyJson = isReady ? "true" : "false";
+        return $@"{{""type"":""set_ready"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""isReady"":{readyJson}}}}}";
+    }
+
+    private static string StartGameMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""start_game"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string RollDiceMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""roll_dice"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record ReceivedFrame(
@@ -144,6 +192,21 @@ public class WebSocketConnectionHandlerTests
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FixedDiceRoller : IDiceRoller
+    {
+        private readonly DiceRoll diceRoll;
+
+        public FixedDiceRoller(DiceRoll diceRoll)
+        {
+            this.diceRoll = diceRoll;
+        }
+
+        public DiceRoll Roll()
+        {
+            return diceRoll;
         }
     }
 }
