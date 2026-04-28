@@ -8,9 +8,11 @@ public static class LobbyMessageTypes
     public const string SetReady = "set_ready";
     public const string StartGame = "start_game";
     public const string RollDice = "roll_dice";
+    public const string ResolveTile = "resolve_tile";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
+    public const string ResolveTileResult = "resolve_tile_result";
     public const string Error = "error";
 }
 
@@ -73,3 +75,11 @@ public sealed record RollResultPayload(
     string NewPosition,
     bool PassedStart,
     bool HasRolledThisTurn);
+
+public sealed record ResolveTileResultPayload(
+    string PlayerId,
+    string TileId,
+    int TileIndex,
+    string TileType,
+    bool RequiresAction,
+    string ActionKind);

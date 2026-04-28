@@ -5,38 +5,35 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.5 Turn actions over WebSocket - roll dice only
-- Completion status: Chunk 5.5 complete; `/ws` now accepts sender-only `roll_dice`, validates the bound in-game current player, executes server-owned dice plus movement only, persists `HasRolledThisTurn`, and returns a direct `roll_result` or `error` response.
-- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated for commit.
-- Previous commit: `phase-5-2: add websocket server foundation`
-- Last commit before this chunk: `phase-5-3: add lobby websocket messages`
-- Last commit after this chunk: `phase-5-5: add roll dice websocket action`
-- Date/time: 2026-04-28 17:20 +12:00
+- Chunk: 5.6 Tile resolution over WebSocket only
+- Completion status: Chunk 5.6 complete; `/ws` now accepts sender-only `resolve_tile`, validates the bound in-game current player after a roll, resolves passive tile classification through `TileResolver.ResolveCurrentTile`, persists only `HasResolvedTileThisTurn`, and returns a direct `resolve_tile_result` or `error` response.
+- Branch: `main` tracking `origin/main`; local has this chunk implemented, validated, and committed.
+- Previous commit: `phase-5-5: add roll dice websocket action`
+- Last commit before this chunk: `phase-5-5: add roll dice websocket action`
+- Last commit after this chunk: `phase-5-6: add resolve tile websocket action`
+- Date/time: 2026-04-28 17:55 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.5 - WebSocket roll dice action only.
+Phase 5, Chunk 5.6 - WebSocket tile resolution action only.
 
 Completed:
 
-- Added server-local `roll_dice` WebSocket message handling.
-- Added direct `roll_result` response payloads containing `playerId`, dice values, `newPosition`, `passedStart`, and `hasRolledThisTurn`.
-- Added `GameState.HasRolledThisTurn` and reset it when `TurnManager.StartFirstTurn` or `TurnManager.AdvanceToNextTurn` starts an awaiting-roll turn.
-- Added `SessionManager.UpdateGameState` as the narrow persistence seam for game-state updates after movement.
-- Registered `IDiceRoller`, `RandomDiceRoller`, and `DiceService` in the server host.
-- Reused existing `DiceService` and `MovementManager`; no duplicate dice or movement logic was added.
-- Validated roll requests for session existence, in-game status, bound connection/session/player, current turn player, eliminated player, locked player, and duplicate same-turn roll.
-- Preserved the current `GamePhase`; rolling does not transition to resolving, auction, card, or end-turn phases.
+- Added server-local `resolve_tile` WebSocket message handling.
+- Added direct `resolve_tile_result` response payloads containing `playerId`, `tileId`, `tileIndex`, string `tileType`, deterministic `requiresAction`, and string `actionKind`.
+- Added `GameState.HasResolvedTileThisTurn` and reset it alongside `HasRolledThisTurn` when `TurnManager.StartFirstTurn` or `TurnManager.AdvanceToNextTurn` starts an awaiting-roll turn.
+- Kept `roll_dice` responsible for setting `HasRolledThisTurn = true` and explicitly resetting `HasResolvedTileThisTurn = false` after movement.
+- Validated resolve requests for session existence, bound connection/session/player, in-game status, current turn player, eliminated player, locked player, roll-before-resolve, and duplicate same-turn resolve.
+- Reused `TileResolver.ResolveCurrentTile` only; no tile effect execution, auction start, card draw, tax/fine payment, lockup movement, loan handling, turn advancement, or phase transition was added.
 - Preserved sender-only behavior; no broadcasts were added.
-- Added deterministic handler and transport tests for successful rolls, movement, pass-start reporting, duplicate roll rejection, player/session guards, and one response per roll request.
+- Added deterministic handler and transport tests for successful resolve, passive classification mapping, duplicate resolve rejection, player/session guards, lifecycle flags, and one response per resolve request.
 
 Not included by explicit user scope:
 
 - Unity/UI.
 - Persistence.
 - Stats.
-- Tile resolution.
-- Tile effects.
+- Full tile effects.
 - Turn advancement or end-turn handling.
 - Scaling.
 - Broadcasts.
@@ -49,10 +46,8 @@ Not included by explicit user scope:
 
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server/Program.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
@@ -137,7 +132,7 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 215 tests passed.
+  - Output summary: 234 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git diff --check`
   - Result: succeeded.
@@ -160,7 +155,7 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `lobby_state`, `game_started`, `roll_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -173,10 +168,14 @@ Not included by explicit user scope:
 - `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
 - Started engine players use temporary deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
-- `roll_dice` is the only gameplay action handled over WebSocket; it rolls dice and moves the current player only.
+- `roll_dice` rolls dice and moves the current player only.
 - `roll_result` contains the rolling `playerId`, two dice values, landing tile ID as `newPosition`, `passedStart`, and `hasRolledThisTurn`.
 - `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, broadcast state, or change `GamePhase`.
 - A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
+- `resolve_tile` passively classifies the current player's current tile only after `HasRolledThisTurn` is true.
+- `resolve_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, deterministic `requiresAction`, and string `actionKind`.
+- `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, broadcast, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats.
+- A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
@@ -218,10 +217,12 @@ Not included by explicit user scope:
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not mutate match membership or remove engine players.
 - Lobby messages are direct request/response only; broadcasts are intentionally deferred.
-- Gameplay `roll_dice` messages are also direct request/response only; broadcasts remain intentionally deferred.
+- Gameplay `roll_dice` and `resolve_tile` messages are also direct request/response only; broadcasts remain intentionally deferred.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
-- Roll execution sets `GameState.HasRolledThisTurn = true` after movement and does not mutate `GamePhase`.
-- `HasRolledThisTurn` is reset to false by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
+- Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
+- Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
+- Tile resolution sets only `GameState.HasResolvedTileThisTurn = true` after successful passive classification and does not mutate `GamePhase`.
+- `HasRolledThisTurn` and `HasResolvedTileThisTurn` are reset to false by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
 - Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
 - The server host exposes a `Program.BuildApp(args)` seam for host construction without starting `Run()`.
 - Session state lives under `server-dotnet/MonoJoey.Server/Sessions` and stays outside `GameEngine`.
@@ -244,7 +245,7 @@ Not included by explicit user scope:
 - Unknown auction bidders return `AuctionBidResultKind.BidderNotInGame` instead of throwing, per Chunk 3.2 rejection scope.
 - Ownership continues to live on `Player.OwnedPropertyIds`; no new persistence or aggregate ownership store was added.
 - `PropertyManager.AssignOwner` is now used for successful auction ownership transfer.
-- Tile resolution remains neutral metadata only and does not mutate `GameState`.
+- Tile resolution remains neutral metadata only and does not mutate gameplay state beyond the WebSocket turn guard flag.
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
 - Loan state lives on `Player.LoanState` and is optional until a player first borrows.
@@ -288,7 +289,7 @@ Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
-- Add end-turn, tile resolution, gameplay snapshots, or broader turn-action WebSocket slices only if explicitly assigned.
+- Add end-turn, gameplay snapshots, tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
 
@@ -305,8 +306,8 @@ Do not implement before its assigned chunk:
 - Broadcasts.
 - Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
-- Non-roll turn execution over network.
-- Tile resolution or tile effects from WebSocket roll handling.
+- Broader turn execution over network beyond passive tile classification.
+- Tile effect execution from WebSocket tile resolution or roll handling.
 - WebSocket end-turn handling.
 - UI.
 - Persistence.
@@ -328,4 +329,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.4 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.6 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

@@ -221,6 +221,7 @@ public class LobbyMessageHandlerTests
         Assert.True(payload.GetProperty("hasRolledThisTurn").GetBoolean());
         Assert.Equal("table_01", updatedSession?.GameState.Players[0].CurrentTileId.Value);
         Assert.True(updatedSession?.GameState.HasRolledThisTurn);
+        Assert.False(updatedSession?.GameState.HasResolvedTileThisTurn);
         Assert.Equal(GamePhase.AwaitingRoll, updatedSession?.GameState.Phase);
     }
 
@@ -244,6 +245,227 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("property_01", payload.GetProperty("newPosition").GetString());
         Assert.True(payload.GetProperty("passedStart").GetBoolean());
+    }
+
+    [Fact]
+    public void ResolveTile_ReturnsResolveTileResultAfterRoll()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 5));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "resolve_tile_result");
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal("table_01", payload.GetProperty("tileId").GetString());
+        Assert.Equal(8, payload.GetProperty("tileIndex").GetInt32());
+        Assert.Equal("table_deck", payload.GetProperty("tileType").GetString());
+        Assert.True(payload.GetProperty("requiresAction").GetBoolean());
+        Assert.Equal("deck_placeholder", payload.GetProperty("actionKind").GetString());
+    }
+
+    [Theory]
+    [InlineData("property_01", true, "property_placeholder")]
+    [InlineData("chance_01", true, "deck_placeholder")]
+    [InlineData("tax_01", true, "tax_placeholder")]
+    [InlineData("go_to_lockup_01", true, "go_to_lockup_placeholder")]
+    [InlineData("start", false, "start_placeholder")]
+    [InlineData("free_space_01", false, "no_action")]
+    public void ResolveTile_MapsRequiresActionFromTileClassification(
+        string tileId,
+        bool expectedRequiresAction,
+        string expectedActionKind)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { CurrentTileId = new TileId(tileId) });
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+        _ = sessionManager.UpdateGameState(
+            session.SessionId,
+            session.GameState with { HasRolledThisTurn = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "resolve_tile_result");
+
+        Assert.Equal(expectedRequiresAction, payload.GetProperty("requiresAction").GetBoolean());
+        Assert.Equal(expectedActionKind, payload.GetProperty("actionKind").GetString());
+    }
+
+    [Fact]
+    public void ResolveTile_BeforeRollReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ResolveTile_SecondResolveInSameTurnReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ResolveTile_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, ResolveTileMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void ResolveTile_UnboundContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        var unboundContext = new LobbyConnectionContext("connection_3");
+
+        using var response = Handle(
+            handler,
+            unboundContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ResolveTile_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ResolveTile_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, ResolveTileMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ResolveTile_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+        _ = sessionManager.UpdateGameState(
+            session.SessionId,
+            session.GameState with
+            {
+                Players = session.GameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void ResolveTile_LockedCurrentPlayerReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_locked");
+    }
+
+    [Fact]
+    public void ResolveTile_SetsResolvedFlagAndPreservesUnrelatedState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        var beforeResolve = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ResolveTileMessage(started.Session.SessionId, "player_1"));
+        var afterResolve = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertResponseType(response, "resolve_tile_result");
+        Assert.True(afterResolve.HasRolledThisTurn);
+        Assert.True(afterResolve.HasResolvedTileThisTurn);
+        Assert.Equal(beforeResolve.Phase, afterResolve.Phase);
+        Assert.Equal(beforeResolve.CurrentTurnPlayerId, afterResolve.CurrentTurnPlayerId);
+        Assert.Equal(beforeResolve.TurnNumber, afterResolve.TurnNumber);
+        Assert.Equal(beforeResolve.Players[0].CurrentTileId, afterResolve.Players[0].CurrentTileId);
+        Assert.Equal(beforeResolve.Players[0].Money, afterResolve.Players[0].Money);
+        Assert.Equal(beforeResolve.Players[0].OwnedPropertyIds, afterResolve.Players[0].OwnedPropertyIds);
+        Assert.Equal(beforeResolve.Players[0].HeldCardIds, afterResolve.Players[0].HeldCardIds);
     }
 
     [Fact]
@@ -468,6 +690,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentResolveTileResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""resolve_tile_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -477,6 +710,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""start_game"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""roll_dice"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""roll_dice"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""resolve_tile"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""resolve_tile"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -658,6 +893,11 @@ public class LobbyMessageHandlerTests
     private static string RollDiceMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""roll_dice"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string ResolveTileMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""resolve_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(

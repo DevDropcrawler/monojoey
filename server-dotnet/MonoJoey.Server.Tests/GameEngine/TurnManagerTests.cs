@@ -12,6 +12,7 @@ public class TurnManagerTests
         var gameState = CreateGameState("player_1", "player_2") with
         {
             HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
         };
 
         var started = TurnManager.StartFirstTurn(gameState);
@@ -20,6 +21,7 @@ public class TurnManagerTests
         Assert.Equal(GamePhase.AwaitingRoll, started.Phase);
         Assert.Equal(1, started.TurnNumber);
         Assert.False(started.HasRolledThisTurn);
+        Assert.False(started.HasResolvedTileThisTurn);
     }
 
     [Fact]
@@ -109,6 +111,7 @@ public class TurnManagerTests
         var gameState = TurnManager.StartFirstTurn(CreateGameState("player_1", "player_2", "player_3")) with
         {
             HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
         };
 
         var next = TurnManager.AdvanceToNextTurn(gameState);
@@ -117,6 +120,7 @@ public class TurnManagerTests
         Assert.Equal(2, next.TurnNumber);
         Assert.Equal(GamePhase.AwaitingRoll, next.Phase);
         Assert.False(next.HasRolledThisTurn);
+        Assert.False(next.HasResolvedTileThisTurn);
     }
 
     [Fact]

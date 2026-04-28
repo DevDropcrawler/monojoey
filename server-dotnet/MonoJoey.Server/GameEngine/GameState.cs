@@ -14,4 +14,6 @@ public sealed record GameState(
     DateTimeOffset? EndedAtUtc)
 {
     public bool HasRolledThisTurn { get; init; }
+
+    public bool HasResolvedTileThisTurn { get; init; }
 }

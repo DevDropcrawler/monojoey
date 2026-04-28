@@ -103,9 +103,11 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.SetReady => HandleSetReady(root, connectionContext),
             LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
             LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
+            LobbyMessageTypes.ResolveTile => HandleResolveTile(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
+                LobbyMessageTypes.ResolveTileResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -205,11 +207,103 @@ public sealed class LobbyMessageHandler
             var updatedGameState = movementResult.GameState with
             {
                 HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = false,
             };
 
             _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
 
             return CreateRollResult(dice, movementResult, updatedGameState.HasRolledThisTurn);
+        }
+    }
+
+    private LobbyServerEnvelope HandleResolveTile(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "resolve_tile requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot resolve tiles.");
+            }
+
+            if (player.IsLockedUp)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerLocked,
+                    "Locked players cannot resolve tiles.");
+            }
+
+            if (!session.GameState.HasRolledThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must roll before resolving a tile.");
+            }
+
+            if (session.GameState.HasResolvedTileThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player has already resolved a tile this turn.");
+            }
+
+            var resolution = TileResolver.ResolveCurrentTile(session.GameState, player.PlayerId);
+            var updatedGameState = session.GameState with
+            {
+                HasResolvedTileThisTurn = true,
+            };
+
+            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+
+            return CreateResolveTileResult(resolution);
         }
     }
 
@@ -583,6 +677,19 @@ public sealed class LobbyMessageHandler
                 hasRolledThisTurn));
     }
 
+    private static LobbyServerEnvelope CreateResolveTileResult(TileResolutionResult resolution)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.ResolveTileResult,
+            new ResolveTileResultPayload(
+                resolution.PlayerId.Value,
+                resolution.TileId.Value,
+                resolution.TileIndex,
+                FormatTileType(resolution.TileType),
+                RequiresTileAction(resolution.ActionKind),
+                FormatTileResolutionActionKind(resolution.ActionKind)));
+    }
+
     private static LobbyServerEnvelope CreateError(string code, string message)
     {
         return new LobbyServerEnvelope(
@@ -621,6 +728,52 @@ public sealed class LobbyMessageHandler
             GamePhase.AwaitingEndTurn => "awaiting_end_turn",
             GamePhase.Completed => "completed",
             _ => phase.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatTileType(TileType tileType)
+    {
+        return tileType switch
+        {
+            TileType.Start => "start",
+            TileType.Property => "property",
+            TileType.Transport => "transport",
+            TileType.Utility => "utility",
+            TileType.ChanceDeck => "chance_deck",
+            TileType.TableDeck => "table_deck",
+            TileType.Tax => "tax",
+            TileType.Lockup => "lockup",
+            TileType.GoToLockup => "go_to_lockup",
+            TileType.FreeSpace => "free_space",
+            _ => tileType.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatTileResolutionActionKind(TileResolutionActionKind actionKind)
+    {
+        return actionKind switch
+        {
+            TileResolutionActionKind.NoAction => "no_action",
+            TileResolutionActionKind.StartPlaceholder => "start_placeholder",
+            TileResolutionActionKind.PropertyPlaceholder => "property_placeholder",
+            TileResolutionActionKind.DeckPlaceholder => "deck_placeholder",
+            TileResolutionActionKind.TaxPlaceholder => "tax_placeholder",
+            TileResolutionActionKind.GoToLockupPlaceholder => "go_to_lockup_placeholder",
+            _ => actionKind.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static bool RequiresTileAction(TileResolutionActionKind actionKind)
+    {
+        return actionKind switch
+        {
+            TileResolutionActionKind.PropertyPlaceholder or
+                TileResolutionActionKind.DeckPlaceholder or
+                TileResolutionActionKind.TaxPlaceholder or
+                TileResolutionActionKind.GoToLockupPlaceholder => true,
+            TileResolutionActionKind.NoAction or
+                TileResolutionActionKind.StartPlaceholder => false,
+            _ => false,
         };
     }
 }

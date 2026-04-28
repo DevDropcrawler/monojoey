@@ -209,6 +209,7 @@ public class SessionManagerTests
         Assert.Equal(1, startedSession.GameState.TurnNumber);
         Assert.Equal("player_1", startedSession.GameState.CurrentTurnPlayerId?.Value);
         Assert.False(startedSession.GameState.HasRolledThisTurn);
+        Assert.False(startedSession.GameState.HasResolvedTileThisTurn);
         Assert.Same(session.GameState.Board, startedSession.GameState.Board);
 
         Assert.Collection(
