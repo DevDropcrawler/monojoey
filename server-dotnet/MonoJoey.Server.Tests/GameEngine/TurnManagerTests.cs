@@ -13,6 +13,8 @@ public class TurnManagerTests
         {
             HasRolledThisTurn = true,
             HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = true,
+            ActiveAuctionState = CreateAuctionState(),
         };
 
         var started = TurnManager.StartFirstTurn(gameState);
@@ -22,6 +24,8 @@ public class TurnManagerTests
         Assert.Equal(1, started.TurnNumber);
         Assert.False(started.HasRolledThisTurn);
         Assert.False(started.HasResolvedTileThisTurn);
+        Assert.False(started.HasExecutedTileThisTurn);
+        Assert.Null(started.ActiveAuctionState);
     }
 
     [Fact]
@@ -112,6 +116,8 @@ public class TurnManagerTests
         {
             HasRolledThisTurn = true,
             HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = true,
+            ActiveAuctionState = CreateAuctionState(),
         };
 
         var next = TurnManager.AdvanceToNextTurn(gameState);
@@ -121,6 +127,8 @@ public class TurnManagerTests
         Assert.Equal(GamePhase.AwaitingRoll, next.Phase);
         Assert.False(next.HasRolledThisTurn);
         Assert.False(next.HasResolvedTileThisTurn);
+        Assert.False(next.HasExecutedTileThisTurn);
+        Assert.Null(next.ActiveAuctionState);
     }
 
     [Fact]
@@ -346,5 +354,21 @@ public class TurnManagerTests
             LoanState = loanState,
             IsLockedUp = isLockedUp,
         };
+    }
+
+    private static AuctionState CreateAuctionState()
+    {
+        return new AuctionState(
+            new TileId("property_01"),
+            new PlayerId("player_1"),
+            AuctionStatus.AwaitingInitialBid,
+            Money.Zero,
+            new Money(1),
+            InitialPreBidSeconds: 9,
+            BidResetSeconds: 3,
+            Array.Empty<AuctionBid>(),
+            HighestBid: null,
+            HighestBidderId: null,
+            CountdownDurationSeconds: null);
     }
 }

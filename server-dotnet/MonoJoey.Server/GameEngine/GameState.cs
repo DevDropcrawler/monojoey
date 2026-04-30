@@ -16,4 +16,8 @@ public sealed record GameState(
     public bool HasRolledThisTurn { get; init; }
 
     public bool HasResolvedTileThisTurn { get; init; }
+
+    public bool HasExecutedTileThisTurn { get; init; }
+
+    public AuctionState? ActiveAuctionState { get; init; }
 }

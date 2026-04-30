@@ -104,10 +104,12 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
             LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
             LobbyMessageTypes.ResolveTile => HandleResolveTile(root, connectionContext),
+            LobbyMessageTypes.ExecuteTile => HandleExecuteTile(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
                 LobbyMessageTypes.ResolveTileResult or
+                LobbyMessageTypes.ExecuteTileResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -208,6 +210,7 @@ public sealed class LobbyMessageHandler
             {
                 HasRolledThisTurn = true,
                 HasResolvedTileThisTurn = false,
+                HasExecutedTileThisTurn = false,
             };
 
             _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
@@ -304,6 +307,112 @@ public sealed class LobbyMessageHandler
             _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
 
             return CreateResolveTileResult(resolution);
+        }
+    }
+
+    private LobbyServerEnvelope HandleExecuteTile(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "execute_tile requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot execute tile effects.");
+            }
+
+            if (player.IsLockedUp)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerLocked,
+                    "Locked players cannot execute tile effects.");
+            }
+
+            if (!session.GameState.HasRolledThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must roll before executing a tile.");
+            }
+
+            if (!session.GameState.HasResolvedTileThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must resolve a tile before executing it.");
+            }
+
+            if (session.GameState.HasExecutedTileThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player has already executed a tile this turn.");
+            }
+
+            if (session.GameState.ActiveAuctionState is not null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "An auction is already active.");
+            }
+
+            var resolution = TileResolver.ResolveCurrentTile(session.GameState, player.PlayerId);
+            return resolution.ActionKind switch
+            {
+                TileResolutionActionKind.NoAction or
+                    TileResolutionActionKind.StartPlaceholder => ExecuteNoActionTile(sessionId, session.GameState, resolution),
+                TileResolutionActionKind.PropertyPlaceholder => ExecutePropertyTile(sessionId, session.GameState, resolution),
+                _ => CreateError(
+                    LobbyErrorCodes.UnsupportedTileEffect,
+                    "This resolved tile effect is not supported yet."),
+            };
         }
     }
 
@@ -524,6 +633,77 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyServerEnvelope ExecuteNoActionTile(
+        string sessionId,
+        GameState gameState,
+        TileResolutionResult resolution)
+    {
+        var updatedGameState = gameState with
+        {
+            HasExecutedTileThisTurn = true,
+        };
+
+        _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+
+        return CreateExecuteTileResult(
+            resolution,
+            "no_action",
+            updatedGameState,
+            auction: null,
+            rent: null);
+    }
+
+    private LobbyServerEnvelope ExecutePropertyTile(
+        string sessionId,
+        GameState gameState,
+        TileResolutionResult resolution)
+    {
+        var auctionStart = AuctionManager.StartMandatoryAuction(
+            gameState,
+            resolution.PlayerId,
+            resolution.TileId);
+
+        if (auctionStart.AuctionStarted)
+        {
+            var updatedGameState = gameState with
+            {
+                HasExecutedTileThisTurn = true,
+                ActiveAuctionState = auctionStart.AuctionState,
+            };
+
+            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+
+            return CreateExecuteTileResult(
+                resolution,
+                "auction_started",
+                updatedGameState,
+                CreateAuctionPayload(auctionStart.AuctionState!),
+                rent: null);
+        }
+
+        if (auctionStart.ResultKind != AuctionStartResultKind.PropertyAlreadyOwned)
+        {
+            return CreateError(
+                LobbyErrorCodes.UnsupportedTileEffect,
+                "This property tile effect is not supported yet.");
+        }
+
+        var rent = PropertyManager.PayRentForCurrentTile(gameState, resolution.PlayerId);
+        var rentGameState = rent.GameState with
+        {
+            HasExecutedTileThisTurn = true,
+        };
+
+        _ = sessionManager.UpdateGameState(sessionId, rentGameState);
+
+        return CreateExecuteTileResult(
+            resolution,
+            GetRentExecutionKind(rent),
+            rentGameState,
+            auction: null,
+            rent: CreateRentPayload(rent, rentGameState));
+    }
+
     private void RemovePreviousSessionBindingIfNeeded(
         LobbyConnectionContext connectionContext,
         string sessionId,
@@ -690,6 +870,71 @@ public sealed class LobbyMessageHandler
                 FormatTileResolutionActionKind(resolution.ActionKind)));
     }
 
+    private static LobbyServerEnvelope CreateExecuteTileResult(
+        TileResolutionResult resolution,
+        string executionKind,
+        GameState gameState,
+        ExecuteTileAuctionPayload? auction,
+        ExecuteTileRentPayload? rent)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.ExecuteTileResult,
+            new ExecuteTileResultPayload(
+                resolution.PlayerId.Value,
+                resolution.TileId.Value,
+                resolution.TileIndex,
+                FormatTileType(resolution.TileType),
+                FormatTileResolutionActionKind(resolution.ActionKind),
+                executionKind,
+                FormatGamePhase(gameState.Phase),
+                gameState.HasExecutedTileThisTurn,
+                auction,
+                rent));
+    }
+
+    private static ExecuteTileAuctionPayload CreateAuctionPayload(AuctionState auctionState)
+    {
+        return new ExecuteTileAuctionPayload(
+            auctionState.PropertyTileId.Value,
+            auctionState.TriggeringPlayerId.Value,
+            FormatAuctionStatus(auctionState.Status),
+            auctionState.StartingBid.Amount,
+            auctionState.MinimumBidIncrement.Amount,
+            auctionState.InitialPreBidSeconds,
+            auctionState.BidResetSeconds,
+            auctionState.HighestBid?.Amount,
+            auctionState.HighestBidderId?.Value,
+            auctionState.CountdownDurationSeconds);
+    }
+
+    private static ExecuteTileRentPayload CreateRentPayload(RentPaymentResult rent, GameState gameState)
+    {
+        var payer = gameState.Players.First(player => player.PlayerId == rent.LandingPlayerId);
+        var owner = rent.OwnerId is null
+            ? null
+            : gameState.Players.First(player => player.PlayerId == rent.OwnerId.Value);
+
+        return new ExecuteTileRentPayload(
+            rent.LandingPlayerId.Value,
+            rent.OwnerId?.Value,
+            rent.RentDue.Amount,
+            rent.RentPaid.Amount,
+            payer.Money.Amount,
+            owner?.Money.Amount,
+            rent.PlayerEliminated,
+            rent.EliminationResult is null ? null : FormatEliminationReason(rent.EliminationResult.Reason));
+    }
+
+    private static string GetRentExecutionKind(RentPaymentResult rent)
+    {
+        if (rent.PlayerEliminated)
+        {
+            return "rent_unpaid_player_eliminated";
+        }
+
+        return rent.RentCharged ? "rent_paid" : "rent_not_charged";
+    }
+
     private static LobbyServerEnvelope CreateError(string code, string message)
     {
         return new LobbyServerEnvelope(
@@ -760,6 +1005,26 @@ public sealed class LobbyMessageHandler
             TileResolutionActionKind.TaxPlaceholder => "tax_placeholder",
             TileResolutionActionKind.GoToLockupPlaceholder => "go_to_lockup_placeholder",
             _ => actionKind.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatAuctionStatus(AuctionStatus status)
+    {
+        return status switch
+        {
+            AuctionStatus.AwaitingInitialBid => "awaiting_initial_bid",
+            AuctionStatus.ActiveBidCountdown => "active_bid_countdown",
+            _ => status.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatEliminationReason(EliminationReason reason)
+    {
+        return reason switch
+        {
+            EliminationReason.NegativeBalance => "negative_balance",
+            EliminationReason.CannotFulfillPayment => "cannot_fulfill_payment",
+            _ => reason.ToString().ToLowerInvariant(),
         };
     }
 

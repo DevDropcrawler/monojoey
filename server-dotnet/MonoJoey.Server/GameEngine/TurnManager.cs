@@ -25,6 +25,8 @@ public static class TurnManager
             TurnNumber = 1,
             HasRolledThisTurn = false,
             HasResolvedTileThisTurn = false,
+            HasExecutedTileThisTurn = false,
+            ActiveAuctionState = null,
         };
 
         return LoanManager.StartTurnInterestCheck(startedGameState, firstActivePlayer.PlayerId);
@@ -74,6 +76,8 @@ public static class TurnManager
             TurnNumber = gameState.TurnNumber + 1,
             HasRolledThisTurn = false,
             HasResolvedTileThisTurn = false,
+            HasExecutedTileThisTurn = false,
+            ActiveAuctionState = null,
         };
 
         return LoanManager.StartTurnInterestCheck(nextGameState, nextPlayerId);

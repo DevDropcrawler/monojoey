@@ -22,6 +22,8 @@ public class SessionManagerTests
         Assert.Empty(session.GameState.Players);
         Assert.Null(session.GameState.CurrentTurnPlayerId);
         Assert.Equal(0, session.GameState.TurnNumber);
+        Assert.False(session.GameState.HasExecutedTileThisTurn);
+        Assert.Null(session.GameState.ActiveAuctionState);
         Assert.Same(session, sessionManager.GetSession(session.SessionId));
     }
 
@@ -210,6 +212,8 @@ public class SessionManagerTests
         Assert.Equal("player_1", startedSession.GameState.CurrentTurnPlayerId?.Value);
         Assert.False(startedSession.GameState.HasRolledThisTurn);
         Assert.False(startedSession.GameState.HasResolvedTileThisTurn);
+        Assert.False(startedSession.GameState.HasExecutedTileThisTurn);
+        Assert.Null(startedSession.GameState.ActiveAuctionState);
         Assert.Same(session.GameState.Board, startedSession.GameState.Board);
 
         Assert.Collection(

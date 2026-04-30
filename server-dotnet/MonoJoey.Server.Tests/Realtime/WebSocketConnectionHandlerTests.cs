@@ -53,15 +53,18 @@ public class WebSocketConnectionHandlerTests
             TextFrame(StartGameMessage(session.SessionId, "player_1")),
             TextFrame(RollDiceMessage(session.SessionId, "player_1")),
             TextFrame(ResolveTileMessage(session.SessionId, "player_1")),
+            TextFrame(ExecuteTileMessage(session.SessionId, "player_1")),
             CloseFrame());
 
         await handler.HandleAsync(webSocket, CancellationToken.None);
 
-        Assert.Equal(5, webSocket.SentTextMessages.Count);
+        Assert.Equal(6, webSocket.SentTextMessages.Count);
         using var rollResponse = JsonDocument.Parse(webSocket.SentTextMessages[3]);
         Assert.Equal("roll_result", rollResponse.RootElement.GetProperty("type").GetString());
         using var resolveResponse = JsonDocument.Parse(webSocket.SentTextMessages[4]);
         Assert.Equal("resolve_tile_result", resolveResponse.RootElement.GetProperty("type").GetString());
+        using var executeResponse = JsonDocument.Parse(webSocket.SentTextMessages[5]);
+        Assert.Equal("execute_tile_result", executeResponse.RootElement.GetProperty("type").GetString());
     }
 
     private static ReceivedFrame TextFrame(string message)
@@ -104,6 +107,11 @@ public class WebSocketConnectionHandlerTests
     private static string ResolveTileMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""resolve_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string ExecuteTileMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""execute_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record ReceivedFrame(

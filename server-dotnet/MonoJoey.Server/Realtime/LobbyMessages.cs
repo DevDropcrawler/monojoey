@@ -9,10 +9,12 @@ public static class LobbyMessageTypes
     public const string StartGame = "start_game";
     public const string RollDice = "roll_dice";
     public const string ResolveTile = "resolve_tile";
+    public const string ExecuteTile = "execute_tile";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
     public const string ResolveTileResult = "resolve_tile_result";
+    public const string ExecuteTileResult = "execute_tile_result";
     public const string Error = "error";
 }
 
@@ -34,6 +36,7 @@ public static class LobbyErrorCodes
     public const string PlayerNotFound = "player_not_found";
     public const string PlayerEliminated = "player_eliminated";
     public const string PlayerLocked = "player_locked";
+    public const string UnsupportedTileEffect = "unsupported_tile_effect";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -83,3 +86,37 @@ public sealed record ResolveTileResultPayload(
     string TileType,
     bool RequiresAction,
     string ActionKind);
+
+public sealed record ExecuteTileResultPayload(
+    string PlayerId,
+    string TileId,
+    int TileIndex,
+    string TileType,
+    string ActionKind,
+    string ExecutionKind,
+    string Phase,
+    bool HasExecutedTileThisTurn,
+    ExecuteTileAuctionPayload? Auction,
+    ExecuteTileRentPayload? Rent);
+
+public sealed record ExecuteTileAuctionPayload(
+    string PropertyTileId,
+    string TriggeringPlayerId,
+    string Status,
+    int StartingBid,
+    int MinimumBidIncrement,
+    int InitialPreBidSeconds,
+    int BidResetSeconds,
+    int? HighestBid,
+    string? HighestBidderId,
+    int? CountdownDurationSeconds);
+
+public sealed record ExecuteTileRentPayload(
+    string PayerId,
+    string? OwnerId,
+    int RentDue,
+    int RentPaid,
+    int PayerMoney,
+    int? OwnerMoney,
+    bool PlayerEliminated,
+    string? EliminationReason);

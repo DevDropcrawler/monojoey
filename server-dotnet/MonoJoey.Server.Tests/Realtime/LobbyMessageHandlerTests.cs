@@ -248,6 +248,33 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_ResetsResolvedAndExecutedFlags()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                HasResolvedTileThisTurn = true,
+                HasExecutedTileThisTurn = true,
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var updatedSession = sessionManager.GetSession(started.Session.SessionId)!;
+
+        AssertResponseType(response, "roll_result");
+        Assert.True(updatedSession.GameState.HasRolledThisTurn);
+        Assert.False(updatedSession.GameState.HasResolvedTileThisTurn);
+        Assert.False(updatedSession.GameState.HasExecutedTileThisTurn);
+    }
+
+    [Fact]
     public void ResolveTile_ReturnsResolveTileResultAfterRoll()
     {
         var sessionManager = new SessionManager();
@@ -466,6 +493,455 @@ public class LobbyMessageHandlerTests
         Assert.Equal(beforeResolve.Players[0].Money, afterResolve.Players[0].Money);
         Assert.Equal(beforeResolve.Players[0].OwnedPropertyIds, afterResolve.Players[0].OwnedPropertyIds);
         Assert.Equal(beforeResolve.Players[0].HeldCardIds, afterResolve.Players[0].HeldCardIds);
+    }
+
+    [Fact]
+    public void ExecuteTile_UnownedPropertyStartsMandatoryAuctionAndPreservesPhase()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var auction = payload.GetProperty("auction");
+        var updatedSession = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.Equal(1, payload.GetProperty("tileIndex").GetInt32());
+        Assert.Equal("property", payload.GetProperty("tileType").GetString());
+        Assert.Equal("property_placeholder", payload.GetProperty("actionKind").GetString());
+        Assert.Equal("auction_started", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("awaiting_roll", payload.GetProperty("phase").GetString());
+        Assert.True(payload.GetProperty("hasExecutedTileThisTurn").GetBoolean());
+        Assert.Equal("property_01", auction.GetProperty("propertyTileId").GetString());
+        Assert.Equal("player_1", auction.GetProperty("triggeringPlayerId").GetString());
+        Assert.Equal("awaiting_initial_bid", auction.GetProperty("status").GetString());
+        Assert.Equal(0, auction.GetProperty("startingBid").GetInt32());
+        Assert.Equal(1, auction.GetProperty("minimumBidIncrement").GetInt32());
+        Assert.Equal(9, auction.GetProperty("initialPreBidSeconds").GetInt32());
+        Assert.Equal(3, auction.GetProperty("bidResetSeconds").GetInt32());
+        Assert.Equal(JsonValueKind.Null, auction.GetProperty("highestBid").ValueKind);
+        Assert.Equal(JsonValueKind.Null, auction.GetProperty("highestBidderId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, auction.GetProperty("countdownDurationSeconds").ValueKind);
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("rent").ValueKind);
+        Assert.True(updatedSession.GameState.HasExecutedTileThisTurn);
+        Assert.NotNull(updatedSession.GameState.ActiveAuctionState);
+        Assert.Equal("property_01", updatedSession.GameState.ActiveAuctionState?.PropertyTileId.Value);
+        Assert.Equal(beforeExecute.Phase, updatedSession.GameState.Phase);
+        Assert.Equal(beforeExecute.Players[0].Money, updatedSession.GameState.Players[0].Money);
+        Assert.Equal(beforeExecute.Players[1].Money, updatedSession.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void ExecuteTile_PropertyOwnedByAnotherPlayerPaysRentAndPreservesPhase()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } }
+                        : player)
+                    .ToArray(),
+            });
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var rent = payload.GetProperty("rent");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("rent_paid", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("auction").ValueKind);
+        Assert.Equal("player_1", rent.GetProperty("payerId").GetString());
+        Assert.Equal("player_2", rent.GetProperty("ownerId").GetString());
+        Assert.Equal(2, rent.GetProperty("rentDue").GetInt32());
+        Assert.Equal(2, rent.GetProperty("rentPaid").GetInt32());
+        Assert.Equal(1498, rent.GetProperty("payerMoney").GetInt32());
+        Assert.Equal(1502, rent.GetProperty("ownerMoney").GetInt32());
+        Assert.False(rent.GetProperty("playerEliminated").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, rent.GetProperty("eliminationReason").ValueKind);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Null(afterExecute.ActiveAuctionState);
+        Assert.Equal(beforeExecute.Phase, afterExecute.Phase);
+    }
+
+    [Fact]
+    public void ExecuteTile_InsufficientRentEliminatesPayer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with { Money = new Money(1) },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var rent = payload.GetProperty("rent");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("rent_unpaid_player_eliminated", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(2, rent.GetProperty("rentDue").GetInt32());
+        Assert.Equal(0, rent.GetProperty("rentPaid").GetInt32());
+        Assert.Equal(1, rent.GetProperty("payerMoney").GetInt32());
+        Assert.Equal(1500, rent.GetProperty("ownerMoney").GetInt32());
+        Assert.True(rent.GetProperty("playerEliminated").GetBoolean());
+        Assert.Equal("cannot_fulfill_payment", rent.GetProperty("eliminationReason").GetString());
+        Assert.True(afterExecute.Players[0].IsEliminated);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+    }
+
+    [Fact]
+    public void ExecuteTile_SelfOwnedPropertyDoesNotChargeRent()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } }
+                        : player)
+                    .ToArray(),
+            });
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var rent = payload.GetProperty("rent");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("rent_not_charged", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("player_1", rent.GetProperty("ownerId").GetString());
+        Assert.Equal(0, rent.GetProperty("rentDue").GetInt32());
+        Assert.Equal(0, rent.GetProperty("rentPaid").GetInt32());
+        Assert.Equal(1500, rent.GetProperty("payerMoney").GetInt32());
+        Assert.Equal(1500, rent.GetProperty("ownerMoney").GetInt32());
+        Assert.False(rent.GetProperty("playerEliminated").GetBoolean());
+        Assert.Equal(beforeExecute.Players[0].Money, afterExecute.Players[0].Money);
+        Assert.Equal(beforeExecute.Phase, afterExecute.Phase);
+    }
+
+    [Theory]
+    [InlineData("start", "start_placeholder")]
+    [InlineData("free_space_01", "no_action")]
+    public void ExecuteTile_NoActionTilesOnlyMarkExecutedAndPreservePhase(string tileId, string actionKind)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", tileId);
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal(actionKind, payload.GetProperty("actionKind").GetString());
+        Assert.Equal("no_action", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("auction").ValueKind);
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("rent").ValueKind);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Null(afterExecute.ActiveAuctionState);
+        Assert.Equal(beforeExecute.Phase, afterExecute.Phase);
+        Assert.Equal(beforeExecute.Players[0].Money, afterExecute.Players[0].Money);
+        Assert.Equal(beforeExecute.Players[0].OwnedPropertyIds, afterExecute.Players[0].OwnedPropertyIds);
+    }
+
+    [Theory]
+    [InlineData("chance_01")]
+    [InlineData("table_01")]
+    [InlineData("tax_01")]
+    [InlineData("go_to_lockup_01")]
+    public void ExecuteTile_UnsupportedTileEffectsReturnUnsupportedTileEffectWithoutMutation(string tileId)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", tileId);
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "unsupported_tile_effect");
+        Assert.Same(beforeExecute, afterExecute);
+    }
+
+    [Fact]
+    public void ExecuteTile_BeforeRollReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ExecuteTile_BeforeResolveReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ExecuteTile_SecondExecuteInSameTurnReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ExecuteTile_ActiveAuctionAlreadyStoredReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        var auction = AuctionManager.StartMandatoryAuction(
+            readySession.GameState,
+            new PlayerId("player_1"),
+            new TileId("property_01")).AuctionState;
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with { ActiveAuctionState = auction });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ExecuteTile_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, ExecuteTileMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void ExecuteTile_UnboundContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+        var unboundContext = new LobbyConnectionContext("connection_3");
+
+        using var response = Handle(
+            handler,
+            unboundContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ExecuteTile_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ExecuteTile_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, ExecuteTileMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ExecuteTile_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void ExecuteTile_NonCurrentPlayerReturnsNotYourTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_2", "start");
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_2"));
+
+        AssertError(response, "not_your_turn");
+    }
+
+    [Fact]
+    public void ExecuteTile_EliminatedCurrentPlayerReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void ExecuteTile_LockedCurrentPlayerReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_locked");
     }
 
     [Fact]
@@ -701,6 +1177,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentExecuteTileResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""execute_tile_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -712,6 +1199,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""roll_dice"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""resolve_tile"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""resolve_tile"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""execute_tile"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""execute_tile"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -869,6 +1358,44 @@ public class LobbyMessageHandlerTests
             session.GameState with { Players = updatedPlayers });
     }
 
+    private static GameSession UpdateGameState(
+        SessionManager sessionManager,
+        string sessionId,
+        Func<GameState, GameState> updateGameState)
+    {
+        var session = sessionManager.GetSession(sessionId)!;
+
+        return sessionManager.UpdateGameState(sessionId, updateGameState(session.GameState));
+    }
+
+    private static GameSession SetCurrentPlayerReadyToExecuteTile(
+        SessionManager sessionManager,
+        string sessionId,
+        string playerId,
+        string tileId)
+    {
+        return UpdateGameState(
+            sessionManager,
+            sessionId,
+            gameState =>
+            {
+                var updatedPlayers = gameState.Players
+                    .Select(player => player.PlayerId.Value == playerId
+                        ? player with { CurrentTileId = new TileId(tileId) }
+                        : player)
+                    .ToArray();
+
+                return gameState with
+                {
+                    Players = updatedPlayers,
+                    HasRolledThisTurn = true,
+                    HasResolvedTileThisTurn = true,
+                    HasExecutedTileThisTurn = false,
+                    ActiveAuctionState = null,
+                };
+            });
+    }
+
     private static string JoinMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""join_lobby"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
@@ -898,6 +1425,11 @@ public class LobbyMessageHandlerTests
     private static string ResolveTileMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""resolve_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string ExecuteTileMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""execute_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(
