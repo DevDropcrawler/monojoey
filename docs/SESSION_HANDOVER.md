@@ -5,28 +5,30 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.8 End turn over WebSocket
-- Completion status: Chunk 5.8 complete; `/ws` now accepts sender-only `end_turn` after roll, resolve, and execute, rejects active auctions and eliminated current players, advances via `TurnManager.AdvanceToNextTurn`, persists the returned `GameState` through the existing gameplay update pattern, and returns one direct `end_turn_result` or `error` response.
-- Branch: `main` tracking `origin/main`; local has this chunk implemented, validated, and committed.
+- Chunk: 5.9 Auction bidding over WebSocket
+- Completion status: Chunk 5.9 complete; `/ws` now accepts sender-only `place_bid` during an active `GameState.ActiveAuctionState`, validates the bound session/player and positive bid amount, calls `AuctionManager.PlaceBid`, persists the returned `AuctionState` through the existing full `GameState` update pattern, and returns one direct `bid_result` or `error` response.
+- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-04-30 21:58 +12:00
+- Date/time: 2026-04-30 22:16 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.8 - WebSocket end-turn advancement.
+Phase 5, Chunk 5.9 - WebSocket auction bidding.
 
 Completed:
 
-- Added server-local `end_turn` WebSocket message handling and direct `end_turn_result` responses.
-- Added `EndTurnResultPayload` with `previousPlayerId`, `nextPlayerId`, and `turnIndex`.
-- Validated end-turn requests for payload fields, session existence, strict bound connection/session/player, in-game status, player presence, current turn, eliminated current player, roll-before-end, resolve-before-end, execute-before-end, and active auction presence.
-- Advanced successful end-turn requests only through `TurnManager.AdvanceToNextTurn(session.GameState)`.
-- Persisted the returned advanced `GameState` via `sessionManager.UpdateGameState(sessionId, advancedGameState)`, matching the existing `roll_dice`, `resolve_tile`, and `execute_tile` update pattern.
-- Returned the previous current player, the advanced current player, and the advanced turn number as `turnIndex`.
-- Preserved sender-only behavior; no broadcasts, snapshots, reconnect behavior, client work, or persistence were added.
-- Added deterministic handler and WebSocket transport tests for success, guard failures, unsupported client-sent `end_turn_result`, invalid payload, eliminated-current-player rejection after execute-tile elimination, and one response per `end_turn` request.
+- Added server-local `place_bid` WebSocket message handling and direct `bid_result` responses.
+- Added `BidResultPayload` with `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId`.
+- Validated bid requests for payload fields, positive integer amount, session existence, strict bound connection/session/player, in-game status, player presence, non-eliminated bidder, active auction presence, active auction status, and `AuctionManager.PlaceBid` bid rules.
+- Allowed non-current players to bid; `place_bid` does not check `CurrentTurnPlayerId`.
+- Rejected missing/inactive auctions through `auction_not_active` and too-low/equal bids through `bid_too_low`.
+- Called `AuctionManager.PlaceBid` using the latest `session.GameState` read inside the existing handler lock.
+- Persisted accepted bids via `sessionManager.UpdateGameState(sessionId, session.GameState with { ActiveAuctionState = bidResult.AuctionState })`, matching the existing full replacement gameplay update pattern.
+- Built successful responses from the persisted updated `ActiveAuctionState`, not stale local state.
+- Preserved sender-only behavior; no broadcasts, timers, auction finalization, snapshots, reconnect behavior, client work, or persistence were added.
+- Added deterministic handler and WebSocket transport tests for first bid, higher non-current-player bid, too-low bid, equal bid rejection, eliminated bidder rejection, missing/inactive auction rejection, multi-player bid sequence, invalid payload, unsupported client-sent `bid_result`, wrong bound connection, and one response per `place_bid` request.
 
 Not included by explicit user scope:
 
@@ -128,13 +130,13 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 274 tests passed.
+  - Output summary: 294 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git diff --check`
   - Result: succeeded.
   - Output summary: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings.
 - `git status --short --branch`
-  - Result after validation before commit: `main...origin/main` with modified `docs/SESSION_HANDOVER.md`, realtime source files, and focused realtime tests.
+  - Result after validation: `main...origin/main` with modified `docs/SESSION_HANDOVER.md`, realtime source files, and focused realtime tests.
 
 ## Known Issues
 
@@ -151,7 +153,7 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -187,6 +189,12 @@ Not included by explicit user scope:
 - If `execute_tile` eliminated the current player, `end_turn` returns `player_eliminated` and does not advance.
 - Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
 - `end_turn` does not broadcast, emit snapshots, finalize auctions, add reconnect behavior, add persistence, add client behavior, or special-case eliminated players into a forced advance.
+- `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
+- `place_bid` allows non-current players to bid and does not require turn ownership.
+- Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, turn flags, or phase values are changed.
+- `bid_result` is sender-only and contains `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId` from the persisted updated active auction state.
+- Rejected `place_bid` calls return `error` and do not update `GameState`.
+- Bid affordability is still not checked in the WebSocket layer; this preserves existing `AuctionManager.PlaceBid` behavior and leaves loan/affordability policy to a later chunk.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.

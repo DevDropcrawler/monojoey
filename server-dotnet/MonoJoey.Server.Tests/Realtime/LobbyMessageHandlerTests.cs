@@ -1044,6 +1044,222 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void PlaceBid_ValidFirstBidReturnsResultAndUpdatesActiveAuctionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var beforeBid = session.GameState;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 25));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_2", payload.GetProperty("bidderPlayerId").GetString());
+        Assert.Equal(25, payload.GetProperty("amount").GetInt32());
+        Assert.Equal(25, payload.GetProperty("currentHighestBid").GetInt32());
+        Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(AuctionStatus.ActiveBidCountdown, afterBid.ActiveAuctionState?.Status);
+        Assert.Equal(new Money(25), afterBid.ActiveAuctionState?.HighestBid);
+        Assert.Equal(new PlayerId("player_2"), afterBid.ActiveAuctionState?.HighestBidderId);
+        Assert.Equal(3, afterBid.ActiveAuctionState?.CountdownDurationSeconds);
+        Assert.Single(afterBid.ActiveAuctionState?.Bids ?? Array.Empty<AuctionBid>());
+        Assert.Equal(beforeBid.Phase, afterBid.Phase);
+    }
+
+    [Fact]
+    public void PlaceBid_NonCurrentPlayerCanPlaceHigherBid()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 11));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_2", payload.GetProperty("bidderPlayerId").GetString());
+        Assert.Equal(11, payload.GetProperty("currentHighestBid").GetInt32());
+        Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(new PlayerId("player_2"), afterBid.ActiveAuctionState?.HighestBidderId);
+        Assert.Equal(2, afterBid.ActiveAuctionState?.Bids.Count);
+    }
+
+    [Fact]
+    public void PlaceBid_TooLowBidReturnsBidTooLowAndPreservesAuctionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(
+            sessionManager,
+            started.Session.SessionId,
+            AuctionConfig.Default with { MinimumBidIncrement = new Money(5) });
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
+        var beforeRejectedBid = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 14));
+        var afterRejectedBid = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        AssertError(response, "bid_too_low");
+        Assert.Same(beforeRejectedBid, afterRejectedBid);
+        Assert.Equal(new Money(10), afterRejectedBid?.HighestBid);
+        Assert.Equal(new PlayerId("player_1"), afterRejectedBid?.HighestBidderId);
+    }
+
+    [Fact]
+    public void PlaceBid_EqualBidReturnsBidTooLowAndPreservesAuctionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
+        var beforeRejectedBid = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 10));
+        var afterRejectedBid = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        AssertError(response, "bid_too_low");
+        Assert.Same(beforeRejectedBid, afterRejectedBid);
+        Assert.Equal(new Money(10), afterRejectedBid?.HighestBid);
+        Assert.Equal(new PlayerId("player_1"), afterRejectedBid?.HighestBidderId);
+    }
+
+    [Fact]
+    public void PlaceBid_EliminatedPlayerReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 10));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void PlaceBid_NoActiveAuctionReturnsAuctionNotActive()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            PlaceBidMessage(started.Session.SessionId, "player_1", 10));
+
+        AssertError(response, "auction_not_active");
+    }
+
+    [Fact]
+    public void PlaceBid_InactiveAuctionStatusReturnsAuctionNotActive()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var inactiveAuction = session.GameState.ActiveAuctionState! with
+        {
+            Status = (AuctionStatus)999,
+        };
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with { ActiveAuctionState = inactiveAuction });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            PlaceBidMessage(started.Session.SessionId, "player_1", 10));
+
+        AssertError(response, "auction_not_active");
+    }
+
+    [Fact]
+    public void PlaceBid_MultiplePlayersBiddingSequenceUpdatesHighestBidder()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 11), started.SecondContext);
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            PlaceBidMessage(started.Session.SessionId, "player_1", 12));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(12, payload.GetProperty("currentHighestBid").GetInt32());
+        Assert.Equal(new PlayerId("player_1"), afterBid.ActiveAuctionState?.HighestBidderId);
+        Assert.Equal(new Money(12), afterBid.ActiveAuctionState?.HighestBid);
+        Assert.Equal(3, afterBid.ActiveAuctionState?.Bids.Count);
+    }
+
+    [Theory]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""playerId"":""player_1"",""amount"":10}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""amount"":10}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":0}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":-1}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":""10""}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10.5}}")]
+    public void PlaceBid_InvalidPayloadReturnsInvalidPayload(string message)
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, message);
+
+        AssertError(response, "invalid_payload");
+    }
+
+    [Fact]
+    public void PlaceBid_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_1", 10));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
     public void EndTurn_WrongPlayerContextReturnsPlayerSwitchRejected()
     {
         var sessionManager = new SessionManager();
@@ -1415,6 +1631,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentBidResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""bid_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -1430,6 +1657,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""execute_tile"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""end_turn"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""end_turn"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""playerId"":""player_1"",""amount"":10}}")]
+    [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""amount"":10}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -1625,6 +1854,26 @@ public class LobbyMessageHandlerTests
             });
     }
 
+    private static GameSession StartActiveAuction(
+        SessionManager sessionManager,
+        string sessionId,
+        AuctionConfig? config = null)
+    {
+        return UpdateGameState(
+            sessionManager,
+            sessionId,
+            gameState =>
+            {
+                var auctionStart = AuctionManager.StartMandatoryAuction(
+                    gameState,
+                    new PlayerId("player_1"),
+                    new TileId("property_01"),
+                    config);
+
+                return gameState with { ActiveAuctionState = auctionStart.AuctionState };
+            });
+    }
+
     private static string JoinMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""join_lobby"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
@@ -1664,6 +1913,11 @@ public class LobbyMessageHandlerTests
     private static string EndTurnMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""end_turn"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string PlaceBidMessage(string sessionId, string playerId, int amount)
+    {
+        return $@"{{""type"":""place_bid"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount}}}}}";
     }
 
     private sealed record StartedRealtimeGame(

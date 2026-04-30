@@ -106,12 +106,14 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.ResolveTile => HandleResolveTile(root, connectionContext),
             LobbyMessageTypes.ExecuteTile => HandleExecuteTile(root, connectionContext),
             LobbyMessageTypes.EndTurn => HandleEndTurn(root, connectionContext),
+            LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
                 LobbyMessageTypes.ResolveTileResult or
                 LobbyMessageTypes.ExecuteTileResult or
                 LobbyMessageTypes.EndTurnResult or
+                LobbyMessageTypes.BidResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -513,6 +515,89 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyServerEnvelope HandlePlaceBid(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadPlaceBidPayload(root, out var sessionId, out var playerId, out var amount))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "place_bid requires payload.sessionId, payload.playerId, and positive integer payload.amount.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot bid in auctions.");
+            }
+
+            var activeAuctionState = session.GameState.ActiveAuctionState;
+            if (activeAuctionState is null || !IsActiveAuctionStatus(activeAuctionState.Status))
+            {
+                return CreateError(
+                    LobbyErrorCodes.AuctionNotActive,
+                    "No active auction is available for bidding.");
+            }
+
+            var bidResult = AuctionManager.PlaceBid(
+                session.GameState,
+                activeAuctionState,
+                player.PlayerId,
+                new Money(amount),
+                DateTimeOffset.UtcNow);
+
+            if (!bidResult.BidAccepted)
+            {
+                return CreateBidRejectedError(bidResult);
+            }
+
+            var updatedGameState = session.GameState with
+            {
+                ActiveAuctionState = bidResult.AuctionState,
+            };
+            var updatedSession = sessionManager.UpdateGameState(sessionId, updatedGameState);
+            var persistedAuctionState = updatedSession.GameState.ActiveAuctionState
+                ?? throw new InvalidOperationException("Accepted auction bids must persist active auction state.");
+
+            return CreateBidResult(player.PlayerId, amount, persistedAuctionState);
+        }
+    }
+
     private LobbyServerEnvelope HandleJoinLobby(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -884,6 +969,31 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadPlaceBidPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out int amount)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        amount = 0;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !payload.TryGetProperty("amount", out var amountProperty) ||
+            amountProperty.ValueKind != JsonValueKind.Number ||
+            !amountProperty.TryGetInt32(out amount) ||
+            amount <= 0)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TryReadString(JsonElement element, string propertyName, out string value)
     {
         value = string.Empty;
@@ -999,6 +1109,42 @@ public sealed class LobbyMessageHandler
                 previousPlayerId.Value,
                 gameState.CurrentTurnPlayerId?.Value,
                 gameState.TurnNumber));
+    }
+
+    private static LobbyServerEnvelope CreateBidResult(
+        PlayerId bidderPlayerId,
+        int amount,
+        AuctionState auctionState)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.BidResult,
+            new BidResultPayload(
+                bidderPlayerId.Value,
+                amount,
+                auctionState.HighestBid?.Amount
+                    ?? throw new InvalidOperationException("Accepted auction bids must have a highest bid."),
+                auctionState.HighestBidderId?.Value
+                    ?? throw new InvalidOperationException("Accepted auction bids must have a highest bidder.")));
+    }
+
+    private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
+    {
+        return bidResult.ResultKind switch
+        {
+            AuctionBidResultKind.BidderNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                bidResult.Message),
+            AuctionBidResultKind.BidderEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                bidResult.Message),
+            AuctionBidResultKind.BidBelowStartingBid or
+                AuctionBidResultKind.BidBelowMinimumIncrement => CreateError(
+                LobbyErrorCodes.BidTooLow,
+                bidResult.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                bidResult.Message),
+        };
     }
 
     private static ExecuteTileAuctionPayload CreateAuctionPayload(AuctionState auctionState)
@@ -1125,6 +1271,11 @@ public sealed class LobbyMessageHandler
             AuctionStatus.ActiveBidCountdown => "active_bid_countdown",
             _ => status.ToString().ToLowerInvariant(),
         };
+    }
+
+    private static bool IsActiveAuctionStatus(AuctionStatus status)
+    {
+        return status is AuctionStatus.AwaitingInitialBid or AuctionStatus.ActiveBidCountdown;
     }
 
     private static string FormatEliminationReason(EliminationReason reason)

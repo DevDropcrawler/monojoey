@@ -11,12 +11,14 @@ public static class LobbyMessageTypes
     public const string ResolveTile = "resolve_tile";
     public const string ExecuteTile = "execute_tile";
     public const string EndTurn = "end_turn";
+    public const string PlaceBid = "place_bid";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
     public const string ResolveTileResult = "resolve_tile_result";
     public const string ExecuteTileResult = "execute_tile_result";
     public const string EndTurnResult = "end_turn_result";
+    public const string BidResult = "bid_result";
     public const string Error = "error";
 }
 
@@ -39,6 +41,8 @@ public static class LobbyErrorCodes
     public const string PlayerEliminated = "player_eliminated";
     public const string PlayerLocked = "player_locked";
     public const string UnsupportedTileEffect = "unsupported_tile_effect";
+    public const string AuctionNotActive = "auction_not_active";
+    public const string BidTooLow = "bid_too_low";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -127,3 +131,9 @@ public sealed record EndTurnResultPayload(
     string PreviousPlayerId,
     string? NextPlayerId,
     int TurnIndex);
+
+public sealed record BidResultPayload(
+    string BidderPlayerId,
+    int Amount,
+    int CurrentHighestBid,
+    string HighestBidderId);
