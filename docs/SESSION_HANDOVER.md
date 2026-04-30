@@ -5,32 +5,28 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.7 Execute resolved tile effects over WebSocket
-- Completion status: Chunk 5.7 complete; `/ws` now accepts sender-only `execute_tile` after roll and resolve, executes only supported placeholder tile effects, persists only money/ownership-side manager output, `ActiveAuctionState`, and `HasExecutedTileThisTurn`, and returns a direct `execute_tile_result` or `error` response without changing `GamePhase`.
+- Chunk: 5.8 End turn over WebSocket
+- Completion status: Chunk 5.8 complete; `/ws` now accepts sender-only `end_turn` after roll, resolve, and execute, rejects active auctions and eliminated current players, advances via `TurnManager.AdvanceToNextTurn`, persists the returned `GameState` through the existing gameplay update pattern, and returns one direct `end_turn_result` or `error` response.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented, validated, and committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-04-30 21:15 +12:00
+- Date/time: 2026-04-30 21:58 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.7 - WebSocket execution for supported resolved tile effects only.
+Phase 5, Chunk 5.8 - WebSocket end-turn advancement.
 
 Completed:
 
-- Added server-local `execute_tile` WebSocket message handling and direct `execute_tile_result` responses.
-- Added `GameState.HasExecutedTileThisTurn` and `GameState.ActiveAuctionState`.
-- Reset `HasExecutedTileThisTurn` and `ActiveAuctionState` at `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`; successful `roll_dice` resets `HasExecutedTileThisTurn = false`.
-- Validated execute requests for payload fields, session existence, bound connection/session/player, in-game status, player presence, current turn, eliminated player, locked player, roll-before-execute, resolve-before-execute, duplicate execute, and active auction presence.
-- Re-resolved the current authoritative tile before execution.
-- Executed unowned auctionable property placeholders by starting a mandatory auction and persisting `ActiveAuctionState`.
-- Executed owned property placeholders by reusing `PropertyManager.PayRentForCurrentTile`, including self-owned no-rent and insufficient-rent hard elimination behavior.
-- Executed start/free/no-action tiles as no-ops that only mark `HasExecutedTileThisTurn = true`.
-- Returned `unsupported_tile_effect` without mutation for chance/table deck, tax, and go-to-lockup placeholder tile effects.
-- Preserved sender-only behavior; no broadcasts were added.
-- Preserved `GamePhase` on all success paths; no `AwaitingEndTurn` or `Auction` phase transitions were introduced.
-- Added deterministic handler, transport, lifecycle, and session initialization tests for execute success paths, guards, unsupported no-mutation behavior, phase preservation, and one response per execute request.
+- Added server-local `end_turn` WebSocket message handling and direct `end_turn_result` responses.
+- Added `EndTurnResultPayload` with `previousPlayerId`, `nextPlayerId`, and `turnIndex`.
+- Validated end-turn requests for payload fields, session existence, strict bound connection/session/player, in-game status, player presence, current turn, eliminated current player, roll-before-end, resolve-before-end, execute-before-end, and active auction presence.
+- Advanced successful end-turn requests only through `TurnManager.AdvanceToNextTurn(session.GameState)`.
+- Persisted the returned advanced `GameState` via `sessionManager.UpdateGameState(sessionId, advancedGameState)`, matching the existing `roll_dice`, `resolve_tile`, and `execute_tile` update pattern.
+- Returned the previous current player, the advanced current player, and the advanced turn number as `turnIndex`.
+- Preserved sender-only behavior; no broadcasts, snapshots, reconnect behavior, client work, or persistence were added.
+- Added deterministic handler and WebSocket transport tests for success, guard failures, unsupported client-sent `end_turn_result`, invalid payload, eliminated-current-player rejection after execute-tile elimination, and one response per `end_turn` request.
 
 Not included by explicit user scope:
 
@@ -38,7 +34,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Unsupported tile effects beyond unowned property auction start, owned property rent, and no-action completion.
-- Turn advancement or end-turn handling.
+- Auction bid/finalization handling.
 - Scaling.
 - Broadcasts.
 - Protocol DTO changes.
@@ -50,12 +46,8 @@ Not included by explicit user scope:
 
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -136,13 +128,13 @@ Not included by explicit user scope:
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 260 tests passed.
+  - Output summary: 274 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git diff --check`
   - Result: succeeded.
   - Output summary: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings.
 - `git status --short --branch`
-  - Result after validation before commit: modified realtime/session source files, focused tests, and handover file pending commit.
+  - Result after validation before commit: `main...origin/main` with modified `docs/SESSION_HANDOVER.md`, realtime source files, and focused realtime tests.
 
 ## Known Issues
 
@@ -159,7 +151,7 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -189,6 +181,12 @@ Not included by explicit user scope:
 - `execute_tile` returns `unsupported_tile_effect` without mutating session state for chance/table deck placeholders, tax placeholders, and go-to-lockup placeholders.
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
+- `end_turn` requires a successful roll, resolve, and execute in the same turn before advancing.
+- `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, and `turnIndex` from the advanced `GameState.TurnNumber`.
+- `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
+- If `execute_tile` eliminated the current player, `end_turn` returns `player_eliminated` and does not advance.
+- Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
+- `end_turn` does not broadcast, emit snapshots, finalize auctions, add reconnect behavior, add persistence, add client behavior, or special-case eliminated players into a forced advance.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
@@ -230,7 +228,7 @@ Not included by explicit user scope:
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not mutate match membership or remove engine players.
 - Lobby messages are direct request/response only; broadcasts are intentionally deferred.
-- Gameplay `roll_dice`, `resolve_tile`, and `execute_tile` messages are also direct request/response only; broadcasts remain intentionally deferred.
+- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, and `end_turn` messages are also direct request/response only; broadcasts remain intentionally deferred.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
 - Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
 - Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
@@ -238,6 +236,9 @@ Not included by explicit user scope:
 - Tile execution is server-authoritative and re-resolves the current tile through `TileResolver.ResolveCurrentTile` before executing supported effects.
 - Tile execution mutates only the narrow supported effect state: rent money/elimination via `PropertyManager`, active auction metadata, and `HasExecutedTileThisTurn`.
 - Tile execution does not mutate `GamePhase`; `ActiveAuctionState` is the only Phase 5.7 representation of auction presence.
+- End-turn execution is server-authoritative and reuses `TurnManager.AdvanceToNextTurn` only after the current player has rolled, resolved, and executed without an active auction.
+- End-turn execution rejects an eliminated current player, including after rent execution eliminates that player.
+- End-turn execution uses strict session/player connection binding and does not allow one socket to end another player's turn.
 - `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are reset to false by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
 - `ActiveAuctionState` is reset to null by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
 - Accepted sockets are registered on connect and removed in a `finally` path after close, WebSocket error, or request cancellation.
@@ -306,7 +307,7 @@ Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
-- Add auction bidding/finalization, end-turn, gameplay snapshots, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
+- Add auction bidding/finalization, gameplay snapshots, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
 
@@ -323,9 +324,8 @@ Do not implement before its assigned chunk:
 - Broadcasts.
 - Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
-- Broader turn execution over network beyond passive tile classification.
+- Broader turn execution over network beyond the explicit roll, resolve, execute, and end-turn slices already implemented.
 - Unsupported tile effect execution beyond Phase 5.7's property auction/rent/no-op execution.
-- WebSocket end-turn handling.
 - UI.
 - Persistence.
 - Scaling.
@@ -346,4 +346,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.7 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.8 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

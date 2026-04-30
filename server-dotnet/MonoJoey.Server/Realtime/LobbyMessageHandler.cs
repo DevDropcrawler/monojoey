@@ -105,11 +105,13 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
             LobbyMessageTypes.ResolveTile => HandleResolveTile(root, connectionContext),
             LobbyMessageTypes.ExecuteTile => HandleExecuteTile(root, connectionContext),
+            LobbyMessageTypes.EndTurn => HandleEndTurn(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
                 LobbyMessageTypes.ResolveTileResult or
                 LobbyMessageTypes.ExecuteTileResult or
+                LobbyMessageTypes.EndTurnResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -413,6 +415,101 @@ public sealed class LobbyMessageHandler
                     LobbyErrorCodes.UnsupportedTileEffect,
                     "This resolved tile effect is not supported yet."),
             };
+        }
+    }
+
+    private LobbyServerEnvelope HandleEndTurn(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "end_turn requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot end turns.");
+            }
+
+            if (!session.GameState.HasRolledThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must roll before ending a turn.");
+            }
+
+            if (!session.GameState.HasResolvedTileThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must resolve a tile before ending a turn.");
+            }
+
+            if (!session.GameState.HasExecutedTileThisTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player must execute a tile before ending a turn.");
+            }
+
+            if (session.GameState.ActiveAuctionState is not null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Active auctions must be resolved before ending a turn.");
+            }
+
+            var previousPlayerId = player.PlayerId;
+            var advancedGameState = TurnManager.AdvanceToNextTurn(session.GameState);
+
+            _ = sessionManager.UpdateGameState(sessionId, advancedGameState);
+
+            return CreateEndTurnResult(previousPlayerId, advancedGameState);
         }
     }
 
@@ -890,6 +987,18 @@ public sealed class LobbyMessageHandler
                 gameState.HasExecutedTileThisTurn,
                 auction,
                 rent));
+    }
+
+    private static LobbyServerEnvelope CreateEndTurnResult(
+        PlayerId previousPlayerId,
+        GameState gameState)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.EndTurnResult,
+            new EndTurnResultPayload(
+                previousPlayerId.Value,
+                gameState.CurrentTurnPlayerId?.Value,
+                gameState.TurnNumber));
     }
 
     private static ExecuteTileAuctionPayload CreateAuctionPayload(AuctionState auctionState)

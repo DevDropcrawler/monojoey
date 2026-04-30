@@ -945,6 +945,222 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void EndTurn_AfterRollResolveExecuteReturnsResultAndAdvancesTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        var beforeEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", payload.GetProperty("previousPlayerId").GetString());
+        Assert.Equal("player_2", payload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal(beforeEnd.TurnNumber + 1, payload.GetProperty("turnIndex").GetInt32());
+        Assert.Equal("player_2", afterEnd.CurrentTurnPlayerId?.Value);
+        Assert.Equal(beforeEnd.TurnNumber + 1, afterEnd.TurnNumber);
+        Assert.False(afterEnd.HasRolledThisTurn);
+        Assert.False(afterEnd.HasResolvedTileThisTurn);
+        Assert.False(afterEnd.HasExecutedTileThisTurn);
+        Assert.Null(afterEnd.ActiveAuctionState);
+        Assert.Equal(beforeEnd.Phase, afterEnd.Phase);
+    }
+
+    [Fact]
+    public void EndTurn_BeforeRollReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void EndTurn_BeforeResolveReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void EndTurn_BeforeExecuteReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void EndTurn_ActiveAuctionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void EndTurn_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void EndTurn_NonCurrentPlayerReturnsNotYourTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_2", "start");
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            EndTurnMessage(started.Session.SessionId, "player_2"));
+
+        AssertError(response, "not_your_turn");
+    }
+
+    [Fact]
+    public void EndTurn_EliminatedCurrentPlayerAfterExecuteReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with { Money = new Money(1) },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void EndTurn_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(3, 3));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, EndTurnMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void EndTurn_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, EndTurnMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void EndTurn_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
     public void RollDice_SecondRollInSameTurnReturnsInvalidSessionState()
     {
         var sessionManager = new SessionManager();
@@ -1188,6 +1404,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentEndTurnResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""end_turn_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -1201,6 +1428,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""resolve_tile"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""execute_tile"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""execute_tile"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""end_turn"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""end_turn"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -1430,6 +1659,11 @@ public class LobbyMessageHandlerTests
     private static string ExecuteTileMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""execute_tile"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string EndTurnMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""end_turn"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(

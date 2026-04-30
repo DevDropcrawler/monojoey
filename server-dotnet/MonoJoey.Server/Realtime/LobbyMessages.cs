@@ -10,11 +10,13 @@ public static class LobbyMessageTypes
     public const string RollDice = "roll_dice";
     public const string ResolveTile = "resolve_tile";
     public const string ExecuteTile = "execute_tile";
+    public const string EndTurn = "end_turn";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
     public const string ResolveTileResult = "resolve_tile_result";
     public const string ExecuteTileResult = "execute_tile_result";
+    public const string EndTurnResult = "end_turn_result";
     public const string Error = "error";
 }
 
@@ -120,3 +122,8 @@ public sealed record ExecuteTileRentPayload(
     int? OwnerMoney,
     bool PlayerEliminated,
     string? EliminationReason);
+
+public sealed record EndTurnResultPayload(
+    string PreviousPlayerId,
+    string? NextPlayerId,
+    int TurnIndex);
