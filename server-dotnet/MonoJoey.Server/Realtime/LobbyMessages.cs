@@ -12,6 +12,7 @@ public static class LobbyMessageTypes
     public const string ExecuteTile = "execute_tile";
     public const string EndTurn = "end_turn";
     public const string PlaceBid = "place_bid";
+    public const string FinalizeAuction = "finalize_auction";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
@@ -19,6 +20,7 @@ public static class LobbyMessageTypes
     public const string ExecuteTileResult = "execute_tile_result";
     public const string EndTurnResult = "end_turn_result";
     public const string BidResult = "bid_result";
+    public const string AuctionResult = "auction_result";
     public const string Error = "error";
 }
 
@@ -137,3 +139,9 @@ public sealed record BidResultPayload(
     int Amount,
     int CurrentHighestBid,
     string HighestBidderId);
+
+public sealed record AuctionResultPayload(
+    string ResultType,
+    string? WinnerPlayerId,
+    int Amount,
+    string TileId);

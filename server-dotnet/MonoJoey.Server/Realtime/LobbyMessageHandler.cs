@@ -107,6 +107,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.ExecuteTile => HandleExecuteTile(root, connectionContext),
             LobbyMessageTypes.EndTurn => HandleEndTurn(root, connectionContext),
             LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
+            LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
@@ -114,6 +115,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.ExecuteTileResult or
                 LobbyMessageTypes.EndTurnResult or
                 LobbyMessageTypes.BidResult or
+                LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -595,6 +597,100 @@ public sealed class LobbyMessageHandler
                 ?? throw new InvalidOperationException("Accepted auction bids must persist active auction state.");
 
             return CreateBidResult(player.PlayerId, amount, persistedAuctionState);
+        }
+    }
+
+    private LobbyServerEnvelope HandleFinalizeAuction(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "finalize_auction requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot finalize auctions.");
+            }
+
+            var activeAuctionState = session.GameState.ActiveAuctionState;
+            if (activeAuctionState is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.AuctionNotActive,
+                    "No active auction is available for finalization.");
+            }
+
+            if (!IsActiveAuctionStatus(activeAuctionState.Status))
+            {
+                return CreateError(
+                    LobbyErrorCodes.AuctionNotActive,
+                    "No active auction is available for finalization.");
+            }
+
+            var finalizationResult = AuctionManager.FinalizeAuction(
+                session.GameState,
+                activeAuctionState);
+
+            if (finalizationResult.ResultKind == AuctionFinalizationResultKind.InvalidAuctionState)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    finalizationResult.Message);
+            }
+
+            var updatedGameState = finalizationResult.GameState with
+            {
+                ActiveAuctionState = null,
+            };
+            var updatedSession = sessionManager.UpdateGameState(sessionId, updatedGameState);
+
+            return CreateAuctionResult(finalizationResult, updatedSession.GameState);
         }
     }
 
@@ -1127,6 +1223,43 @@ public sealed class LobbyMessageHandler
                     ?? throw new InvalidOperationException("Accepted auction bids must have a highest bidder.")));
     }
 
+    private static LobbyServerEnvelope CreateAuctionResult(
+        AuctionFinalizationResult finalizationResult,
+        GameState persistedGameState)
+    {
+        var tileId = finalizationResult.PropertyTileId;
+        var (resultType, winnerPlayerId, amount) = finalizationResult.ResultKind switch
+        {
+            AuctionFinalizationResultKind.FinalizedWithWinner => (
+                "won",
+                FindPropertyOwnerId(persistedGameState, tileId)
+                    ?? throw new InvalidOperationException("Finalized auction winner must own the property in persisted state."),
+                finalizationResult.WinningBid?.Amount
+                    ?? throw new InvalidOperationException("Finalized auction winner must have a winning bid.")),
+            AuctionFinalizationResultKind.FinalizedNoWinner => (
+                "no_sale",
+                null,
+                0),
+            AuctionFinalizationResultKind.WinnerFailedToPay => (
+                "failed_payment",
+                FindPersistedPlayerId(persistedGameState, finalizationResult.WinnerId)
+                    ?? throw new InvalidOperationException("Failed auction payment must identify a persisted winner."),
+                finalizationResult.WinningBid?.Amount
+                    ?? throw new InvalidOperationException("Failed auction payment must have a winning bid.")),
+            AuctionFinalizationResultKind.InvalidAuctionState => throw new InvalidOperationException(
+                "Invalid auction finalization should be returned as an error."),
+            _ => throw new InvalidOperationException("Unknown auction finalization result."),
+        };
+
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.AuctionResult,
+            new AuctionResultPayload(
+                resultType,
+                winnerPlayerId,
+                amount,
+                tileId.Value));
+    }
+
     private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
     {
         return bidResult.ResultKind switch
@@ -1204,6 +1337,37 @@ public sealed class LobbyMessageHandler
     {
         return string.Equals(connectionContext.SessionId, sessionId, StringComparison.Ordinal) &&
             string.Equals(connectionContext.PlayerId, playerId, StringComparison.Ordinal);
+    }
+
+    private static string? FindPropertyOwnerId(GameState gameState, TileId propertyTileId)
+    {
+        foreach (var player in gameState.Players)
+        {
+            if (player.OwnedPropertyIds.Contains(propertyTileId))
+            {
+                return player.PlayerId.Value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindPersistedPlayerId(GameState gameState, PlayerId? playerId)
+    {
+        if (playerId is null)
+        {
+            return null;
+        }
+
+        foreach (var player in gameState.Players)
+        {
+            if (player.PlayerId == playerId.Value)
+            {
+                return player.PlayerId.Value;
+            }
+        }
+
+        return null;
     }
 
     private static string FormatSessionStatus(GameSessionStatus status)

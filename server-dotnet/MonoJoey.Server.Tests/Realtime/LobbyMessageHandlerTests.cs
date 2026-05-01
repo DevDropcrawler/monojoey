@@ -1260,6 +1260,344 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void FinalizeAuction_ValidWinnerReturnsAuctionResultAndClearsActiveAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var beforeFinalize = session.GameState;
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var winner = afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2");
+
+        Assert.Equal("won", payload.GetProperty("resultType").GetString());
+        Assert.Equal("player_2", payload.GetProperty("winnerPlayerId").GetString());
+        Assert.Equal(260, payload.GetProperty("amount").GetInt32());
+        Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.Equal(1240, winner.Money.Amount);
+        Assert.Contains(new TileId("property_01"), winner.OwnedPropertyIds);
+        Assert.Null(afterFinalize.ActiveAuctionState);
+        Assert.Equal(beforeFinalize.Phase, afterFinalize.Phase);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WinnerFailedPaymentReturnsFailedPaymentAndClearsActiveAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { Money = new Money(100) });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var failedWinner = afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2");
+
+        Assert.Equal("failed_payment", payload.GetProperty("resultType").GetString());
+        Assert.Equal("player_2", payload.GetProperty("winnerPlayerId").GetString());
+        Assert.Equal(260, payload.GetProperty("amount").GetInt32());
+        Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.True(failedWinner.IsEliminated);
+        Assert.True(failedWinner.IsBankrupt);
+        Assert.Equal(100, failedWinner.Money.Amount);
+        Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
+        Assert.Null(afterFinalize.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_NoBidsReturnsNoSaleAndClearsActiveAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("no_sale", payload.GetProperty("resultType").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("winnerPlayerId").ValueKind);
+        Assert.Equal(0, payload.GetProperty("amount").GetInt32());
+        Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
+        Assert.Null(afterFinalize.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_EliminatedHighestBidderAwardsHighestEligibleBidder()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 20), started.SecondContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var winner = afterFinalize.Players.Single(player => player.PlayerId.Value == "player_1");
+
+        Assert.Equal("won", payload.GetProperty("resultType").GetString());
+        Assert.Equal("player_1", payload.GetProperty("winnerPlayerId").GetString());
+        Assert.Equal(10, payload.GetProperty("amount").GetInt32());
+        Assert.Equal(1490, winner.Money.Amount);
+        Assert.Contains(new TileId("property_01"), winner.OwnedPropertyIds);
+        Assert.Null(afterFinalize.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_AllBiddersEliminatedReturnsNoSale()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 20), started.SecondContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("no_sale", payload.GetProperty("resultType").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("winnerPlayerId").ValueKind);
+        Assert.Equal(0, payload.GetProperty("amount").GetInt32());
+        Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
+        Assert.Null(afterFinalize.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_NoActiveAuctionReturnsAuctionNotActive()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "auction_not_active");
+    }
+
+    [Fact]
+    public void FinalizeAuction_InactiveAuctionStatusReturnsAuctionNotActive()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var inactiveAuction = session.GameState.ActiveAuctionState! with
+        {
+            Status = (AuctionStatus)999,
+        };
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with { ActiveAuctionState = inactiveAuction });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "auction_not_active");
+    }
+
+    [Fact]
+    public void FinalizeAuction_ManagerInvalidAuctionStateReturnsInvalidSessionStateAndPreservesAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } });
+        var beforeFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        AssertError(response, "invalid_session_state");
+        Assert.Same(beforeFinalize, afterFinalize);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void FinalizeAuction_NonCurrentPlayerReturnsNotYourTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_2"));
+
+        AssertError(response, "not_your_turn");
+    }
+
+    [Fact]
+    public void FinalizeAuction_EliminatedCurrentPlayerReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void FinalizeAuction_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, FinalizeAuctionMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void FinalizeAuction_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, FinalizeAuctionMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void FinalizeAuction_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void EndTurn_AfterAuctionFinalizationClearsActiveAuctionCanAdvance()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 10), started.SecondContext);
+        _ = handler.HandleTextMessage(
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_2", payload.GetProperty("nextPlayerId").GetString());
+        Assert.Null(afterEnd.ActiveAuctionState);
+        Assert.Equal("player_2", afterEnd.CurrentTurnPlayerId?.Value);
+    }
+
+    [Fact]
     public void EndTurn_WrongPlayerContextReturnsPlayerSwitchRejected()
     {
         var sessionManager = new SessionManager();
@@ -1642,6 +1980,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentAuctionResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""auction_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -1659,6 +2008,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""end_turn"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""place_bid"",""payload"":{""playerId"":""player_1"",""amount"":10}}")]
     [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""amount"":10}}")]
+    [InlineData(@"{""type"":""finalize_auction"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""finalize_auction"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -1918,6 +2269,11 @@ public class LobbyMessageHandlerTests
     private static string PlaceBidMessage(string sessionId, string playerId, int amount)
     {
         return $@"{{""type"":""place_bid"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount}}}}}";
+    }
+
+    private static string FinalizeAuctionMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""finalize_auction"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(
