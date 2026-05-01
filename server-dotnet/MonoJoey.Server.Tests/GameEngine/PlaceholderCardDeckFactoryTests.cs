@@ -9,7 +9,7 @@ public class PlaceholderCardDeckFactoryTests
     {
         var deck = PlaceholderCardDeckFactory.CreateChanceDeck();
 
-        Assert.Equal("chance", deck.DeckId);
+        Assert.Equal(CardDeckIds.Chance, deck.DeckId);
         Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, deck.Cards.Count);
     }
 
@@ -18,7 +18,7 @@ public class PlaceholderCardDeckFactoryTests
     {
         var deck = PlaceholderCardDeckFactory.CreateTableDeck();
 
-        Assert.Equal("table", deck.DeckId);
+        Assert.Equal(CardDeckIds.Table, deck.DeckId);
         Assert.Equal(PlaceholderCardDeckFactory.TableDeckCardCount, deck.Cards.Count);
     }
 

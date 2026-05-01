@@ -10,7 +10,7 @@ public static class PlaceholderCardDeckFactory
     public static CardDeck CreateChanceDeck()
     {
         return new CardDeck(
-            "chance",
+            CardDeckIds.Chance,
             "Placeholder Chance Deck",
             new[]
             {
@@ -36,7 +36,7 @@ public static class PlaceholderCardDeckFactory
     public static CardDeck CreateTableDeck()
     {
         return new CardDeck(
-            "table",
+            CardDeckIds.Table,
             "Placeholder Table Deck",
             new[]
             {
