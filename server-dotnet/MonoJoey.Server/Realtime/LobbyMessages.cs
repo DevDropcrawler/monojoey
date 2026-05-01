@@ -45,6 +45,10 @@ public static class LobbyErrorCodes
     public const string UnsupportedTileEffect = "unsupported_tile_effect";
     public const string AuctionNotActive = "auction_not_active";
     public const string BidTooLow = "bid_too_low";
+    public const string CardDeckNotFound = "card_deck_not_found";
+    public const string CardDeckEmpty = "card_deck_empty";
+    public const string InvalidCard = "invalid_card";
+    public const string UnsupportedCardAction = "unsupported_card_action";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -105,7 +109,8 @@ public sealed record ExecuteTileResultPayload(
     string Phase,
     bool HasExecutedTileThisTurn,
     ExecuteTileAuctionPayload? Auction,
-    ExecuteTileRentPayload? Rent);
+    ExecuteTileRentPayload? Rent,
+    ExecuteTileCardPayload? Card);
 
 public sealed record ExecuteTileAuctionPayload(
     string PropertyTileId,
@@ -128,6 +133,19 @@ public sealed record ExecuteTileRentPayload(
     int? OwnerMoney,
     bool PlayerEliminated,
     string? EliminationReason);
+
+public sealed record ExecuteTileCardPayload(
+    string DeckId,
+    string CardId,
+    string DisplayName,
+    string ResolutionKind,
+    string ExecutionKind,
+    string PlayerId,
+    string CurrentTileId,
+    int Money,
+    bool IsEliminated,
+    bool IsLockedUp,
+    IReadOnlyList<string> HeldCardIds);
 
 public sealed record EndTurnResultPayload(
     string PreviousPlayerId,

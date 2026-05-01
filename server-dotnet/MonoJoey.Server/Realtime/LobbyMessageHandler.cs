@@ -415,6 +415,7 @@ public sealed class LobbyMessageHandler
                 TileResolutionActionKind.NoAction or
                     TileResolutionActionKind.StartPlaceholder => ExecuteNoActionTile(sessionId, session.GameState, resolution),
                 TileResolutionActionKind.PropertyPlaceholder => ExecutePropertyTile(sessionId, session.GameState, resolution),
+                TileResolutionActionKind.DeckPlaceholder => ExecuteCardTile(sessionId, session.GameState, resolution, player),
                 _ => CreateError(
                     LobbyErrorCodes.UnsupportedTileEffect,
                     "This resolved tile effect is not supported yet."),
@@ -928,7 +929,8 @@ public sealed class LobbyMessageHandler
             "no_action",
             updatedGameState,
             auction: null,
-            rent: null);
+            rent: null,
+            card: null);
     }
 
     private LobbyServerEnvelope ExecutePropertyTile(
@@ -956,7 +958,8 @@ public sealed class LobbyMessageHandler
                 "auction_started",
                 updatedGameState,
                 CreateAuctionPayload(auctionStart.AuctionState!),
-                rent: null);
+                rent: null,
+                card: null);
         }
 
         if (auctionStart.ResultKind != AuctionStartResultKind.PropertyAlreadyOwned)
@@ -979,7 +982,80 @@ public sealed class LobbyMessageHandler
             GetRentExecutionKind(rent),
             rentGameState,
             auction: null,
-            rent: CreateRentPayload(rent, rentGameState));
+            rent: CreateRentPayload(rent, rentGameState),
+            card: null);
+    }
+
+    private LobbyServerEnvelope ExecuteCardTile(
+        string sessionId,
+        GameState gameState,
+        TileResolutionResult tileResolution,
+        Player player)
+    {
+        if (!TryGetDeckIdForTileType(tileResolution.TileType, out var deckId))
+        {
+            return CreateError(
+                LobbyErrorCodes.UnsupportedTileEffect,
+                "This resolved tile effect is not supported yet.");
+        }
+
+        if (!gameState.CardDeckStates.TryGetValue(deckId, out var deckState))
+        {
+            return CreateError(
+                LobbyErrorCodes.CardDeckNotFound,
+                "Expected card deck state is missing from the game state.");
+        }
+
+        var drawResult = CardDeckManager.Draw(deckState);
+        if (!drawResult.Succeeded || drawResult.DrawnCard is null)
+        {
+            return CreateError(
+                LobbyErrorCodes.CardDeckEmpty,
+                "Card draw pile is empty.");
+        }
+
+        var card = drawResult.DrawnCard;
+        var cardResolution = CardResolver.ResolveCard(player, card);
+        if (!cardResolution.IsValid)
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidCard,
+                "Drawn card cannot be resolved.");
+        }
+
+        if (!IsSupportedCardResolutionAction(cardResolution.ActionKind))
+        {
+            return CreateError(
+                LobbyErrorCodes.UnsupportedCardAction,
+                "Drawn card action is not supported yet.");
+        }
+
+        var executedGameState = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+        var executedPlayer = executedGameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
+        var finalDeckState = ShouldDiscardCard(cardResolution.ActionKind)
+            ? CardDeckManager.Discard(drawResult.DeckState, card)
+            : drawResult.DeckState;
+        var cardDeckStates = new Dictionary<string, CardDeckState>(executedGameState.CardDeckStates)
+        {
+            [deckId] = finalDeckState,
+        };
+        var persistedGameState = executedGameState with
+        {
+            CardDeckStates = cardDeckStates,
+            HasExecutedTileThisTurn = true,
+        };
+
+        _ = sessionManager.UpdateGameState(sessionId, persistedGameState);
+
+        var executionKind = GetCardExecutionKind(cardResolution.ActionKind, executedPlayer);
+
+        return CreateExecuteTileResult(
+            tileResolution,
+            executionKind,
+            persistedGameState,
+            auction: null,
+            rent: null,
+            card: CreateCardPayload(deckId, card, cardResolution, executionKind, executedPlayer));
     }
 
     private void RemovePreviousSessionBindingIfNeeded(
@@ -1178,7 +1254,8 @@ public sealed class LobbyMessageHandler
         string executionKind,
         GameState gameState,
         ExecuteTileAuctionPayload? auction,
-        ExecuteTileRentPayload? rent)
+        ExecuteTileRentPayload? rent,
+        ExecuteTileCardPayload? card)
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.ExecuteTileResult,
@@ -1192,7 +1269,8 @@ public sealed class LobbyMessageHandler
                 FormatGamePhase(gameState.Phase),
                 gameState.HasExecutedTileThisTurn,
                 auction,
-                rent));
+                rent,
+                card));
     }
 
     private static LobbyServerEnvelope CreateEndTurnResult(
@@ -1323,6 +1401,69 @@ public sealed class LobbyMessageHandler
         return rent.RentCharged ? "rent_paid" : "rent_not_charged";
     }
 
+    private static ExecuteTileCardPayload CreateCardPayload(
+        string deckId,
+        Card card,
+        CardResolutionResult cardResolution,
+        string executionKind,
+        Player player)
+    {
+        return new ExecuteTileCardPayload(
+            deckId,
+            card.CardId.Value,
+            card.DisplayName,
+            FormatCardResolutionActionKind(cardResolution.ActionKind),
+            executionKind,
+            player.PlayerId.Value,
+            player.CurrentTileId.Value,
+            player.Money.Amount,
+            player.IsEliminated,
+            player.IsLockedUp,
+            player.HeldCardIds.Select(cardId => cardId.Value).ToArray());
+    }
+
+    private static bool TryGetDeckIdForTileType(TileType tileType, out string deckId)
+    {
+        deckId = tileType switch
+        {
+            TileType.ChanceDeck => CardDeckIds.Chance,
+            TileType.TableDeck => CardDeckIds.Table,
+            _ => string.Empty,
+        };
+
+        return deckId.Length > 0;
+    }
+
+    private static bool IsSupportedCardResolutionAction(CardResolutionActionKind actionKind)
+    {
+        return actionKind is CardResolutionActionKind.MoveToStart or
+            CardResolutionActionKind.MoveSteps or
+            CardResolutionActionKind.ReceiveMoney or
+            CardResolutionActionKind.PayMoney or
+            CardResolutionActionKind.GoToLockup or
+            CardResolutionActionKind.GetOutOfLockup;
+    }
+
+    private static bool ShouldDiscardCard(CardResolutionActionKind actionKind)
+    {
+        return actionKind != CardResolutionActionKind.GetOutOfLockup;
+    }
+
+    private static string GetCardExecutionKind(CardResolutionActionKind actionKind, Player player)
+    {
+        if (actionKind == CardResolutionActionKind.GetOutOfLockup)
+        {
+            return "card_held";
+        }
+
+        if (actionKind == CardResolutionActionKind.PayMoney && player.IsEliminated)
+        {
+            return "card_payment_eliminated_player";
+        }
+
+        return "card_executed";
+    }
+
     private static LobbyServerEnvelope CreateError(string code, string message)
     {
         return new LobbyServerEnvelope(
@@ -1423,6 +1564,27 @@ public sealed class LobbyMessageHandler
             TileResolutionActionKind.DeckPlaceholder => "deck_placeholder",
             TileResolutionActionKind.TaxPlaceholder => "tax_placeholder",
             TileResolutionActionKind.GoToLockupPlaceholder => "go_to_lockup_placeholder",
+            _ => actionKind.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatCardResolutionActionKind(CardResolutionActionKind actionKind)
+    {
+        return actionKind switch
+        {
+            CardResolutionActionKind.InvalidCard => "invalid_card",
+            CardResolutionActionKind.MoveToStart => "move_to_start",
+            CardResolutionActionKind.MoveToTile => "move_to_tile",
+            CardResolutionActionKind.MoveSteps => "move_steps",
+            CardResolutionActionKind.MoveToNearestTransport => "move_to_nearest_transport",
+            CardResolutionActionKind.MoveToNearestUtility => "move_to_nearest_utility",
+            CardResolutionActionKind.ReceiveMoney => "receive_money",
+            CardResolutionActionKind.PayMoney => "pay_money",
+            CardResolutionActionKind.ReceiveMoneyFromEveryPlayer => "receive_money_from_every_player",
+            CardResolutionActionKind.PayMoneyToEveryPlayer => "pay_money_to_every_player",
+            CardResolutionActionKind.RepairOwnedProperties => "repair_owned_properties",
+            CardResolutionActionKind.GoToLockup => "go_to_lockup",
+            CardResolutionActionKind.GetOutOfLockup => "get_out_of_lockup",
             _ => actionKind.ToString().ToLowerInvariant(),
         };
     }

@@ -703,9 +703,277 @@ public class LobbyMessageHandlerTests
         Assert.Equal(beforeExecute.Players[0].OwnedPropertyIds, afterExecute.Players[0].OwnedPropertyIds);
     }
 
+    [Fact]
+    public void ExecuteTile_ChanceDeckDrawsExecutesPersistsDeckAndReturnsCardPayload()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var card = payload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var chanceDeckState = afterExecute.CardDeckStates[CardDeckIds.Chance];
+
+        Assert.Equal("deck_placeholder", payload.GetProperty("actionKind").GetString());
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("auction").ValueKind);
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("rent").ValueKind);
+        Assert.Equal(CardDeckIds.Chance, card.GetProperty("deckId").GetString());
+        Assert.Equal("CHANCE_01_MOVE_TO_START", card.GetProperty("cardId").GetString());
+        Assert.Equal("CHANCE_01_MOVE_TO_START", card.GetProperty("displayName").GetString());
+        Assert.Equal("move_to_start", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal("card_executed", card.GetProperty("executionKind").GetString());
+        Assert.Equal("player_1", card.GetProperty("playerId").GetString());
+        Assert.Equal("start", card.GetProperty("currentTileId").GetString());
+        Assert.Equal(1500, card.GetProperty("money").GetInt32());
+        Assert.False(card.GetProperty("isEliminated").GetBoolean());
+        Assert.False(card.GetProperty("isLockedUp").GetBoolean());
+        Assert.Empty(card.GetProperty("heldCardIds").EnumerateArray());
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Equal("start", afterExecute.Players[0].CurrentTileId.Value);
+        Assert.Equal(15, chanceDeckState.DrawPile.Count);
+        Assert.Equal("CHANCE_02_MOVE_TO_EARLY_PROPERTY", chanceDeckState.DrawPile[0].CardId.Value);
+        Assert.Single(chanceDeckState.DiscardPile);
+        Assert.Equal("CHANCE_01_MOVE_TO_START", chanceDeckState.DiscardPile[0].CardId.Value);
+        Assert.Same(beforeExecute.CardDeckStates[CardDeckIds.Table], afterExecute.CardDeckStates[CardDeckIds.Table]);
+    }
+
+    [Fact]
+    public void ExecuteTile_TableDeckDrawsFromTableAndUpdatesMoney()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "table_01");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var card = payload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(CardDeckIds.Table, card.GetProperty("deckId").GetString());
+        Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", card.GetProperty("cardId").GetString());
+        Assert.Equal("receive_money", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal(1525, card.GetProperty("money").GetInt32());
+        Assert.Equal(new Money(1525), afterExecute.Players[0].Money);
+        Assert.Equal(15, afterExecute.CardDeckStates[CardDeckIds.Table].DrawPile.Count);
+        Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Table].DiscardPile);
+        Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", afterExecute.CardDeckStates[CardDeckIds.Table].DiscardPile[0].CardId.Value);
+        Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
+    }
+
+    [Fact]
+    public void ExecuteTile_HeldLockupEscapeCardPersistsWithoutDiscardAcrossTurns()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var holdCard = CreateCard("TEST_HOLD_ESCAPE", CardActionKind.HoldForLater);
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { holdCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var card = executePayload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_held", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("get_out_of_lockup", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal("TEST_HOLD_ESCAPE", Assert.Single(card.GetProperty("heldCardIds").EnumerateArray()).GetString());
+        Assert.Contains(new CardId("TEST_HOLD_ESCAPE"), afterExecute.Players[0].HeldCardIds);
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile);
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterEndTurn = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Contains(new CardId("TEST_HOLD_ESCAPE"), afterEndTurn.Players[0].HeldCardIds);
+        Assert.Empty(afterEndTurn.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+    }
+
+    [Fact]
+    public void ExecuteTile_PayBankCardCanEliminatePlayerAndBlockEndTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var payCard = CreateCard(
+            "TEST_PAY_BANK",
+            CardActionKind.PayBank,
+            new CardActionParameters(Amount: new Money(15)));
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with { Money = new Money(10) }
+                        : player)
+                    .ToArray(),
+            });
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { payCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var card = executePayload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_payment_eliminated_player", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("pay_money", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal(-5, card.GetProperty("money").GetInt32());
+        Assert.True(card.GetProperty("isEliminated").GetBoolean());
+        Assert.True(afterExecute.Players[0].IsEliminated);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(endTurnResponse, "player_eliminated");
+    }
+
+    [Fact]
+    public void ExecuteTile_MissingDeckReturnsCardDeckNotFoundWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                CardDeckStates = gameState.CardDeckStates
+                    .Where(entry => entry.Key != CardDeckIds.Chance)
+                    .ToDictionary(entry => entry.Key, entry => entry.Value),
+            });
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "card_deck_not_found");
+        Assert.Same(beforeExecute, afterExecute);
+    }
+
+    [Fact]
+    public void ExecuteTile_EmptyDrawPileReturnsCardDeckEmptyWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(
+                CardDeckIds.Chance,
+                Array.Empty<Card>(),
+                new[] { CreateCard("DISCARDED", CardActionKind.ReceiveFromBank) }));
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "card_deck_empty");
+        Assert.Same(beforeExecute, afterExecute);
+    }
+
+    [Fact]
+    public void ExecuteTile_UnsupportedResolvedCardActionReturnsUnsupportedCardActionWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var unsupportedCard = CreateCard(
+            "TEST_MOVE_TO_TILE",
+            CardActionKind.MoveToTile,
+            new CardActionParameters(TargetTileId: new TileId("property_01")));
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { unsupportedCard }, Array.Empty<Card>()));
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "unsupported_card_action");
+        Assert.Same(beforeExecute, afterExecute);
+    }
+
+    [Fact]
+    public void ExecuteTile_InvalidCardReturnsInvalidCardWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var invalidCard = CreateCard("TEST_INVALID", CardActionKind.ReceiveFromBank);
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { invalidCard }, Array.Empty<Card>()));
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "invalid_card");
+        Assert.Same(beforeExecute, afterExecute);
+    }
+
     [Theory]
-    [InlineData("chance_01")]
-    [InlineData("table_01")]
     [InlineData("tax_01")]
     [InlineData("go_to_lockup_01")]
     public void ExecuteTile_UnsupportedTileEffectsReturnUnsupportedTileEffectWithoutMutation(string tileId)
@@ -2175,6 +2443,34 @@ public class LobbyMessageHandlerTests
         var session = sessionManager.GetSession(sessionId)!;
 
         return sessionManager.UpdateGameState(sessionId, updateGameState(session.GameState));
+    }
+
+    private static GameSession UpdateDeckState(
+        SessionManager sessionManager,
+        string sessionId,
+        string deckId,
+        CardDeckState deckState)
+    {
+        return UpdateGameState(
+            sessionManager,
+            sessionId,
+            gameState =>
+            {
+                var deckStates = new Dictionary<string, CardDeckState>(gameState.CardDeckStates)
+                {
+                    [deckId] = deckState,
+                };
+
+                return gameState with { CardDeckStates = deckStates };
+            });
+    }
+
+    private static Card CreateCard(
+        string cardId,
+        CardActionKind actionKind,
+        CardActionParameters? parameters = null)
+    {
+        return new Card(new CardId(cardId), cardId, actionKind, parameters);
     }
 
     private static GameSession SetCurrentPlayerReadyToExecuteTile(

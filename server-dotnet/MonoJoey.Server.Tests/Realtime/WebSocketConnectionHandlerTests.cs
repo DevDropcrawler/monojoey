@@ -71,6 +71,41 @@ public class WebSocketConnectionHandlerTests
     }
 
     [Fact]
+    public async Task CardTileExecute_SendsOneExecuteTileResultResponse()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_1"), "existing_connection_1", IsReady: false));
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_2"), "existing_connection_2", IsReady: true));
+        var connectionManager = new WebSocketConnectionManager();
+        var lobbyMessageHandler = new LobbyMessageHandler(
+            sessionManager,
+            new DiceService(new FixedDiceRoller(new DiceRoll(1, 1))));
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(JoinMessage(session.SessionId, "player_1")),
+            TextFrame(SetReadyMessage(session.SessionId, "player_1", isReady: true)),
+            TextFrame(StartGameMessage(session.SessionId, "player_1")),
+            TextFrame(RollDiceMessage(session.SessionId, "player_1")),
+            TextFrame(ResolveTileMessage(session.SessionId, "player_1")),
+            TextFrame(ExecuteTileMessage(session.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        Assert.Equal(6, webSocket.SentTextMessages.Count);
+        using var executeResponse = JsonDocument.Parse(webSocket.SentTextMessages[5]);
+        var payload = executeResponse.RootElement.GetProperty("payload");
+        Assert.Equal("execute_tile_result", executeResponse.RootElement.GetProperty("type").GetString());
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("chance", payload.GetProperty("card").GetProperty("deckId").GetString());
+    }
+
+    [Fact]
     public async Task PlaceBid_SendsOneResponseForBidMessage()
     {
         var sessionManager = new SessionManager();

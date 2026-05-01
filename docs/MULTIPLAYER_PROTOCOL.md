@@ -184,6 +184,57 @@ Server validates:
 - Reason is not `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt`.
 - Player is active.
 
+### Current `/ws` card tile execution
+
+Card deck tiles reuse the existing server-authoritative `execute_tile` request. Clients do not send deck IDs or card IDs.
+
+```json
+{
+  "type": "execute_tile",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1"
+  }
+}
+```
+
+When the current tile is a chance/table deck placeholder, the server maps the tile type to the fixed deck ID (`chance` or `table`), draws the next persisted card from `GameState.CardDeckStates`, resolves it, executes supported effects atomically, and returns a single sender-only `execute_tile_result`:
+
+```json
+{
+  "type": "execute_tile_result",
+  "payload": {
+    "playerId": "player_1",
+    "tileId": "chance_01",
+    "tileIndex": 2,
+    "tileType": "chance_deck",
+    "actionKind": "deck_placeholder",
+    "executionKind": "card_executed",
+    "phase": "awaiting_roll",
+    "hasExecutedTileThisTurn": true,
+    "auction": null,
+    "rent": null,
+    "card": {
+      "deckId": "chance",
+      "cardId": "CHANCE_01_MOVE_TO_START",
+      "displayName": "CHANCE_01_MOVE_TO_START",
+      "resolutionKind": "move_to_start",
+      "executionKind": "card_executed",
+      "playerId": "player_1",
+      "currentTileId": "start",
+      "money": 1500,
+      "isEliminated": false,
+      "isLockedUp": false,
+      "heldCardIds": []
+    }
+  }
+}
+```
+
+Card execution kinds are `card_executed`, `card_held`, and `card_payment_eliminated_player`.
+
+Card-specific error codes are `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action`. These errors do not mutate `GameState`, do not draw/discard a card, and do not mark the tile as executed.
+
 ## Server event examples
 
 ### AuctionStarted

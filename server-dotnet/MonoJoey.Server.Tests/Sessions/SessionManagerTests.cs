@@ -24,6 +24,7 @@ public class SessionManagerTests
         Assert.Equal(0, session.GameState.TurnNumber);
         Assert.False(session.GameState.HasExecutedTileThisTurn);
         Assert.Null(session.GameState.ActiveAuctionState);
+        AssertInitializedCardDeckStates(session.GameState);
         Assert.Same(session, sessionManager.GetSession(session.SessionId));
     }
 
@@ -215,11 +216,49 @@ public class SessionManagerTests
         Assert.False(startedSession.GameState.HasExecutedTileThisTurn);
         Assert.Null(startedSession.GameState.ActiveAuctionState);
         Assert.Same(session.GameState.Board, startedSession.GameState.Board);
+        AssertInitializedCardDeckStates(startedSession.GameState);
 
         Assert.Collection(
             startedSession.GameState.Players,
             player => AssertStartedPlayer(player, "player_1"),
             player => AssertStartedPlayer(player, "player_2"));
+    }
+
+    [Fact]
+    public void TurnAdvance_PreservesCardDeckStatesAndHeldCards()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var chanceDraw = CardDeckManager.Draw(startedSession.GameState.CardDeckStates[CardDeckIds.Chance]);
+        var updatedChanceState = CardDeckManager.Discard(chanceDraw.DeckState, chanceDraw.DrawnCard!);
+        var deckStates = new Dictionary<string, CardDeckState>(startedSession.GameState.CardDeckStates)
+        {
+            [CardDeckIds.Chance] = updatedChanceState,
+        };
+        var heldCardId = new CardId("held_escape_01");
+        var readyToAdvance = startedSession.GameState with
+        {
+            CardDeckStates = deckStates,
+            Players = startedSession.GameState.Players
+                .Select(player => player.PlayerId.Value == "player_1"
+                    ? player with { HeldCardIds = new HashSet<CardId> { heldCardId } }
+                    : player)
+                .ToArray(),
+            HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = true,
+        };
+
+        var advanced = TurnManager.AdvanceToNextTurn(readyToAdvance);
+
+        Assert.Same(deckStates, advanced.CardDeckStates);
+        Assert.Equal(15, advanced.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
+        Assert.Single(advanced.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+        Assert.Contains(heldCardId, advanced.Players[0].HeldCardIds);
+        Assert.False(advanced.HasRolledThisTurn);
+        Assert.False(advanced.HasResolvedTileThisTurn);
+        Assert.False(advanced.HasExecutedTileThisTurn);
+        Assert.Null(advanced.ActiveAuctionState);
     }
 
     [Fact]
@@ -353,6 +392,18 @@ public class SessionManagerTests
         Assert.Empty(player.HeldCardIds);
         Assert.False(player.IsBankrupt);
         Assert.False(player.IsEliminated);
+    }
+
+    private static void AssertInitializedCardDeckStates(GameState gameState)
+    {
+        Assert.True(gameState.CardDeckStates.ContainsKey(CardDeckIds.Chance));
+        Assert.True(gameState.CardDeckStates.ContainsKey(CardDeckIds.Table));
+        Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, gameState.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
+        Assert.Equal(PlaceholderCardDeckFactory.TableDeckCardCount, gameState.CardDeckStates[CardDeckIds.Table].DrawPile.Count);
+        Assert.Equal("CHANCE_01_MOVE_TO_START", gameState.CardDeckStates[CardDeckIds.Chance].DrawPile[0].CardId.Value);
+        Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", gameState.CardDeckStates[CardDeckIds.Table].DrawPile[0].CardId.Value);
+        Assert.Empty(gameState.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+        Assert.Empty(gameState.CardDeckStates[CardDeckIds.Table].DiscardPile);
     }
 
     private static PlayerConnection CreatePlayerConnection(string playerId, bool isReady = false)

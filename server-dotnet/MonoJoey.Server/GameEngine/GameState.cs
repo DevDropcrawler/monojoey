@@ -20,4 +20,7 @@ public sealed record GameState(
     public bool HasExecutedTileThisTurn { get; init; }
 
     public AuctionState? ActiveAuctionState { get; init; }
+
+    public IReadOnlyDictionary<string, CardDeckState> CardDeckStates { get; init; } =
+        new Dictionary<string, CardDeckState>();
 }

@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.9B Auction finalization over WebSocket
-- Completion status: Chunk 5.9B complete; `/ws` now accepts sender-only `finalize_auction` from the current turn player during an active `GameState.ActiveAuctionState`, calls `AuctionManager.FinalizeAuction`, persists the manager-returned `GameState` with `ActiveAuctionState = null`, and returns one direct `auction_result` or `error` response.
+- Chunk: 5.10 Cards over WebSocket
+- Completion status: Chunk 5.10 complete; `GameState` now stores immutable replacement card deck state for `chance` and `table`, and `/ws` now executes chance/table deck placeholders through the existing sender-only `execute_tile` request with an atomic draw-resolve-execute-persist flow and nullable `card` result payload.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
@@ -15,19 +15,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.9B - WebSocket auction finalization.
+Phase 5, Chunk 5.10 - Cards over WebSocket.
 
 Completed:
 
-- Added server-local `finalize_auction` WebSocket message handling and direct `auction_result` responses.
-- Added `AuctionResultPayload` with `resultType`, nullable `winnerPlayerId`, `amount`, and `tileId`.
-- Validated finalization requests for payload fields, session existence, strict bound connection/session/player, in-game status, player presence, current turn ownership, non-eliminated caller, active auction presence, and active auction status.
-- Allowed finalization only for `AwaitingInitialBid` and `ActiveBidCountdown` auctions; missing or unknown-status auctions return `auction_not_active`.
-- Explicitly mapped `AuctionManager.FinalizeAuction` results: `FinalizedWithWinner` to `won`, `FinalizedNoWinner` to `no_sale`, `WinnerFailedToPay` to `failed_payment`, and `InvalidAuctionState` to `invalid_session_state`.
-- Persisted successful finalization using the full `GameState` returned by `AuctionManager.FinalizeAuction`, then clearing only `ActiveAuctionState` in that same update.
-- Built successful responses from the persisted `GameState`, capturing the auction tile from the finalization result before clearing active auction state.
-- Preserved sender-only behavior; no broadcasts, timers, automatic expiry, snapshots, reconnect behavior, client work, or persistence were added.
-- Added deterministic handler and WebSocket transport tests for won auctions, no-sale auctions, failed payment, eliminated bidders, invalid active auction state, wrong bound connection, non-current player rejection, lobby-session rejection, unsupported client-sent `auction_result`, one response per `finalize_auction`, and `end_turn` succeeding after finalization clears `ActiveAuctionState`.
+- Added `GameState.CardDeckStates` as an init-only state member and initialized deterministic `chance` / `table` deck states from `PlaceholderCardDeckFactory` at session/game creation.
+- Added `CardDeckIds` constants and used them for placeholder deck definitions, session initialization, and tile-type-to-deck mapping.
+- Preserved deck state, discard piles, and player held cards through full immutable `GameState` replacement and turn advancement.
+- Extended `execute_tile_result` with nullable `card` metadata while preserving nullable `auction` and `rent`.
+- Routed `TileResolutionActionKind.DeckPlaceholder` through server-authoritative card execution only; clients still send only `execute_tile` and never choose deck/card IDs.
+- Implemented atomic card draw + resolve + supported execution + deck-state replacement. `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` return errors without mutating state or marking the tile executed.
+- Discarded non-held cards after successful execution and kept held lockup escape cards in `Player.HeldCardIds` without discarding.
+- Added deterministic handler and WebSocket transport tests for chance/table deck execution, money updates, held cards, elimination, missing decks, empty decks, invalid cards, unsupported card actions, and one response per card-tile `execute_tile`.
 
 Not included by explicit user scope:
 
@@ -45,10 +44,17 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckIds.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
+- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -85,6 +91,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeck.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckIds.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDrawResult.cs`
@@ -123,19 +130,17 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
+- `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
+  - Result: succeeded.
+  - Output summary: 321 tests passed.
+  - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
   - Output summary: build succeeded, 2 warnings, 0 errors.
-  - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
-- `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
-  - Result: succeeded.
-  - Output summary: 294 tests passed.
   - Warnings: same `NU1900` vulnerability-data lookup warning.
 - `git diff --check`
   - Result: succeeded.
   - Output summary: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings.
-- `git status --short --branch`
-  - Result after validation: `main...origin/main` with modified `docs/SESSION_HANDOVER.md`, realtime source files, and focused realtime tests.
 
 ## Known Issues
 
@@ -174,12 +179,14 @@ Not included by explicit user scope:
 - `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, broadcast, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats.
 - A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `execute_tile` requires a successful roll and resolve in the same turn before execution.
-- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, and nullable `auction` / `rent` metadata.
+- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, and nullable `auction`, `rent`, and `card` metadata.
 - `execute_tile` starts mandatory auctions for unowned auctionable property placeholders and stores the resulting `AuctionState` in `GameState.ActiveAuctionState`; it does not place bids, finalize auctions, transfer auction ownership, start timers, broadcast, or change `GamePhase`.
 - `execute_tile` pays base rent for property placeholders owned by another player through `PropertyManager.PayRentForCurrentTile`; insufficient rent uses the existing hard-elimination bankruptcy behavior.
 - `execute_tile` reports `rent_not_charged` for self-owned properties and leaves balances unchanged.
 - `execute_tile` treats start/free/no-action tiles as no-op execution and only marks `GameState.HasExecutedTileThisTurn = true`.
-- `execute_tile` returns `unsupported_tile_effect` without mutating session state for chance/table deck placeholders, tax placeholders, and go-to-lockup placeholders.
+- `execute_tile` executes chance/table deck placeholders through persisted `GameState.CardDeckStates`; tax placeholders and go-to-lockup placeholders still return `unsupported_tile_effect` without mutating session state.
+- Card-tile `execute_tile` maps tile type deterministically to `chance` or `table`, draws the top persisted card, resolves it, executes supported actions, replaces `GameState.CardDeckStates`, marks the tile executed, and returns card metadata in the same `execute_tile_result`.
+- Card-tile errors `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` do not mutate session state and do not mark `GameState.HasExecutedTileThisTurn`.
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
 - `end_turn` requires a successful roll, resolve, and execute in the same turn before advancing.
@@ -215,9 +222,9 @@ Not included by explicit user scope:
 - Placeholder card decks have fixed ordered definitions; `CardDeckState.FromDeck()` preserves that order for deterministic draw behavior.
 - Placeholder card action parameters are functional metadata only; tile targets and money amounts are not final card design.
 - Empty card draw piles return `CardDrawResultKind.DrawPileEmpty`; discards are not reshuffled yet.
-- Card deck state is standalone and is not stored in `GameState` yet.
-- `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; it does not mutate state or discard cards.
-- `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged in this chunk.
+- Card deck state is stored in `GameState.CardDeckStates` using full immutable replacement; deck states are keyed by the `CardDeckIds.Chance` / `CardDeckIds.Table` constants.
+- `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; WebSocket card execution returns `invalid_card` before persisting any draw, discard, execution flag, or player mutation.
+- `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged, and WebSocket card execution pre-filters those actions as `unsupported_card_action` before calling it.
 - Lockup uses the placeholder `lockup_01` tile ID only; there is no advanced jail location selection or custom board lookup beyond requiring that tile to exist.
 - Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
@@ -297,6 +304,10 @@ Not included by explicit user scope:
 - `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
+- WebSocket card tile execution is the integration boundary that composes `CardDeckManager.Draw()`, `CardResolver.ResolveCard()`, `CardEffectExecutor.ExecuteCardEffect()`, and a final immutable `GameState` replacement.
+- Supported WebSocket card actions are currently `MoveToStart`, `MoveSteps`, `ReceiveMoney`, `PayMoney`, `GoToLockup`, and `GetOutOfLockup`.
+- Out-of-scope resolved actions remain `MoveToTile`, `MoveToNearestTransport`, `MoveToNearestUtility`, `ReceiveMoneyFromEveryPlayer`, `PayMoneyToEveryPlayer`, and `RepairOwnedProperties`.
+- Successful non-held cards are appended to that deck's discard pile; successful held escape cards stay only in `Player.HeldCardIds` until a later explicit use path consumes them.
 - Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
 - `CardResolver.ResolveCard(player, card)` maps `CardActionKind` plus card parameters into `CardResolutionResult` only.
 - `CardResolver.ResolveCard(player, card)` does not accept `GameState`, does not mutate player state, and does not execute the resolved effect.
@@ -337,7 +348,7 @@ Do not implement before its assigned chunk:
 - Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
 - Broader turn execution over network beyond the explicit roll, resolve, execute, and end-turn slices already implemented.
-- Unsupported tile effect execution beyond Phase 5.7's property auction/rent/no-op execution.
+- Unsupported tile effect execution beyond property auction/rent/no-op and the Phase 5.10 supported card actions.
 - UI.
 - Persistence.
 - Scaling.
@@ -358,4 +369,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.8 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.10 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

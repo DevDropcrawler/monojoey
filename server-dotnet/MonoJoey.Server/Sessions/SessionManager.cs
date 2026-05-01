@@ -22,7 +22,10 @@ public sealed class SessionManager
             CurrentTurnPlayerId: null,
             TurnNumber: 0,
             DateTimeOffset.UtcNow,
-            EndedAtUtc: null);
+            EndedAtUtc: null)
+        {
+            CardDeckStates = CreateInitialCardDeckStates(),
+        };
 
         var session = new GameSession(
             sessionId,
@@ -146,7 +149,10 @@ public sealed class SessionManager
             CurrentTurnPlayerId: null,
             TurnNumber: 0,
             DateTimeOffset.UtcNow,
-            EndedAtUtc: null);
+            EndedAtUtc: null)
+        {
+            CardDeckStates = CreateInitialCardDeckStates(),
+        };
         var startedGameState = TurnManager.StartFirstTurn(lobbyGameState);
 
         var updatedSession = session with
@@ -216,5 +222,14 @@ public sealed class SessionManager
             new HashSet<CardId>(),
             IsBankrupt: false,
             IsEliminated: false);
+    }
+
+    private static IReadOnlyDictionary<string, CardDeckState> CreateInitialCardDeckStates()
+    {
+        return new Dictionary<string, CardDeckState>
+        {
+            [CardDeckIds.Chance] = CardDeckState.FromDeck(PlaceholderCardDeckFactory.CreateChanceDeck()),
+            [CardDeckIds.Table] = CardDeckState.FromDeck(PlaceholderCardDeckFactory.CreateTableDeck()),
+        };
     }
 }
