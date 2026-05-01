@@ -110,6 +110,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
             LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
             LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
+            LobbyMessageTypes.GetSnapshot => HandleGetSnapshot(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
@@ -119,6 +120,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidResult or
                 LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.LoanResult or
+                LobbyMessageTypes.SnapshotResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -854,6 +856,53 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyServerEnvelope HandleGetSnapshot(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "get_snapshot requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var gameState = session.GameState;
+            if (!gameState.Players.Any(gamePlayer => gamePlayer.PlayerId.Value == playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            return CreateSnapshotResult(gameState);
+        }
+    }
+
     private LobbyServerEnvelope HandleJoinLobby(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1411,6 +1460,133 @@ public sealed class LobbyMessageHandler
                         player.CurrentTileId.Value,
                         player.Money.Amount))
                     .ToArray()));
+    }
+
+    private static LobbyServerEnvelope CreateSnapshotResult(GameState gameState)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.SnapshotResult,
+            new SnapshotPayload(
+                SnapshotVersion: 1,
+                SessionId: gameState.MatchId.Value,
+                Status: "in_game",
+                MatchId: gameState.MatchId.Value,
+                Phase: FormatGamePhase(gameState.Phase),
+                StartedAtUtc: gameState.StartedAtUtc,
+                EndedAtUtc: gameState.EndedAtUtc,
+                Turn: CreateSnapshotTurn(gameState),
+                Players: gameState.Players
+                    .Select(CreateSnapshotPlayer)
+                    .ToArray(),
+                Board: CreateSnapshotBoard(gameState),
+                ActiveAuction: gameState.ActiveAuctionState is null
+                    ? null
+                    : CreateSnapshotAuction(gameState.ActiveAuctionState),
+                CardDecks: gameState.CardDeckStates
+                    .OrderBy(deckState => deckState.Value.DeckId, StringComparer.Ordinal)
+                    .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
+                    .ToArray(),
+                LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled)));
+    }
+
+    private static SnapshotTurnPayload CreateSnapshotTurn(GameState gameState)
+    {
+        return new SnapshotTurnPayload(
+            gameState.CurrentTurnPlayerId?.Value,
+            gameState.TurnNumber,
+            gameState.HasRolledThisTurn,
+            gameState.HasResolvedTileThisTurn,
+            gameState.HasExecutedTileThisTurn);
+    }
+
+    private static SnapshotPlayerPayload CreateSnapshotPlayer(Player player)
+    {
+        return new SnapshotPlayerPayload(
+            player.PlayerId.Value,
+            player.Username,
+            player.TokenId,
+            player.ColorId,
+            player.Money.Amount,
+            player.CurrentTileId.Value,
+            player.OwnedPropertyIds
+                .Select(tileId => tileId.Value)
+                .OrderBy(tileId => tileId, StringComparer.Ordinal)
+                .ToArray(),
+            player.HeldCardIds
+                .Select(cardId => cardId.Value)
+                .OrderBy(cardId => cardId, StringComparer.Ordinal)
+                .ToArray(),
+            CreateSnapshotLoan(player.LoanState),
+            player.IsBankrupt,
+            player.IsEliminated,
+            player.IsLockedUp);
+    }
+
+    private static SnapshotPlayerLoanPayload CreateSnapshotLoan(PlayerLoanState? loanState)
+    {
+        return new SnapshotPlayerLoanPayload(
+            loanState?.TotalBorrowed.Amount ?? 0,
+            loanState?.CurrentInterestRatePercent ?? 0,
+            loanState?.NextTurnInterestDue.Amount ?? 0,
+            loanState?.LoanTier ?? 0);
+    }
+
+    private static SnapshotBoardPayload CreateSnapshotBoard(GameState gameState)
+    {
+        return new SnapshotBoardPayload(
+            gameState.Board.BoardId.Value,
+            gameState.Board.Version,
+            gameState.Board.DisplayName,
+            gameState.Board.Tiles
+                .OrderBy(tile => tile.Index)
+                .ThenBy(tile => tile.TileId.Value, StringComparer.Ordinal)
+                .Select(tile => CreateSnapshotBoardTile(tile, gameState))
+                .ToArray());
+    }
+
+    private static SnapshotBoardTilePayload CreateSnapshotBoardTile(Tile tile, GameState gameState)
+    {
+        return new SnapshotBoardTilePayload(
+            tile.TileId.Value,
+            tile.Index,
+            tile.DisplayName,
+            FormatTileType(tile.TileType),
+            tile.GroupId,
+            tile.Price?.Amount,
+            tile.RentTable.Select(rent => rent.Amount).ToArray(),
+            tile.UpgradeCost?.Amount,
+            tile.IsPurchasable,
+            tile.IsAuctionable,
+            FindPropertyOwnerId(gameState, tile.TileId));
+    }
+
+    private static SnapshotAuctionPayload CreateSnapshotAuction(AuctionState auctionState)
+    {
+        return new SnapshotAuctionPayload(
+            auctionState.PropertyTileId.Value,
+            auctionState.TriggeringPlayerId.Value,
+            FormatAuctionStatus(auctionState.Status),
+            auctionState.StartingBid.Amount,
+            auctionState.MinimumBidIncrement.Amount,
+            auctionState.InitialPreBidSeconds,
+            auctionState.BidResetSeconds,
+            auctionState.HighestBid?.Amount,
+            auctionState.HighestBidderId?.Value,
+            auctionState.CountdownDurationSeconds,
+            auctionState.Bids
+                .Select(bid => new SnapshotAuctionBidPayload(
+                    bid.BidderId.Value,
+                    bid.Amount.Amount,
+                    bid.PlacedAtUtc))
+                .ToArray());
+    }
+
+    private static SnapshotCardDeckPayload CreateSnapshotCardDeck(CardDeckState deckState)
+    {
+        return new SnapshotCardDeckPayload(
+            deckState.DeckId,
+            deckState.DrawPile.Select(card => card.CardId.Value).ToArray(),
+            deckState.DiscardPile.Select(card => card.CardId.Value).ToArray());
     }
 
     private static LobbyServerEnvelope CreateRollResult(

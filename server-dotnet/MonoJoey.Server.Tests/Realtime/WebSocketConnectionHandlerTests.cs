@@ -207,6 +207,37 @@ public class WebSocketConnectionHandlerTests
         Assert.Equal(1700, payload.GetProperty("money").GetInt32());
     }
 
+    [Fact]
+    public async Task GetSnapshot_SendsOneResponseForSnapshotMessage()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_1"), "existing_connection_1", IsReady: false));
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_2"), "existing_connection_2", IsReady: true));
+        var connectionManager = new WebSocketConnectionManager();
+        var lobbyMessageHandler = new LobbyMessageHandler(
+            sessionManager,
+            new DiceService(new FixedDiceRoller(new DiceRoll(1, 2))));
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(JoinMessage(session.SessionId, "player_1")),
+            TextFrame(SetReadyMessage(session.SessionId, "player_1", isReady: true)),
+            TextFrame(StartGameMessage(session.SessionId, "player_1")),
+            TextFrame(GetSnapshotMessage(session.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        Assert.Equal(4, webSocket.SentTextMessages.Count);
+        using var snapshotResponse = JsonDocument.Parse(webSocket.SentTextMessages[3]);
+        Assert.Equal("snapshot_result", snapshotResponse.RootElement.GetProperty("type").GetString());
+        Assert.Equal(1, snapshotResponse.RootElement.GetProperty("payload").GetProperty("snapshotVersion").GetInt32());
+    }
+
     private static ReceivedFrame TextFrame(string message)
     {
         return new ReceivedFrame(
@@ -272,6 +303,11 @@ public class WebSocketConnectionHandlerTests
     private static string TakeLoanMessage(string sessionId, string playerId, int amount, string reason)
     {
         return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
+    }
+
+    private static string GetSnapshotMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""get_snapshot"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record ReceivedFrame(

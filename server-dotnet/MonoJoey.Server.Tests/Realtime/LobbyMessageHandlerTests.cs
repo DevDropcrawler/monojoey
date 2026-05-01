@@ -1979,6 +1979,235 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void GetSnapshot_ValidRequestReturnsDeterministicCopiedState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var placedAtUtc = new DateTimeOffset(2026, 5, 2, 0, 0, 0, TimeSpan.Zero);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState =>
+            {
+                var updatedPlayers = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            Money = new Money(1234),
+                            CurrentTileId = new TileId("property_01"),
+                            OwnedPropertyIds = new HashSet<TileId>
+                            {
+                                new("property_02"),
+                                new("property_01"),
+                            },
+                            HeldCardIds = new HashSet<CardId>
+                            {
+                                new("Z_HELD"),
+                                new("A_HELD"),
+                            },
+                            LoanState = new PlayerLoanState(
+                                new Money(300),
+                                CurrentInterestRatePercent: 15,
+                                new Money(45),
+                                LoanTier: 2),
+                            IsLockedUp = true,
+                        }
+                        : player)
+                    .ToArray();
+                var deckStates = new Dictionary<string, CardDeckState>
+                {
+                    [CardDeckIds.Table] = new(
+                        CardDeckIds.Table,
+                        new[] { CreateCard("TABLE_02", CardActionKind.Unspecified) },
+                        new[] { CreateCard("TABLE_01", CardActionKind.Unspecified) }),
+                    [CardDeckIds.Chance] = new(
+                        CardDeckIds.Chance,
+                        new[] { CreateCard("CHANCE_02", CardActionKind.Unspecified) },
+                        new[] { CreateCard("CHANCE_01", CardActionKind.Unspecified) }),
+                };
+
+                return gameState with
+                {
+                    Players = updatedPlayers,
+                    TurnNumber = 3,
+                    HasRolledThisTurn = true,
+                    HasResolvedTileThisTurn = true,
+                    HasExecutedTileThisTurn = false,
+                    ActiveAuctionState = new AuctionState(
+                        new TileId("property_01"),
+                        new PlayerId("player_1"),
+                        AuctionStatus.ActiveBidCountdown,
+                        new Money(10),
+                        new Money(1),
+                        InitialPreBidSeconds: 9,
+                        BidResetSeconds: 3,
+                        new[] { new AuctionBid(new PlayerId("player_2"), new Money(20), placedAtUtc) },
+                        new Money(20),
+                        new PlayerId("player_2"),
+                        CountdownDurationSeconds: 3),
+                    CardDeckStates = deckStates,
+                };
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var turn = payload.GetProperty("turn");
+        var players = payload.GetProperty("players").EnumerateArray().ToArray();
+        var firstPlayer = players[0];
+        var propertyTile = payload
+            .GetProperty("board")
+            .GetProperty("tiles")
+            .EnumerateArray()
+            .Single(tile => tile.GetProperty("tileId").GetString() == "property_01");
+        var auction = payload.GetProperty("activeAuction");
+        var bid = Assert.Single(auction.GetProperty("bids").EnumerateArray());
+        var decks = payload.GetProperty("cardDecks").EnumerateArray().ToArray();
+
+        Assert.Equal(1, payload.GetProperty("snapshotVersion").GetInt32());
+        Assert.Equal(started.Session.SessionId, payload.GetProperty("sessionId").GetString());
+        Assert.Equal("in_game", payload.GetProperty("status").GetString());
+        Assert.Equal(started.Session.SessionId, payload.GetProperty("matchId").GetString());
+        Assert.Equal("awaiting_roll", payload.GetProperty("phase").GetString());
+        Assert.Equal("player_1", turn.GetProperty("currentPlayerId").GetString());
+        Assert.Equal(3, turn.GetProperty("turnIndex").GetInt32());
+        Assert.True(turn.GetProperty("hasRolledThisTurn").GetBoolean());
+        Assert.True(turn.GetProperty("hasResolvedTileThisTurn").GetBoolean());
+        Assert.False(turn.GetProperty("hasExecutedTileThisTurn").GetBoolean());
+        Assert.Equal(new[] { "player_1", "player_2" }, players.Select(player => player.GetProperty("playerId").GetString()).ToArray());
+        Assert.Equal(new[] { "property_01", "property_02" }, firstPlayer.GetProperty("ownedPropertyIds").EnumerateArray().Select(id => id.GetString()).ToArray());
+        Assert.Equal(new[] { "A_HELD", "Z_HELD" }, firstPlayer.GetProperty("heldCardIds").EnumerateArray().Select(id => id.GetString()).ToArray());
+        Assert.Equal(1234, firstPlayer.GetProperty("money").GetInt32());
+        Assert.True(firstPlayer.GetProperty("isLockedUp").GetBoolean());
+        Assert.Equal(300, firstPlayer.GetProperty("loan").GetProperty("totalBorrowed").GetInt32());
+        Assert.Equal(15, firstPlayer.GetProperty("loan").GetProperty("currentInterestRatePercent").GetInt32());
+        Assert.Equal(45, firstPlayer.GetProperty("loan").GetProperty("nextTurnInterestDue").GetInt32());
+        Assert.Equal(2, firstPlayer.GetProperty("loan").GetProperty("loanTier").GetInt32());
+        Assert.Equal("player_1", propertyTile.GetProperty("ownerPlayerId").GetString());
+        Assert.Equal(new[] { 2, 10, 30, 90, 160, 250 }, propertyTile.GetProperty("rentTable").EnumerateArray().Select(rent => rent.GetInt32()).ToArray());
+        Assert.Equal("active_bid_countdown", auction.GetProperty("status").GetString());
+        Assert.Equal(20, auction.GetProperty("highestBid").GetInt32());
+        Assert.Equal("player_2", auction.GetProperty("highestBidderId").GetString());
+        Assert.Equal("player_2", bid.GetProperty("bidderPlayerId").GetString());
+        Assert.Equal(20, bid.GetProperty("amount").GetInt32());
+        Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
+        Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
+        Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void GetSnapshot_NoActiveAuctionReturnsNullAndDoesNotMutateGameState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var beforeSnapshot = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var afterSnapshot = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("activeAuction").ValueKind);
+        Assert.Same(beforeSnapshot, afterSnapshot);
+    }
+
+    [Fact]
+    public void GetSnapshot_AfterBidAndLoanReflectsPersistedState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 20), started.SecondContext);
+        _ = handler.HandleTextMessage(TakeLoanMessage(started.Session.SessionId, "player_2", 200, "auction_bid"), started.SecondContext);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_2"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var secondPlayer = payload
+            .GetProperty("players")
+            .EnumerateArray()
+            .Single(player => player.GetProperty("playerId").GetString() == "player_2");
+
+        Assert.Equal(20, payload.GetProperty("activeAuction").GetProperty("highestBid").GetInt32());
+        Assert.Equal("player_2", payload.GetProperty("activeAuction").GetProperty("highestBidderId").GetString());
+        Assert.Equal(1700, secondPlayer.GetProperty("money").GetInt32());
+        Assert.Equal(200, secondPlayer.GetProperty("loan").GetProperty("totalBorrowed").GetInt32());
+    }
+
+    [Fact]
+    public void GetSnapshot_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(handler, context, GetSnapshotMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void GetSnapshot_BindingMismatchReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var unboundContext = new LobbyConnectionContext("connection_3");
+        var wrongSessionContext = new LobbyConnectionContext("connection_4");
+        wrongSessionContext.Bind("wrong_session", "player_1");
+
+        using var unboundResponse = Handle(
+            handler,
+            unboundContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        using var wrongPlayerResponse = Handle(
+            handler,
+            started.SecondContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        using var wrongSessionResponse = Handle(
+            handler,
+            wrongSessionContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(unboundResponse, "player_switch_rejected");
+        AssertError(wrongPlayerResponse, "player_switch_rejected");
+        AssertError(wrongSessionResponse, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void GetSnapshot_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
     public void FinalizeAuction_ValidWinnerReturnsAuctionResultAndClearsActiveAuction()
     {
         var sessionManager = new SessionManager();
@@ -2745,6 +2974,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentSnapshotResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""snapshot_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -2766,6 +3006,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""finalize_auction"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""take_loan"",""payload"":{""playerId"":""player_1"",""amount"":10,""reason"":""rent_payment""}}")]
     [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""amount"":10,""reason"":""rent_payment""}}")]
+    [InlineData(@"{""type"":""get_snapshot"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""get_snapshot"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -3063,6 +3305,11 @@ public class LobbyMessageHandlerTests
     private static string TakeLoanMessage(string sessionId, string playerId, int amount, string reason)
     {
         return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
+    }
+
+    private static string GetSnapshotMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""get_snapshot"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(

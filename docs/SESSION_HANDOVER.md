@@ -5,24 +5,26 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.12 Turn/Action Blocking Audit
-- Completion status: Chunk 5.12 complete; `/ws` now explicitly blocks locked players from incomplete normal-turn completion and non-auction loans outside auctions while preserving completed-turn `end_turn` and active-auction exceptions.
+- Chunk: 5.13 Full Game Snapshot / State Sync
+- Completion status: Chunk 5.13 complete; `/ws` now supports sender-only `get_snapshot` / `snapshot_result` for deterministic full gameplay state projection from persisted `GameState`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-05-02 08:47 +12:00
+- Date/time: 2026-05-02 09:30 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.12 - Turn/Action Blocking Audit.
+Phase 5, Chunk 5.13 - Full Game Snapshot / State Sync.
 
 Completed:
 
-- Added a locked-player `end_turn` guard that ignores lock status only after roll, resolve, successful execute, no active auction, and a non-eliminated current player are already true.
-- Blocked locked current players from supported non-auction `take_loan` requests outside active auctions before any state update.
-- Preserved active-auction exceptions for locked, non-eliminated players: bidding, `auction_bid` loans, and current-player auction finalization.
-- Added regression coverage for GoToLockup card execution followed by `end_turn`, incomplete locked `end_turn`, locked auction bidding/finalization, locked auction loans, and locked normal loan rejection.
+- Added client request type `get_snapshot` and server response type `snapshot_result`.
+- Added explicit snapshot DTO records instead of serializing domain records directly.
+- Built snapshots only from `session.GameState` while holding the realtime handler `sessionLock`; no managers are called and `GameState` is not mutated.
+- Included `snapshotVersion`, session/match/phase/timestamps, turn flags, players, board tiles with owner IDs, nullable active auction, card deck IDs, and loan shark config.
+- Enforced deterministic snapshot ordering: players preserve persisted order; owned property IDs and held card IDs sort ascending; card decks sort by deck ID; board tiles sort by index then tile ID.
+- Added handler and WebSocket transport coverage for validation, no-mutation behavior, active-auction nulls, post-action state reflection, and sender-only one-response behavior.
 
 Not included by explicit user scope:
 
@@ -39,8 +41,6 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
@@ -124,7 +124,7 @@ Not included by explicit user scope:
 
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 351 tests passed.
+  - Output summary: 367 tests passed.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
@@ -149,7 +149,7 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -209,6 +209,12 @@ Not included by explicit user scope:
 - Accepted `take_loan` calls persist the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch money or loan fields.
 - `loan_result` is sender-only and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
+- `get_snapshot` requires a bound in-game session/player connection and returns `invalid_payload`, `invalid_session`, `player_switch_rejected`, `invalid_session_state`, or `player_not_found` before producing a snapshot.
+- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` status, phase, start/end timestamps, turn flags directly from `GameState`, players, board, nullable active auction, card decks, and loan shark config.
+- Snapshot projection is built only from persisted `GameState` while holding the realtime handler `sessionLock`; it does not call mutating managers and does not call `SessionManager.UpdateGameState`.
+- Snapshot DTOs fully copy scalar values and arrays; domain records, `GameSession.Players`, WebSocket connection IDs, lobby connection metadata, transport IDs, auth tokens, and reconnect secrets are not exposed.
+- Snapshot ordering is deterministic: engine players preserve `GameState.Players` order; owned property IDs and held card IDs sort ascending; card decks sort by deck ID; board tiles sort by index then tile ID; auction bids and deck piles preserve persisted order.
+- Snapshot `activeAuction` is `null` when `GameState.ActiveAuctionState` is null.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
@@ -250,7 +256,7 @@ Not included by explicit user scope:
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not mutate match membership or remove engine players.
 - Lobby messages are direct request/response only; broadcasts are intentionally deferred.
-- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, and `end_turn` messages are also direct request/response only; broadcasts remain intentionally deferred.
+- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, and `get_snapshot` messages are also direct request/response only; broadcasts remain intentionally deferred.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
 - Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
 - Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
@@ -333,7 +339,7 @@ Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
-- Add automatic auction timers/expiry, gameplay snapshots, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
+- Add automatic auction timers/expiry, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
 
@@ -372,4 +378,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.11 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.13 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

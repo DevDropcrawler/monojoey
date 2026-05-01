@@ -14,6 +14,7 @@ public static class LobbyMessageTypes
     public const string PlaceBid = "place_bid";
     public const string FinalizeAuction = "finalize_auction";
     public const string TakeLoan = "take_loan";
+    public const string GetSnapshot = "get_snapshot";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
@@ -23,6 +24,7 @@ public static class LobbyMessageTypes
     public const string BidResult = "bid_result";
     public const string AuctionResult = "auction_result";
     public const string LoanResult = "loan_result";
+    public const string SnapshotResult = "snapshot_result";
     public const string Error = "error";
 }
 
@@ -178,3 +180,90 @@ public sealed record LoanResultPayload(
     int CurrentInterestRatePercent,
     int NextTurnInterestDue,
     int LoanTier);
+
+public sealed record SnapshotPayload(
+    int SnapshotVersion,
+    string SessionId,
+    string Status,
+    string MatchId,
+    string Phase,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset? EndedAtUtc,
+    SnapshotTurnPayload Turn,
+    IReadOnlyList<SnapshotPlayerPayload> Players,
+    SnapshotBoardPayload Board,
+    SnapshotAuctionPayload? ActiveAuction,
+    IReadOnlyList<SnapshotCardDeckPayload> CardDecks,
+    SnapshotLoanSharkPayload LoanShark);
+
+public sealed record SnapshotTurnPayload(
+    string? CurrentPlayerId,
+    int TurnIndex,
+    bool HasRolledThisTurn,
+    bool HasResolvedTileThisTurn,
+    bool HasExecutedTileThisTurn);
+
+public sealed record SnapshotPlayerPayload(
+    string PlayerId,
+    string Username,
+    string TokenId,
+    string ColorId,
+    int Money,
+    string CurrentTileId,
+    IReadOnlyList<string> OwnedPropertyIds,
+    IReadOnlyList<string> HeldCardIds,
+    SnapshotPlayerLoanPayload Loan,
+    bool IsBankrupt,
+    bool IsEliminated,
+    bool IsLockedUp);
+
+public sealed record SnapshotPlayerLoanPayload(
+    int TotalBorrowed,
+    int CurrentInterestRatePercent,
+    int NextTurnInterestDue,
+    int LoanTier);
+
+public sealed record SnapshotBoardPayload(
+    string BoardId,
+    int Version,
+    string DisplayName,
+    IReadOnlyList<SnapshotBoardTilePayload> Tiles);
+
+public sealed record SnapshotBoardTilePayload(
+    string TileId,
+    int Index,
+    string DisplayName,
+    string TileType,
+    string? GroupId,
+    int? Price,
+    IReadOnlyList<int> RentTable,
+    int? UpgradeCost,
+    bool IsPurchasable,
+    bool IsAuctionable,
+    string? OwnerPlayerId);
+
+public sealed record SnapshotAuctionPayload(
+    string PropertyTileId,
+    string TriggeringPlayerId,
+    string Status,
+    int StartingBid,
+    int MinimumBidIncrement,
+    int InitialPreBidSeconds,
+    int BidResetSeconds,
+    int? HighestBid,
+    string? HighestBidderId,
+    int? CountdownDurationSeconds,
+    IReadOnlyList<SnapshotAuctionBidPayload> Bids);
+
+public sealed record SnapshotAuctionBidPayload(
+    string BidderPlayerId,
+    int Amount,
+    DateTimeOffset PlacedAtUtc);
+
+public sealed record SnapshotCardDeckPayload(
+    string DeckId,
+    IReadOnlyList<string> DrawPileCardIds,
+    IReadOnlyList<string> DiscardPileCardIds);
+
+public sealed record SnapshotLoanSharkPayload(
+    bool Enabled);

@@ -209,6 +209,105 @@ Accepted loans return one sender-only `loan_result` and do not place bids automa
 
 Rejected loans return the standard `error` envelope and do not mutate `GameState`.
 
+### Get snapshot
+
+`get_snapshot` returns a sender-only full gameplay snapshot for a bound in-game player. It does not broadcast, poll, emit diffs, change phase, or mutate `GameState`.
+
+```json
+{
+  "type": "get_snapshot",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1"
+  }
+}
+```
+
+Server validates:
+
+- Payload includes `sessionId` and `playerId`.
+- Session exists and is in `in_game` status.
+- Sender connection is bound to exactly the requested session/player.
+- Requested player exists in `GameState.Players`.
+
+Accepted snapshots return one direct `snapshot_result` response:
+
+```json
+{
+  "type": "snapshot_result",
+  "payload": {
+    "snapshotVersion": 1,
+    "sessionId": "session_123",
+    "status": "in_game",
+    "matchId": "session_123",
+    "phase": "awaiting_roll",
+    "startedAtUtc": "2026-05-02T00:00:00Z",
+    "endedAtUtc": null,
+    "turn": {
+      "currentPlayerId": "player_1",
+      "turnIndex": 3,
+      "hasRolledThisTurn": true,
+      "hasResolvedTileThisTurn": true,
+      "hasExecutedTileThisTurn": false
+    },
+    "players": [
+      {
+        "playerId": "player_1",
+        "username": "player_1",
+        "tokenId": "token_player_1",
+        "colorId": "color_player_1",
+        "money": 1500,
+        "currentTileId": "property_01",
+        "ownedPropertyIds": ["property_02"],
+        "heldCardIds": [],
+        "loan": {
+          "totalBorrowed": 0,
+          "currentInterestRatePercent": 0,
+          "nextTurnInterestDue": 0,
+          "loanTier": 0
+        },
+        "isBankrupt": false,
+        "isEliminated": false,
+        "isLockedUp": false
+      }
+    ],
+    "board": {
+      "boardId": "default_board_v1",
+      "version": 1,
+      "displayName": "Default Board V1",
+      "tiles": [
+        {
+          "tileId": "property_01",
+          "index": 1,
+          "displayName": "Placeholder Property 01",
+          "tileType": "property",
+          "groupId": "group_01",
+          "price": 60,
+          "rentTable": [2, 10, 30, 90, 160, 250],
+          "upgradeCost": 50,
+          "isPurchasable": true,
+          "isAuctionable": true,
+          "ownerPlayerId": null
+        }
+      ]
+    },
+    "activeAuction": null,
+    "cardDecks": [
+      {
+        "deckId": "chance",
+        "drawPileCardIds": ["CHANCE_02_MOVE_TO_EARLY_PROPERTY"],
+        "discardPileCardIds": ["CHANCE_01_MOVE_TO_START"]
+      }
+    ],
+    "loanShark": {
+      "enabled": true
+    }
+  }
+}
+```
+
+Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Active auction is `null` when no auction exists. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+
 ### Current `/ws` card tile execution
 
 Card deck tiles reuse the existing server-authoritative `execute_tile` request. Clients do not send deck IDs or card IDs.
