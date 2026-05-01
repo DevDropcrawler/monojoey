@@ -484,6 +484,18 @@ public sealed class LobbyMessageHandler
                     "Eliminated players cannot end turns.");
             }
 
+            var hasCompletedTurn =
+                session.GameState.HasRolledThisTurn &&
+                session.GameState.HasResolvedTileThisTurn &&
+                session.GameState.HasExecutedTileThisTurn &&
+                session.GameState.ActiveAuctionState is null;
+            if (player.IsLockedUp && !hasCompletedTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerLocked,
+                    "Locked players cannot end incomplete turns.");
+            }
+
             if (!session.GameState.HasRolledThisTurn)
             {
                 return CreateError(
@@ -802,6 +814,16 @@ public sealed class LobbyMessageHandler
                 return CreateError(
                     LobbyErrorCodes.AuctionNotActive,
                     "No active auction is available for auction bid loans.");
+            }
+
+            if (!hasActiveAuction &&
+                purpose != BorrowPurpose.AuctionBid &&
+                gameState.CurrentTurnPlayerId?.Value == playerId &&
+                player.IsLockedUp)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerLocked,
+                    "Locked players cannot take loans outside auctions.");
             }
 
             if (purpose != BorrowPurpose.AuctionBid &&

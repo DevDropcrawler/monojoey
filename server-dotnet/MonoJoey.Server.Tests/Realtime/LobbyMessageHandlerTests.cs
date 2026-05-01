@@ -866,6 +866,45 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ExecuteTile_GoToLockupCardLocksPlayerAndStillAllowsEndTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var lockupCard = CreateCard("TEST_GO_TO_LOCKUP", CardActionKind.GoToLockup);
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { lockupCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var card = executePayload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_executed", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("go_to_lockup", card.GetProperty("resolutionKind").GetString());
+        Assert.True(card.GetProperty("isLockedUp").GetBoolean());
+        Assert.True(afterExecute.Players[0].IsLockedUp);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterEndTurn = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("player_2", afterEndTurn.CurrentTurnPlayerId?.Value);
+    }
+
+    [Fact]
     public void ExecuteTile_MissingDeckReturnsCardDeckNotFoundWithoutMutation()
     {
         var sessionManager = new SessionManager();
@@ -1291,6 +1330,31 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void EndTurn_LockedCurrentPlayerBeforeExecuteReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+        var beforeEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "player_locked");
+        Assert.Same(beforeEnd, afterEnd);
+    }
+
+    [Fact]
     public void EndTurn_ActiveAuctionReturnsInvalidSessionState()
     {
         var sessionManager = new SessionManager();
@@ -1428,6 +1492,30 @@ public class LobbyMessageHandlerTests
             PlaceBidMessage(started.Session.SessionId, "player_2", 10));
 
         AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void PlaceBid_LockedPlayerCanBidDuringActiveAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 10));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(new PlayerId("player_2"), afterBid.ActiveAuctionState?.HighestBidderId);
     }
 
     [Fact]
@@ -1598,6 +1686,31 @@ public class LobbyMessageHandlerTests
         Assert.Equal("player_2", payload.GetProperty("playerId").GetString());
         Assert.Equal("auction_bid", payload.GetProperty("reason").GetString());
         Assert.Equal(1700, payload.GetProperty("money").GetInt32());
+        Assert.Equal(new Money(1700), player.Money);
+    }
+
+    [Fact]
+    public void TakeLoan_LockedPlayerAuctionBidDuringActiveAuctionReturnsLoanResult()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            TakeLoanMessage(started.Session.SessionId, "player_2", 200, "auction_bid"));
+        var payload = AssertResponseType(response, "loan_result");
+        var player = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[1];
+
+        Assert.Equal("player_2", payload.GetProperty("playerId").GetString());
+        Assert.Equal("auction_bid", payload.GetProperty("reason").GetString());
         Assert.Equal(new Money(1700), player.Money);
     }
 
@@ -1821,6 +1934,30 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void TakeLoan_LockedCurrentPlayerNonAuctionBorrowOutsideAuctionReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+        var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "player_locked");
+        Assert.Same(beforeLoan, afterLoan);
+        Assert.Null(afterLoan.Players[0].LoanState);
+    }
+
+    [Fact]
     public void TakeLoan_SuccessPreservesGamePhaseAndActiveAuctionState()
     {
         var sessionManager = new SessionManager();
@@ -1867,6 +2004,30 @@ public class LobbyMessageHandlerTests
         Assert.Contains(new TileId("property_01"), winner.OwnedPropertyIds);
         Assert.Null(afterFinalize.ActiveAuctionState);
         Assert.Equal(beforeFinalize.Phase, afterFinalize.Phase);
+    }
+
+    [Fact]
+    public void FinalizeAuction_LockedCurrentPlayerCanFinalizeActiveAuction()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsLockedUp = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("no_sale", payload.GetProperty("resultType").GetString());
+        Assert.Null(afterFinalize.ActiveAuctionState);
     }
 
     [Fact]

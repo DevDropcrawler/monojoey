@@ -5,31 +5,24 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.11 Loan System over WebSocket
-- Completion status: Chunk 5.11 complete; `/ws` now accepts sender-only `take_loan` requests, validates strict snake_case borrow reasons and safe positive amounts, gates Loan Shark mode through `GameState.LoanSharkConfig`, persists the full `GameState` returned by `LoanManager.TakeLoan`, and returns `loan_result` from the persisted player state.
+- Chunk: 5.12 Turn/Action Blocking Audit
+- Completion status: Chunk 5.12 complete; `/ws` now explicitly blocks locked players from incomplete normal-turn completion and non-auction loans outside auctions while preserving completed-turn `end_turn` and active-auction exceptions.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-05-02 00:00 +12:00
+- Date/time: 2026-05-02 08:47 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.11 - Loan System over WebSocket.
+Phase 5, Chunk 5.12 - Turn/Action Blocking Audit.
 
 Completed:
 
-- Added `LoanSharkConfig` with `Enabled = true` default and attached it to `GameState`.
-- Added `take_loan` client request and `loan_result` server response message types.
-- Implemented strict WebSocket payload parsing for integer `amount` and exact snake_case `reason`; no enum parsing or fallback is used.
-- Enforced positive, safe loan amount bounds before calling `LoanManager.TakeLoan`.
-- Preserved the current sender-only request/response pattern; accepted loans do not broadcast and do not trigger bids automatically.
-- Reused existing session binding, in-game, player existence, and eliminated-player validation patterns.
-- Allowed `auction_bid` loans for any bound, non-eliminated game player during an active auction, including non-current players.
-- Required current-turn ownership for non-auction supported reasons outside auctions.
-- Blocked `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` with `loan_reason_blocked`.
-- Persisted the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch loan fields.
-- Built `loan_result` from the persisted player in the updated session and added tests for consecutive loans accumulating against latest state.
+- Added a locked-player `end_turn` guard that ignores lock status only after roll, resolve, successful execute, no active auction, and a non-eliminated current player are already true.
+- Blocked locked current players from supported non-auction `take_loan` requests outside active auctions before any state update.
+- Preserved active-auction exceptions for locked, non-eliminated players: bidding, `auction_bid` loans, and current-player auction finalization.
+- Added regression coverage for GoToLockup card execution followed by `end_turn`, incomplete locked `end_turn`, locked auction bidding/finalization, locked auction loans, and locked normal loan rejection.
 
 Not included by explicit user scope:
 
@@ -188,19 +181,20 @@ Not included by explicit user scope:
 - Card-tile errors `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` do not mutate session state and do not mark `GameState.HasExecutedTileThisTurn`.
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
-- `end_turn` requires a successful roll, resolve, and execute in the same turn before advancing.
+- `end_turn` requires a successful roll, resolve, execute, no active auction, and a non-eliminated current player before advancing.
 - `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, and `turnIndex` from the advanced `GameState.TurnNumber`.
-- `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
+- `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, locked current players before the completed-turn state through `player_locked`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
+- Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
 - If `execute_tile` eliminated the current player, `end_turn` returns `player_eliminated` and does not advance.
 - Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
 - `end_turn` does not broadcast, emit snapshots, finalize auctions, add reconnect behavior, add persistence, add client behavior, or special-case eliminated players into a forced advance.
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
-- `place_bid` allows non-current players to bid and does not require turn ownership.
+- `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
 - Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, turn flags, or phase values are changed.
 - `bid_result` is sender-only and contains `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId` from the persisted updated active auction state.
 - Rejected `place_bid` calls return `error` and do not update `GameState`.
 - Bid affordability is still not checked in the WebSocket layer; this preserves existing `AuctionManager.PlaceBid` behavior and leaves loan/affordability policy to a later chunk.
-- `finalize_auction` requires a bound in-game session/player connection, the current turn player, a non-eliminated caller, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
+- `finalize_auction` requires a bound in-game session/player connection, the current turn player, a non-eliminated caller, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`; locked current players may finalize active auctions.
 - Successful `finalize_auction` calls clear `GameState.ActiveAuctionState` and preserve `GamePhase`; turn advancement remains an explicit later `end_turn` request.
 - `auction_result` is sender-only and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, and `tileId`.
 - `won` responses reflect the persisted owner after payment and property transfer; `no_sale` responses use `winnerPlayerId = null` and `amount = 0`; `failed_payment` responses identify the failed winner and attempted winning amount while leaving the property unowned.
@@ -209,9 +203,9 @@ Not included by explicit user scope:
 - `take_loan` accepts only these wire reasons: `auction_bid`, `rent_payment`, `tax_payment`, `card_penalty`, `fine`, `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt`; unknown casing, numeric values, and missing/non-string reasons return `invalid_payload`.
 - `take_loan` returns `invalid_loan_amount` for non-positive integer amounts or amounts outside the safe server bound.
 - `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` return `loan_reason_blocked` and do not mutate `GameState`.
-- During active auctions, `take_loan` allows any bound, non-eliminated game player to borrow for `auction_bid`; it does not require turn ownership and does not place a bid automatically.
+- During active auctions, `take_loan` allows any bound, non-eliminated game player to borrow for `auction_bid`, including locked players; it does not require turn ownership and does not place a bid automatically.
 - During active auctions, non-auction borrow reasons return `invalid_session_state`.
-- Outside active auctions, `auction_bid` returns `auction_not_active`; supported non-auction borrow reasons require the current turn player.
+- Outside active auctions, `auction_bid` returns `auction_not_active`; supported non-auction borrow reasons require the current turn player and reject a locked current player through `player_locked`.
 - Accepted `take_loan` calls persist the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch money or loan fields.
 - `loan_result` is sender-only and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
