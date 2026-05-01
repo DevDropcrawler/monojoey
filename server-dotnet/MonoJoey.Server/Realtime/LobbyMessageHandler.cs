@@ -9,6 +9,7 @@ using MonoJoey.Shared.Schemas;
 public sealed class LobbyMessageHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int MaximumSafeLoanPrincipal = int.MaxValue / 100;
 
     private readonly object sessionLock = new();
     private readonly DiceService diceService;
@@ -108,6 +109,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.EndTurn => HandleEndTurn(root, connectionContext),
             LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
             LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
+            LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
@@ -116,6 +118,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.EndTurnResult or
                 LobbyMessageTypes.BidResult or
                 LobbyMessageTypes.AuctionResult or
+                LobbyMessageTypes.LoanResult or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -695,6 +698,140 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyServerEnvelope HandleTakeLoan(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        var payloadResult = TryReadTakeLoanPayload(
+            root,
+            out var sessionId,
+            out var playerId,
+            out var amount,
+            out var purpose);
+        if (payloadResult == TakeLoanPayloadReadResult.InvalidPayload)
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "take_loan requires payload.sessionId, payload.playerId, integer payload.amount, and snake_case string payload.reason.");
+        }
+
+        if (payloadResult == TakeLoanPayloadReadResult.InvalidLoanAmount)
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidLoanAmount,
+                "Loan amount must be positive and within safe bounds.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            var gameState = session.GameState;
+            var player = gameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot take loans.");
+            }
+
+            if (!gameState.LoanSharkConfig.Enabled)
+            {
+                return CreateError(
+                    LobbyErrorCodes.LoanModeDisabled,
+                    "Loan Shark mode is disabled.");
+            }
+
+            if (!IsLoanAmountWithinSafeBounds(player, amount))
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidLoanAmount,
+                    "Loan amount must be positive and within safe bounds.");
+            }
+
+            if (IsLoanPaymentBorrowPurpose(purpose))
+            {
+                var rejectedLoanResult = LoanManager.TakeLoan(
+                    gameState,
+                    player.PlayerId,
+                    new Money(amount),
+                    purpose);
+
+                return CreateLoanRejectedError(rejectedLoanResult);
+            }
+
+            var activeAuctionState = gameState.ActiveAuctionState;
+            var hasActiveAuction = activeAuctionState is not null && IsActiveAuctionStatus(activeAuctionState.Status);
+            if (hasActiveAuction && purpose != BorrowPurpose.AuctionBid)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Only auction bid loans are allowed during an active auction.");
+            }
+
+            if (!hasActiveAuction && purpose == BorrowPurpose.AuctionBid)
+            {
+                return CreateError(
+                    LobbyErrorCodes.AuctionNotActive,
+                    "No active auction is available for auction bid loans.");
+            }
+
+            if (purpose != BorrowPurpose.AuctionBid &&
+                gameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            var loanResult = LoanManager.TakeLoan(
+                gameState,
+                player.PlayerId,
+                new Money(amount),
+                purpose);
+
+            if (!loanResult.LoanTaken)
+            {
+                return CreateLoanRejectedError(loanResult);
+            }
+
+            var updatedSession = sessionManager.UpdateGameState(sessionId, loanResult.GameState);
+            var persistedPlayer = updatedSession.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId == player.PlayerId)
+                ?? throw new InvalidOperationException("Accepted loans must persist the borrowing player.");
+
+            return CreateLoanResult(persistedPlayer, amount, purpose);
+        }
+    }
+
     private LobbyServerEnvelope HandleJoinLobby(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1166,6 +1303,39 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static TakeLoanPayloadReadResult TryReadTakeLoanPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out int amount,
+        out BorrowPurpose purpose)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        amount = 0;
+        purpose = default;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !payload.TryGetProperty("amount", out var amountProperty) ||
+            amountProperty.ValueKind != JsonValueKind.Number ||
+            !amountProperty.TryGetInt32(out amount) ||
+            !TryReadString(payload, "reason", out var reason) ||
+            !TryParseBorrowPurpose(reason, out purpose))
+        {
+            return TakeLoanPayloadReadResult.InvalidPayload;
+        }
+
+        if (amount <= 0 || amount > MaximumSafeLoanPrincipal)
+        {
+            return TakeLoanPayloadReadResult.InvalidLoanAmount;
+        }
+
+        return TakeLoanPayloadReadResult.Success;
+    }
+
     private static bool TryReadString(JsonElement element, string propertyName, out string value)
     {
         value = string.Empty;
@@ -1338,6 +1508,27 @@ public sealed class LobbyMessageHandler
                 tileId.Value));
     }
 
+    private static LobbyServerEnvelope CreateLoanResult(
+        Player persistedPlayer,
+        int amount,
+        BorrowPurpose purpose)
+    {
+        var loanState = persistedPlayer.LoanState
+            ?? throw new InvalidOperationException("Accepted loans must persist loan state.");
+
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.LoanResult,
+            new LoanResultPayload(
+                persistedPlayer.PlayerId.Value,
+                amount,
+                FormatBorrowPurpose(purpose),
+                persistedPlayer.Money.Amount,
+                loanState.TotalBorrowed.Amount,
+                loanState.CurrentInterestRatePercent,
+                loanState.NextTurnInterestDue.Amount,
+                loanState.LoanTier));
+    }
+
     private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
     {
         return bidResult.ResultKind switch
@@ -1355,6 +1546,28 @@ public sealed class LobbyMessageHandler
             _ => CreateError(
                 LobbyErrorCodes.InvalidSessionState,
                 bidResult.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateLoanRejectedError(LoanTakeResult loanResult)
+    {
+        return loanResult.ResultKind switch
+        {
+            LoanTakeResultKind.InvalidAmount => CreateError(
+                LobbyErrorCodes.InvalidLoanAmount,
+                loanResult.Message),
+            LoanTakeResultKind.DisallowedBorrowPurpose => CreateError(
+                LobbyErrorCodes.LoanReasonBlocked,
+                loanResult.Message),
+            LoanTakeResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                loanResult.Message),
+            LoanTakeResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                loanResult.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                loanResult.Message),
         };
     }
 
@@ -1599,6 +1812,62 @@ public sealed class LobbyMessageHandler
         };
     }
 
+    private static bool TryParseBorrowPurpose(string reason, out BorrowPurpose purpose)
+    {
+        purpose = reason switch
+        {
+            "auction_bid" => BorrowPurpose.AuctionBid,
+            "rent_payment" => BorrowPurpose.RentPayment,
+            "tax_payment" => BorrowPurpose.TaxPayment,
+            "card_penalty" => BorrowPurpose.CardPenalty,
+            "fine" => BorrowPurpose.Fine,
+            "loan_interest" => BorrowPurpose.LoanInterest,
+            "loan_principal_repayment" => BorrowPurpose.LoanPrincipalRepayment,
+            "existing_loan_debt" => BorrowPurpose.ExistingLoanDebt,
+            _ => default,
+        };
+
+        return reason is "auction_bid" or
+            "rent_payment" or
+            "tax_payment" or
+            "card_penalty" or
+            "fine" or
+            "loan_interest" or
+            "loan_principal_repayment" or
+            "existing_loan_debt";
+    }
+
+    private static string FormatBorrowPurpose(BorrowPurpose purpose)
+    {
+        return purpose switch
+        {
+            BorrowPurpose.AuctionBid => "auction_bid",
+            BorrowPurpose.RentPayment => "rent_payment",
+            BorrowPurpose.TaxPayment => "tax_payment",
+            BorrowPurpose.CardPenalty => "card_penalty",
+            BorrowPurpose.Fine => "fine",
+            BorrowPurpose.LoanInterest => "loan_interest",
+            BorrowPurpose.LoanPrincipalRepayment => "loan_principal_repayment",
+            BorrowPurpose.ExistingLoanDebt => "existing_loan_debt",
+            _ => throw new InvalidOperationException("Unknown borrow purpose."),
+        };
+    }
+
+    private static bool IsLoanPaymentBorrowPurpose(BorrowPurpose purpose)
+    {
+        return purpose is BorrowPurpose.LoanInterest or
+            BorrowPurpose.LoanPrincipalRepayment or
+            BorrowPurpose.ExistingLoanDebt;
+    }
+
+    private static bool IsLoanAmountWithinSafeBounds(Player player, int amount)
+    {
+        var currentTotalBorrowed = player.LoanState?.TotalBorrowed.Amount ?? 0;
+        return amount > 0 &&
+            currentTotalBorrowed <= MaximumSafeLoanPrincipal - amount &&
+            player.Money.Amount <= int.MaxValue - amount;
+    }
+
     private static bool IsActiveAuctionStatus(AuctionStatus status)
     {
         return status is AuctionStatus.AwaitingInitialBid or AuctionStatus.ActiveBidCountdown;
@@ -1626,5 +1895,12 @@ public sealed class LobbyMessageHandler
                 TileResolutionActionKind.StartPlaceholder => false,
             _ => false,
         };
+    }
+
+    private enum TakeLoanPayloadReadResult
+    {
+        Success,
+        InvalidPayload,
+        InvalidLoanAmount,
     }
 }

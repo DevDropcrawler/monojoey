@@ -168,11 +168,12 @@ Server validates:
 
 ```json
 {
-  "type": "TakeLoanRequest",
+  "type": "take_loan",
   "payload": {
-    "matchId": "match_123",
+    "sessionId": "session_123",
+    "playerId": "player_1",
     "amount": 200,
-    "reason": "AuctionBid"
+    "reason": "auction_bid"
   }
 }
 ```
@@ -180,9 +181,33 @@ Server validates:
 Server validates:
 
 - Loan Shark mode enabled.
-- Reason is borrow-eligible.
-- Reason is not `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt`.
-- Player is active.
+- Sender connection is bound to the same in-game session/player.
+- Player exists in `GameState.Players` and is not eliminated.
+- `amount` is a positive integer within safe money/interest bounds.
+- `reason` is one of the strict snake_case values: `auction_bid`, `rent_payment`, `tax_payment`, `card_penalty`, `fine`, `loan_interest`, `loan_principal_repayment`, or `existing_loan_debt`.
+- `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` are rejected with `loan_reason_blocked`.
+- During an active auction, only `auction_bid` loans are allowed; any bound, non-eliminated game player may take one.
+- Outside an active auction, `auction_bid` returns `auction_not_active`; other supported reasons require the current turn player.
+
+Accepted loans return one sender-only `loan_result` and do not place bids automatically:
+
+```json
+{
+  "type": "loan_result",
+  "payload": {
+    "playerId": "player_1",
+    "amount": 200,
+    "reason": "auction_bid",
+    "money": 1700,
+    "totalBorrowed": 200,
+    "currentInterestRatePercent": 20,
+    "nextTurnInterestDue": 40,
+    "loanTier": 1
+  }
+}
+```
+
+Rejected loans return the standard `error` envelope and do not mutate `GameState`.
 
 ### Current `/ws` card tile execution
 

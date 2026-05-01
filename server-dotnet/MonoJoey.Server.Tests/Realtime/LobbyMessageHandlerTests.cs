@@ -1528,6 +1528,320 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void TakeLoan_ValidCurrentPlayerRentPaymentReturnsLoanResultAndUpdatesState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+        var payload = AssertResponseType(response, "loan_result");
+        var player = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0];
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(200, payload.GetProperty("amount").GetInt32());
+        Assert.Equal("rent_payment", payload.GetProperty("reason").GetString());
+        Assert.Equal(1700, payload.GetProperty("money").GetInt32());
+        Assert.Equal(200, payload.GetProperty("totalBorrowed").GetInt32());
+        Assert.Equal(20, payload.GetProperty("currentInterestRatePercent").GetInt32());
+        Assert.Equal(40, payload.GetProperty("nextTurnInterestDue").GetInt32());
+        Assert.Equal(1, payload.GetProperty("loanTier").GetInt32());
+        Assert.Equal(new Money(1700), player.Money);
+        Assert.Equal(new Money(200), player.LoanState?.TotalBorrowed);
+    }
+
+    [Fact]
+    public void TakeLoan_ConsecutiveLoansAccumulateFromLatestPersistedState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        _ = handler.HandleTextMessage(
+            TakeLoanMessage(started.Session.SessionId, "player_1", 125, "rent_payment"),
+            started.FirstContext);
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 75, "fine"));
+        var payload = AssertResponseType(response, "loan_result");
+        var player = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0];
+
+        Assert.Equal(1700, payload.GetProperty("money").GetInt32());
+        Assert.Equal(200, payload.GetProperty("totalBorrowed").GetInt32());
+        Assert.Equal(30, payload.GetProperty("currentInterestRatePercent").GetInt32());
+        Assert.Equal(60, payload.GetProperty("nextTurnInterestDue").GetInt32());
+        Assert.Equal(2, payload.GetProperty("loanTier").GetInt32());
+        Assert.Equal(new Money(1700), player.Money);
+        Assert.Equal(new Money(200), player.LoanState?.TotalBorrowed);
+        Assert.Equal(2, player.LoanState?.LoanTier);
+    }
+
+    [Fact]
+    public void TakeLoan_NonCurrentAuctionBidDuringActiveAuctionReturnsLoanResult()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            TakeLoanMessage(started.Session.SessionId, "player_2", 200, "auction_bid"));
+        var payload = AssertResponseType(response, "loan_result");
+        var player = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[1];
+
+        Assert.Equal("player_2", payload.GetProperty("playerId").GetString());
+        Assert.Equal("auction_bid", payload.GetProperty("reason").GetString());
+        Assert.Equal(1700, payload.GetProperty("money").GetInt32());
+        Assert.Equal(new Money(1700), player.Money);
+    }
+
+    [Fact]
+    public void TakeLoan_AuctionBidOutsideActiveAuctionReturnsAuctionNotActive()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "auction_bid"));
+
+        AssertError(response, "auction_not_active");
+    }
+
+    [Fact]
+    public void TakeLoan_NonAuctionReasonDuringActiveAuctionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void TakeLoan_DisabledLoanModeReturnsLoanModeDisabledAndPreservesState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with { LoanSharkConfig = new LoanSharkConfig { Enabled = false } });
+        var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "loan_mode_disabled");
+        Assert.Same(beforeLoan, afterLoan);
+        Assert.Equal(new Money(1500), afterLoan.Players[0].Money);
+        Assert.Null(afterLoan.Players[0].LoanState);
+    }
+
+    [Theory]
+    [InlineData("loan_interest")]
+    [InlineData("loan_principal_repayment")]
+    [InlineData("existing_loan_debt")]
+    public void TakeLoan_BlockedReasonsReturnLoanReasonBlockedAndPreserveState(string reason)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, reason));
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "loan_reason_blocked");
+        Assert.Same(beforeLoan, afterLoan);
+        Assert.Null(afterLoan.Players[0].LoanState);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MaxValue)]
+    public void TakeLoan_InvalidAmountReturnsInvalidLoanAmount(int amount)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", amount, "rent_payment"));
+
+        AssertError(response, "invalid_loan_amount");
+    }
+
+    [Theory]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10,""reason"":true}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10,""reason"":""RentPayment""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10,""reason"":""rentPayment""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10,""reason"":""0""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":""10"",""reason"":""rent_payment""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1"",""amount"":10.5,""reason"":""rent_payment""}}")]
+    public void TakeLoan_InvalidPayloadReturnsInvalidPayload(string message)
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, message);
+
+        AssertError(response, "invalid_payload");
+    }
+
+    [Fact]
+    public void TakeLoan_PlayerMissingFromGameStateReturnsPlayerNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void TakeLoan_InvalidSessionReturnsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        context.Bind("missing_session", "player_1");
+
+        using var response = Handle(
+            handler,
+            context,
+            TakeLoanMessage("missing_session", "player_1", 200, "rent_payment"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void TakeLoan_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(
+            handler,
+            context,
+            TakeLoanMessage(session.SessionId, "player_1", 200, "rent_payment"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void TakeLoan_EliminatedPlayerReturnsPlayerEliminated()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { IsEliminated = true });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+
+        AssertError(response, "player_eliminated");
+    }
+
+    [Fact]
+    public void TakeLoan_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void TakeLoan_NonCurrentNonAuctionBorrowReturnsNotYourTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            TakeLoanMessage(started.Session.SessionId, "player_2", 200, "rent_payment"));
+
+        AssertError(response, "not_your_turn");
+    }
+
+    [Fact]
+    public void TakeLoan_SuccessPreservesGamePhaseAndActiveAuctionState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var beforeAuction = beforeLoan.ActiveAuctionState;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            TakeLoanMessage(started.Session.SessionId, "player_2", 200, "auction_bid"));
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertResponseType(response, "loan_result");
+        Assert.Equal(beforeLoan.Phase, afterLoan.Phase);
+        Assert.Same(beforeAuction, afterLoan.ActiveAuctionState);
+    }
+
+    [Fact]
     public void FinalizeAuction_ValidWinnerReturnsAuctionResultAndClearsActiveAuction()
     {
         var sessionManager = new SessionManager();
@@ -2259,6 +2573,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentLoanResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""loan_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -2278,6 +2603,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""place_bid"",""payload"":{""sessionId"":""session_1"",""amount"":10}}")]
     [InlineData(@"{""type"":""finalize_auction"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""finalize_auction"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""playerId"":""player_1"",""amount"":10,""reason"":""rent_payment""}}")]
+    [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""amount"":10,""reason"":""rent_payment""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -2570,6 +2897,11 @@ public class LobbyMessageHandlerTests
     private static string FinalizeAuctionMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""finalize_auction"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string TakeLoanMessage(string sessionId, string playerId, int amount, string reason)
+    {
+        return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(

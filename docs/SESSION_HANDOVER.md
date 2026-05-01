@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.10 Cards over WebSocket
-- Completion status: Chunk 5.10 complete; `GameState` now stores immutable replacement card deck state for `chance` and `table`, and `/ws` now executes chance/table deck placeholders through the existing sender-only `execute_tile` request with an atomic draw-resolve-execute-persist flow and nullable `card` result payload.
+- Chunk: 5.11 Loan System over WebSocket
+- Completion status: Chunk 5.11 complete; `/ws` now accepts sender-only `take_loan` requests, validates strict snake_case borrow reasons and safe positive amounts, gates Loan Shark mode through `GameState.LoanSharkConfig`, persists the full `GameState` returned by `LoanManager.TakeLoan`, and returns `loan_result` from the persisted player state.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
@@ -15,18 +15,21 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.10 - Cards over WebSocket.
+Phase 5, Chunk 5.11 - Loan System over WebSocket.
 
 Completed:
 
-- Added `GameState.CardDeckStates` as an init-only state member and initialized deterministic `chance` / `table` deck states from `PlaceholderCardDeckFactory` at session/game creation.
-- Added `CardDeckIds` constants and used them for placeholder deck definitions, session initialization, and tile-type-to-deck mapping.
-- Preserved deck state, discard piles, and player held cards through full immutable `GameState` replacement and turn advancement.
-- Extended `execute_tile_result` with nullable `card` metadata while preserving nullable `auction` and `rent`.
-- Routed `TileResolutionActionKind.DeckPlaceholder` through server-authoritative card execution only; clients still send only `execute_tile` and never choose deck/card IDs.
-- Implemented atomic card draw + resolve + supported execution + deck-state replacement. `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` return errors without mutating state or marking the tile executed.
-- Discarded non-held cards after successful execution and kept held lockup escape cards in `Player.HeldCardIds` without discarding.
-- Added deterministic handler and WebSocket transport tests for chance/table deck execution, money updates, held cards, elimination, missing decks, empty decks, invalid cards, unsupported card actions, and one response per card-tile `execute_tile`.
+- Added `LoanSharkConfig` with `Enabled = true` default and attached it to `GameState`.
+- Added `take_loan` client request and `loan_result` server response message types.
+- Implemented strict WebSocket payload parsing for integer `amount` and exact snake_case `reason`; no enum parsing or fallback is used.
+- Enforced positive, safe loan amount bounds before calling `LoanManager.TakeLoan`.
+- Preserved the current sender-only request/response pattern; accepted loans do not broadcast and do not trigger bids automatically.
+- Reused existing session binding, in-game, player existence, and eliminated-player validation patterns.
+- Allowed `auction_bid` loans for any bound, non-eliminated game player during an active auction, including non-current players.
+- Required current-turn ownership for non-auction supported reasons outside auctions.
+- Blocked `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` with `loan_reason_blocked`.
+- Persisted the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch loan fields.
+- Built `loan_result` from the persisted player in the updated session and added tests for consecutive loans accumulating against latest state.
 
 Not included by explicit user scope:
 
@@ -37,21 +40,16 @@ Not included by explicit user scope:
 - Automatic auction expiry or retry handling.
 - Scaling.
 - Broadcasts.
-- Protocol DTO changes.
 - Reconnect identity.
 - Authentication.
 - Unity client.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckIds.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/MULTIPLAYER_PROTOCOL.md`
@@ -109,6 +107,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResultKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/Money.cs`
@@ -132,7 +131,7 @@ Not included by explicit user scope:
 
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 321 tests passed.
+  - Output summary: 351 tests passed.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
@@ -157,7 +156,7 @@ Not included by explicit user scope:
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -206,6 +205,16 @@ Not included by explicit user scope:
 - `auction_result` is sender-only and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, and `tileId`.
 - `won` responses reflect the persisted owner after payment and property transfer; `no_sale` responses use `winnerPlayerId = null` and `amount = 0`; `failed_payment` responses identify the failed winner and attempted winning amount while leaving the property unowned.
 - Rejected `finalize_auction` calls return `error` and do not update `GameState`.
+- `take_loan` requires a positive integer `amount`, a strict snake_case `reason`, a bound in-game session/player connection, a non-eliminated engine player, and enabled `GameState.LoanSharkConfig`.
+- `take_loan` accepts only these wire reasons: `auction_bid`, `rent_payment`, `tax_payment`, `card_penalty`, `fine`, `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt`; unknown casing, numeric values, and missing/non-string reasons return `invalid_payload`.
+- `take_loan` returns `invalid_loan_amount` for non-positive integer amounts or amounts outside the safe server bound.
+- `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` return `loan_reason_blocked` and do not mutate `GameState`.
+- During active auctions, `take_loan` allows any bound, non-eliminated game player to borrow for `auction_bid`; it does not require turn ownership and does not place a bid automatically.
+- During active auctions, non-auction borrow reasons return `invalid_session_state`.
+- Outside active auctions, `auction_bid` returns `auction_not_active`; supported non-auction borrow reasons require the current turn player.
+- Accepted `take_loan` calls persist the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch money or loan fields.
+- `loan_result` is sender-only and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player.
+- Rejected `take_loan` calls return `error` and do not update `GameState`.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
 - Leaving with a player not present in the session is a safe no-op.
@@ -369,4 +378,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.10 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.11 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

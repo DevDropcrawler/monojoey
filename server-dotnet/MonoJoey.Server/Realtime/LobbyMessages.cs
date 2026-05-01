@@ -13,6 +13,7 @@ public static class LobbyMessageTypes
     public const string EndTurn = "end_turn";
     public const string PlaceBid = "place_bid";
     public const string FinalizeAuction = "finalize_auction";
+    public const string TakeLoan = "take_loan";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
@@ -21,6 +22,7 @@ public static class LobbyMessageTypes
     public const string EndTurnResult = "end_turn_result";
     public const string BidResult = "bid_result";
     public const string AuctionResult = "auction_result";
+    public const string LoanResult = "loan_result";
     public const string Error = "error";
 }
 
@@ -45,6 +47,9 @@ public static class LobbyErrorCodes
     public const string UnsupportedTileEffect = "unsupported_tile_effect";
     public const string AuctionNotActive = "auction_not_active";
     public const string BidTooLow = "bid_too_low";
+    public const string InvalidLoanAmount = "invalid_loan_amount";
+    public const string LoanModeDisabled = "loan_mode_disabled";
+    public const string LoanReasonBlocked = "loan_reason_blocked";
     public const string CardDeckNotFound = "card_deck_not_found";
     public const string CardDeckEmpty = "card_deck_empty";
     public const string InvalidCard = "invalid_card";
@@ -163,3 +168,13 @@ public sealed record AuctionResultPayload(
     string? WinnerPlayerId,
     int Amount,
     string TileId);
+
+public sealed record LoanResultPayload(
+    string PlayerId,
+    int Amount,
+    string Reason,
+    int Money,
+    int TotalBorrowed,
+    int CurrentInterestRatePercent,
+    int NextTurnInterestDue,
+    int LoanTier);
