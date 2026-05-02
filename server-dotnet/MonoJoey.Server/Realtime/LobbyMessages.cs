@@ -15,6 +15,7 @@ public static class LobbyMessageTypes
     public const string FinalizeAuction = "finalize_auction";
     public const string TakeLoan = "take_loan";
     public const string GetSnapshot = "get_snapshot";
+    public const string ReconnectSession = "reconnect_session";
     public const string LobbyState = "lobby_state";
     public const string GameStarted = "game_started";
     public const string RollResult = "roll_result";
@@ -25,6 +26,7 @@ public static class LobbyMessageTypes
     public const string AuctionResult = "auction_result";
     public const string LoanResult = "loan_result";
     public const string SnapshotResult = "snapshot_result";
+    public const string ReconnectResult = "reconnect_result";
     public const string DiceRolled = "dice_rolled";
     public const string TileResolved = "tile_resolved";
     public const string TileExecuted = "tile_executed";
@@ -224,6 +226,12 @@ public sealed record SnapshotPayload(
     SnapshotAuctionPayload? ActiveAuction,
     IReadOnlyList<SnapshotCardDeckPayload> CardDecks,
     SnapshotLoanSharkPayload LoanShark);
+
+public sealed record ReconnectResultPayload(
+    string SessionId,
+    string PlayerId,
+    long LastEventSequence,
+    SnapshotPayload Snapshot);
 
 public sealed record SnapshotTurnPayload(
     string? CurrentPlayerId,

@@ -253,6 +253,30 @@ public class WebSocketConnectionHandlerTests
     }
 
     [Fact]
+    public async Task ReconnectSession_SendsReconnectResultAndSnapshot()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var connectionManager = new TestConnectionManager("connection_reconnect");
+        var lobbyMessageHandler = new LobbyMessageHandler(sessionManager);
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(ReconnectMessage(startedSession.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        var sent = Assert.Single(webSocket.SentTextMessages);
+        using var response = JsonDocument.Parse(sent);
+        var payload = response.RootElement.GetProperty("payload");
+        Assert.Equal("reconnect_result", response.RootElement.GetProperty("type").GetString());
+        Assert.Equal(startedSession.SessionId, payload.GetProperty("sessionId").GetString());
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(0, payload.GetProperty("lastEventSequence").GetInt64());
+        Assert.Equal(1, payload.GetProperty("snapshot").GetProperty("snapshotVersion").GetInt32());
+    }
+
+    [Fact]
     public async Task RejectedGameplayActionSendsDirectErrorOnly()
     {
         var sessionManager = new SessionManager();
@@ -320,6 +344,40 @@ public class WebSocketConnectionHandlerTests
         using var otherBroadcast = JsonDocument.Parse(otherBroadcastMessage);
         Assert.Equal("dice_rolled", otherBroadcast.RootElement.GetProperty("type").GetString());
         Assert.Empty(otherSessionWebSocket.SentTextMessages);
+    }
+
+    [Fact]
+    public async Task RollDice_AfterReconnectBroadcastsToNewConnectionOnly()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var connectionManager = new TestConnectionManager("connection_reconnect");
+        using var staleWebSocket = new ScriptedWebSocket();
+        using var otherWebSocket = new ScriptedWebSocket();
+        connectionManager.Register("connection_player_1", staleWebSocket);
+        connectionManager.Register("connection_player_2", otherWebSocket);
+        var lobbyMessageHandler = new LobbyMessageHandler(
+            sessionManager,
+            new DiceService(new FixedDiceRoller(new DiceRoll(1, 2))));
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var reconnectWebSocket = new ScriptedWebSocket(
+            TextFrame(ReconnectMessage(startedSession.SessionId, "player_1")),
+            TextFrame(RollDiceMessage(startedSession.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(reconnectWebSocket, CancellationToken.None);
+
+        Assert.Equal(3, reconnectWebSocket.SentTextMessages.Count);
+        using var reconnectResult = JsonDocument.Parse(reconnectWebSocket.SentTextMessages[0]);
+        Assert.Equal("reconnect_result", reconnectResult.RootElement.GetProperty("type").GetString());
+        using var rollResponse = JsonDocument.Parse(reconnectWebSocket.SentTextMessages[1]);
+        Assert.Equal("roll_result", rollResponse.RootElement.GetProperty("type").GetString());
+        using var senderBroadcast = JsonDocument.Parse(reconnectWebSocket.SentTextMessages[2]);
+        Assert.Equal("dice_rolled", senderBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Empty(staleWebSocket.SentTextMessages);
+        var otherBroadcastMessage = Assert.Single(otherWebSocket.SentTextMessages);
+        using var otherBroadcast = JsonDocument.Parse(otherBroadcastMessage);
+        Assert.Equal("dice_rolled", otherBroadcast.RootElement.GetProperty("type").GetString());
     }
 
     [Fact]
@@ -432,6 +490,24 @@ public class WebSocketConnectionHandlerTests
     private static string GetSnapshotMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""get_snapshot"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string ReconnectMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""reconnect_session"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static GameSession CreateReadyStartedSession(SessionManager sessionManager)
+    {
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_1"), "connection_player_1", IsReady: true));
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_2"), "connection_player_2", IsReady: true));
+
+        return sessionManager.StartGame(session.SessionId);
     }
 
     private sealed record ReceivedFrame(

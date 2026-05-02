@@ -50,7 +50,7 @@ Current gameplay broadcast event envelope:
 
 Every successful state-changing gameplay broadcast has a per-session monotonic `sequence`.
 The first event in a session is `1`. Rejected requests, malformed payloads, unsupported actions,
-`get_snapshot`, lobby actions, and accepted operations that do not mutate `GameState` do not allocate
+`get_snapshot`, `reconnect_session`, lobby actions, and accepted operations that do not mutate `GameState` do not allocate
 or consume sequence numbers.
 
 For gameplay actions that broadcast, `/ws` sends exactly one direct response to the sender first, then
@@ -87,6 +87,7 @@ Gameplay:
 - `UseHeldCardRequest`
 - `EndTurnRequest`
 - `RequestSnapshot`
+- `ReconnectSession`
 
 Future:
 
@@ -335,6 +336,49 @@ Accepted snapshots return one direct `snapshot_result` response:
 
 Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Active auction is `null` when no auction exists. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
 
+### Reconnect session
+
+`reconnect_session` rebinds the current WebSocket connection to an existing in-memory in-game session/player and returns an authoritative snapshot. It is direct-only: it does not broadcast, mutate `GameState`, change phase, create players, duplicate engine players, restart turns, replay events, or allocate a new event sequence.
+
+```json
+{
+  "type": "reconnect_session",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1"
+  }
+}
+```
+
+Server validates:
+
+- Payload includes `sessionId` and `playerId`.
+- Session exists and is in `in_game` status.
+- The current WebSocket context is unbound, or already bound to exactly the same session/player.
+- Requested player exists in `GameState.Players`.
+- Requested player has existing `GameSession.Players` connection metadata.
+
+Accepted reconnects replace only that player's current connection ID metadata, preserve lobby metadata order and readiness, then return one direct `reconnect_result`:
+
+```json
+{
+  "type": "reconnect_result",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1",
+    "lastEventSequence": 42,
+    "snapshot": {
+      "snapshotVersion": 1,
+      "sessionId": "session_123"
+    }
+  }
+}
+```
+
+`lastEventSequence` is advisory in this version. There is no missed-event replay storage, so clients must hydrate from the returned snapshot instead of assuming or locally applying missed events.
+
+Reconnect only works while the server process still holds the session in memory. There is no account, login, token, reconnect secret, cross-process persistence, or identity proof in this version. After a successful reconnect, only the latest connection ID for that player is authorized for gameplay and snapshots; stale sockets receive `player_switch_rejected` and no longer receive gameplay broadcasts.
+
 ### Current `/ws` card tile execution
 
 Card deck tiles reuse the existing server-authoritative `execute_tile` request. Clients do not send deck IDs or card IDs.
@@ -452,15 +496,12 @@ Card-specific error codes are `card_deck_not_found`, `card_deck_empty`, `invalid
 
 ## Reconnect policy
 
-V1 should support basic reconnect later. Current broadcast sequencing is compatible with future replay,
-but this chunk does not store events or replay missed events.
+V1 supports a basic in-memory `reconnect_session` request for active games. Current broadcast sequencing is compatible with future replay, but this version does not store or replay missed events.
 
-Minimum:
-
-- Server keeps match state in memory while match is active.
-- Player reconnects with lobby/match identity token.
-- Server sends current snapshot.
-- Later, use event sequence replay.
+- Server keeps match state in memory only while the current process is active.
+- Player reconnects by sending `sessionId` and `playerId`; no auth token or reconnect secret exists yet.
+- Server sends current authoritative snapshot plus advisory `lastEventSequence`.
+- Client hydrates from the snapshot. Event sequence replay is a later feature.
 
 ## Error policy
 

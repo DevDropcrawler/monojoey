@@ -86,6 +86,13 @@ public sealed class LobbyMessageHandler
                             connectionContext.ConnectionId,
                             IsReady: false));
                 }
+                else if (session.Status == GameSessionStatus.InGame)
+                {
+                    _ = sessionManager.ClearInGamePlayerConnection(
+                        connectionContext.SessionId,
+                        new PlayerId(connectionContext.PlayerId),
+                        connectionContext.ConnectionId);
+                }
             }
 
             connectionContext.ClearBinding();
@@ -128,6 +135,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
             LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
             LobbyMessageTypes.GetSnapshot => HandleGetSnapshot(root, connectionContext),
+            LobbyMessageTypes.ReconnectSession => HandleReconnectSession(root, connectionContext),
             LobbyMessageTypes.LobbyState or
                 LobbyMessageTypes.GameStarted or
                 LobbyMessageTypes.RollResult or
@@ -138,6 +146,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.LoanResult or
                 LobbyMessageTypes.SnapshotResult or
+                LobbyMessageTypes.ReconnectResult or
                 LobbyMessageTypes.DiceRolled or
                 LobbyMessageTypes.TileResolved or
                 LobbyMessageTypes.TileExecuted or
@@ -185,7 +194,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -283,7 +292,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -378,7 +387,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -485,7 +494,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -596,7 +605,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -683,7 +692,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -794,7 +803,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -929,7 +938,7 @@ public sealed class LobbyMessageHandler
                     "Session not found.");
             }
 
-            if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerSwitchRejected,
@@ -952,6 +961,63 @@ public sealed class LobbyMessageHandler
             }
 
             return CreateSnapshotResult(gameState);
+        }
+    }
+
+    private LobbyServerEnvelope HandleReconnectSession(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadLobbyPlayerPayload(root, out var sessionId, out var playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "reconnect_session requires payload.sessionId and payload.playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (!CanBindToRequestedSessionPlayer(connectionContext, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is already bound to a different session or playerId.");
+            }
+
+            try
+            {
+                var updatedSession = sessionManager.RebindInGamePlayerConnection(
+                    sessionId,
+                    new PlayerId(playerId),
+                    connectionContext.ConnectionId);
+
+                connectionContext.Bind(sessionId, playerId);
+
+                return CreateReconnectResult(updatedSession, playerId);
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Player is not in the game." ||
+                    exception.Message == "Player connection metadata not found.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
         }
     }
 
@@ -1536,27 +1602,43 @@ public sealed class LobbyMessageHandler
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.SnapshotResult,
-            new SnapshotPayload(
-                SnapshotVersion: 1,
-                SessionId: gameState.MatchId.Value,
-                Status: "in_game",
-                MatchId: gameState.MatchId.Value,
-                Phase: FormatGamePhase(gameState.Phase),
-                StartedAtUtc: gameState.StartedAtUtc,
-                EndedAtUtc: gameState.EndedAtUtc,
-                Turn: CreateSnapshotTurn(gameState),
-                Players: gameState.Players
-                    .Select(CreateSnapshotPlayer)
-                    .ToArray(),
-                Board: CreateSnapshotBoard(gameState),
-                ActiveAuction: gameState.ActiveAuctionState is null
-                    ? null
-                    : CreateSnapshotAuction(gameState.ActiveAuctionState),
-                CardDecks: gameState.CardDeckStates
-                    .OrderBy(deckState => deckState.Value.DeckId, StringComparer.Ordinal)
-                    .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
-                    .ToArray(),
-                LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled)));
+            CreateSnapshotPayload(gameState));
+    }
+
+    private static LobbyServerEnvelope CreateReconnectResult(GameSession session, string playerId)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.ReconnectResult,
+            new ReconnectResultPayload(
+                session.SessionId,
+                playerId,
+                session.LastEventSequence,
+                CreateSnapshotPayload(session.GameState)));
+    }
+
+    private static SnapshotPayload CreateSnapshotPayload(GameState gameState)
+    {
+        return new SnapshotPayload(
+            SnapshotVersion: 1,
+            SessionId: gameState.MatchId.Value,
+            Status: "in_game",
+            MatchId: gameState.MatchId.Value,
+            Phase: FormatGamePhase(gameState.Phase),
+            StartedAtUtc: gameState.StartedAtUtc,
+            EndedAtUtc: gameState.EndedAtUtc,
+            Turn: CreateSnapshotTurn(gameState),
+            Players: gameState.Players
+                .Select(CreateSnapshotPlayer)
+                .ToArray(),
+            Board: CreateSnapshotBoard(gameState),
+            ActiveAuction: gameState.ActiveAuctionState is null
+                ? null
+                : CreateSnapshotAuction(gameState.ActiveAuctionState),
+            CardDecks: gameState.CardDeckStates
+                .OrderBy(deckState => deckState.Value.DeckId, StringComparer.Ordinal)
+                .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
+                .ToArray(),
+            LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled));
     }
 
     private static SnapshotTurnPayload CreateSnapshotTurn(GameState gameState)
@@ -1690,6 +1772,7 @@ public sealed class LobbyMessageHandler
 
         return session.Players
             .Where(player => gamePlayerIds.Contains(player.PlayerId.Value))
+            .Where(player => !string.IsNullOrWhiteSpace(player.ConnectionId))
             .Select(player => player.ConnectionId)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -1998,6 +2081,37 @@ public sealed class LobbyMessageHandler
     {
         return string.Equals(connectionContext.SessionId, sessionId, StringComparison.Ordinal) &&
             string.Equals(connectionContext.PlayerId, playerId, StringComparison.Ordinal);
+    }
+
+    private static bool IsCurrentInGamePlayerConnection(
+        LobbyConnectionContext connectionContext,
+        GameSession session,
+        string sessionId,
+        string playerId)
+    {
+        if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+        {
+            return false;
+        }
+
+        var playerConnection = session.Players.FirstOrDefault(
+            player => player.PlayerId.Value == playerId);
+
+        return playerConnection is not null &&
+            string.Equals(playerConnection.ConnectionId, connectionContext.ConnectionId, StringComparison.Ordinal);
+    }
+
+    private static bool CanBindToRequestedSessionPlayer(
+        LobbyConnectionContext connectionContext,
+        string sessionId,
+        string playerId)
+    {
+        if (!connectionContext.IsBound)
+        {
+            return true;
+        }
+
+        return IsBoundToSessionPlayer(connectionContext, sessionId, playerId);
     }
 
     private static string? FindPropertyOwnerId(GameState gameState, TileId propertyTileId)

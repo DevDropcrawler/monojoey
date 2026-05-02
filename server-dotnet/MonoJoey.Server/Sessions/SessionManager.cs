@@ -92,6 +92,77 @@ public sealed class SessionManager
         return updatedSession;
     }
 
+    public GameSession RebindInGamePlayerConnection(string sessionId, PlayerId playerId, string connectionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+
+        var session = FindSession(sessionId);
+        if (session.Status != GameSessionStatus.InGame)
+        {
+            throw new InvalidOperationException("Session is not in game.");
+        }
+
+        if (!session.GameState.Players.Any(player => player.PlayerId == playerId))
+        {
+            throw new InvalidOperationException("Player is not in the game.");
+        }
+
+        var playerMetadataExists = false;
+        var updatedPlayers = session.Players
+            .Select(player =>
+            {
+                if (player.PlayerId != playerId)
+                {
+                    return player;
+                }
+
+                playerMetadataExists = true;
+                return player with { ConnectionId = connectionId };
+            })
+            .ToArray();
+
+        if (!playerMetadataExists)
+        {
+            throw new InvalidOperationException("Player connection metadata not found.");
+        }
+
+        var updatedSession = session with
+        {
+            Players = updatedPlayers,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return updatedSession;
+    }
+
+    public GameSession ClearInGamePlayerConnection(string sessionId, PlayerId playerId, string connectionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+
+        var session = FindSession(sessionId);
+        if (session.Status != GameSessionStatus.InGame)
+        {
+            return session;
+        }
+
+        var updatedPlayers = session.Players
+            .Select(player => player.PlayerId == playerId &&
+                string.Equals(player.ConnectionId, connectionId, StringComparison.Ordinal)
+                    ? player with { ConnectionId = string.Empty }
+                    : player)
+            .ToArray();
+
+        var updatedSession = session with
+        {
+            Players = updatedPlayers,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return updatedSession;
+    }
+
     public GameSession SetReady(string sessionId, PlayerId playerId, bool isReady)
     {
         var session = FindSession(sessionId);

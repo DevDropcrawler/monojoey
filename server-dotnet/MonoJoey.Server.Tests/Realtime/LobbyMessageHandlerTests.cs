@@ -2260,6 +2260,212 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ReconnectSession_RebindsPlayerAndReturnsSnapshot()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var currentSession = sessionManager.UpdateGameStateAndAllocateEventSequence(
+            started.Session.SessionId,
+            started.Session.GameState with { HasRolledThisTurn = true }).Session;
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+        var snapshot = payload.GetProperty("snapshot");
+
+        Assert.True(reconnectContext.IsBound);
+        Assert.Equal(started.Session.SessionId, payload.GetProperty("sessionId").GetString());
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(currentSession.LastEventSequence, payload.GetProperty("lastEventSequence").GetInt64());
+        Assert.Equal(1, snapshot.GetProperty("snapshotVersion").GetInt32());
+        Assert.True(snapshot.GetProperty("turn").GetProperty("hasRolledThisTurn").GetBoolean());
+        Assert.Equal("connection_reconnect", sessionManager.GetSession(started.Session.SessionId)?.Players[0].ConnectionId);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.Players.Count);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.GameState.Players.Count);
+        Assert.Equal(currentSession.LastEventSequence, sessionManager.GetSession(started.Session.SessionId)?.LastEventSequence);
+    }
+
+    [Fact]
+    public void ReconnectSession_RepeatedSameConnectionIsIdempotent()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        _ = handler.HandleTextMessage(ReconnectMessage(started.Session.SessionId, "player_1"), reconnectContext);
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+
+        AssertResponseType(response, "reconnect_result");
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+        Assert.Equal(new[] { "player_1", "player_2" }, session.Players.Select(player => player.PlayerId.Value).ToArray());
+        Assert.Equal("connection_reconnect", session.Players[0].ConnectionId);
+        Assert.Equal(2, session.GameState.Players.Count);
+    }
+
+    [Fact]
+    public void ReconnectSession_AfterInGameDisconnectSucceeds()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        handler.CleanupConnection(started.FirstContext);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal("connection_reconnect", sessionManager.GetSession(started.Session.SessionId)?.Players[0].ConnectionId);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.GameState.Players.Count);
+    }
+
+    [Fact]
+    public void ReconnectSession_DoesNotBroadcastOrConsumeSequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        var result = handler.HandleTextMessageResult(ReconnectMessage(started.Session.SessionId, "player_1"), reconnectContext);
+
+        Assert.Equal("reconnect_result", result.DirectResponse.Type);
+        Assert.Null(result.Broadcast);
+        Assert.Empty(result.BroadcastConnectionIds);
+        Assert.Equal(beforeSequence, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
+    }
+
+    [Fact]
+    public void ReconnectSession_RejectsInvalidSession()
+    {
+        var handler = CreateHandler(new SessionManager(), new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, context, ReconnectMessage("missing_session", "player_1"));
+
+        AssertError(response, "invalid_session");
+    }
+
+    [Fact]
+    public void ReconnectSession_RejectsNonGameSession()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, context, ReconnectMessage(session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
+    public void ReconnectSession_RejectsSessionOrPlayerSwitch()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var otherStarted = StartReadyGame(sessionManager, handler);
+        var context = new LobbyConnectionContext("connection_reconnect");
+        context.Bind(started.Session.SessionId, "player_1");
+
+        using var wrongPlayerResponse = Handle(handler, context, ReconnectMessage(started.Session.SessionId, "player_2"));
+        using var wrongSessionResponse = Handle(handler, context, ReconnectMessage(otherStarted.Session.SessionId, "player_1"));
+
+        AssertError(wrongPlayerResponse, "player_switch_rejected");
+        AssertError(wrongSessionResponse, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ReconnectSession_RejectsMissingEnginePlayer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Where(player => player.PlayerId.Value != "player_1")
+                    .ToArray(),
+            });
+        var context = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, context, ReconnectMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void ReconnectSession_RejectsMissingConnectionMetadata()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = sessionManager.LeaveSession(
+            started.Session.SessionId,
+            new PlayerConnection(new PlayerId("player_1"), "connection_1", IsReady: true));
+        var context = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, context, ReconnectMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_not_found");
+    }
+
+    [Fact]
+    public void ReconnectSession_StaleSocketCannotUseGameplayAfterRebind()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        _ = handler.HandleTextMessage(ReconnectMessage(started.Session.SessionId, "player_1"), reconnectContext);
+
+        using var response = Handle(handler, started.FirstContext, RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void ReconnectSession_BroadcastTargetsCurrentConnectionOnly()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        _ = handler.HandleTextMessage(ReconnectMessage(started.Session.SessionId, "player_1"), reconnectContext);
+
+        var result = handler.HandleTextMessageResult(RollDiceMessage(started.Session.SessionId, "player_1"), reconnectContext);
+
+        Assert.Equal("roll_result", result.DirectResponse.Type);
+        Assert.Equal(new[] { "connection_reconnect", "connection_2" }, result.BroadcastConnectionIds);
+        Assert.DoesNotContain("connection_1", result.BroadcastConnectionIds);
+    }
+
+    [Fact]
+    public void CleanupConnection_AfterReconnectDoesNotClearNewerBinding()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        _ = handler.HandleTextMessage(ReconnectMessage(started.Session.SessionId, "player_1"), reconnectContext);
+
+        handler.CleanupConnection(started.FirstContext);
+
+        var updatedSession = sessionManager.GetSession(started.Session.SessionId)!;
+        Assert.Equal("connection_reconnect", updatedSession.Players[0].ConnectionId);
+        Assert.Equal(2, updatedSession.Players.Count);
+        Assert.Equal(2, updatedSession.GameState.Players.Count);
+        Assert.False(started.FirstContext.IsBound);
+    }
+
+    [Fact]
     public void FinalizeAuction_ValidWinnerReturnsAuctionResultAndClearsActiveAuction()
     {
         var sessionManager = new SessionManager();
@@ -3037,6 +3243,17 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Fact]
+    public void ClientSentReconnectResultReturnsUnsupportedMessage()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, @"{""type"":""reconnect_result""}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Theory]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""join_lobby"",""payload"":{""sessionId"":""session_1""}}")]
@@ -3060,6 +3277,8 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""amount"":10,""reason"":""rent_payment""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""sessionId"":""session_1""}}")]
+    [InlineData(@"{""type"":""reconnect_session"",""payload"":{""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""reconnect_session"",""payload"":{""sessionId"":""session_1""}}")]
     public void MissingSessionIdOrPlayerId_ReturnsInvalidPayload(string message)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -3362,6 +3581,11 @@ public class LobbyMessageHandlerTests
     private static string GetSnapshotMessage(string sessionId, string playerId)
     {
         return $@"{{""type"":""get_snapshot"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
+    }
+
+    private static string ReconnectMessage(string sessionId, string playerId)
+    {
+        return $@"{{""type"":""reconnect_session"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}";
     }
 
     private sealed record StartedRealtimeGame(

@@ -314,6 +314,120 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public void RebindInGamePlayerConnection_UpdatesOnlyTargetConnectionMetadata()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var beforeGameState = startedSession.GameState;
+
+        var updatedSession = sessionManager.RebindInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_reconnect");
+
+        Assert.Equal(new[] { "player_1", "player_2" }, updatedSession.Players.Select(player => player.PlayerId.Value).ToArray());
+        Assert.Equal("connection_reconnect", updatedSession.Players[0].ConnectionId);
+        Assert.Equal("connection_player_2", updatedSession.Players[1].ConnectionId);
+        Assert.True(updatedSession.Players[0].IsReady);
+        Assert.Same(beforeGameState, updatedSession.GameState);
+        Assert.Equal(GameSessionStatus.InGame, updatedSession.Status);
+        Assert.Equal(0, updatedSession.LastEventSequence);
+    }
+
+    [Fact]
+    public void RebindInGamePlayerConnection_RepeatedSameConnectionIsIdempotent()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var firstRebind = sessionManager.RebindInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_reconnect");
+        var secondRebind = sessionManager.RebindInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_reconnect");
+
+        Assert.Equal(firstRebind.Players, secondRebind.Players);
+        Assert.Equal(2, secondRebind.Players.Count);
+        Assert.Equal(2, secondRebind.GameState.Players.Count);
+        Assert.Equal(0, secondRebind.LastEventSequence);
+    }
+
+    [Fact]
+    public void RebindInGamePlayerConnection_RejectsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.RebindInGamePlayerConnection(
+                session.SessionId,
+                new PlayerId("player_1"),
+                "connection_reconnect"));
+
+        Assert.Equal("Session is not in game.", exception.Message);
+    }
+
+    [Fact]
+    public void RebindInGamePlayerConnection_RejectsMissingEnginePlayer()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.RebindInGamePlayerConnection(
+                startedSession.SessionId,
+                new PlayerId("player_3"),
+                "connection_reconnect"));
+
+        Assert.Equal("Player is not in the game.", exception.Message);
+    }
+
+    [Fact]
+    public void RebindInGamePlayerConnection_RejectsMissingConnectionMetadata()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        _ = sessionManager.LeaveSession(startedSession.SessionId, CreatePlayerConnection("player_1", isReady: true));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.RebindInGamePlayerConnection(
+                startedSession.SessionId,
+                new PlayerId("player_1"),
+                "connection_reconnect"));
+
+        Assert.Equal("Player connection metadata not found.", exception.Message);
+    }
+
+    [Fact]
+    public void ClearInGamePlayerConnection_ClearsOnlyMatchingCurrentConnection()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        _ = sessionManager.RebindInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_reconnect");
+
+        var staleCleanupSession = sessionManager.ClearInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_player_1");
+        var matchingCleanupSession = sessionManager.ClearInGamePlayerConnection(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            "connection_reconnect");
+
+        Assert.Equal("connection_reconnect", staleCleanupSession.Players[0].ConnectionId);
+        Assert.Equal(string.Empty, matchingCleanupSession.Players[0].ConnectionId);
+        Assert.Equal("connection_player_2", matchingCleanupSession.Players[1].ConnectionId);
+        Assert.Equal(2, matchingCleanupSession.GameState.Players.Count);
+        Assert.Equal(0, matchingCleanupSession.LastEventSequence);
+    }
+
+    [Fact]
     public void GetSession_InvalidSessionReturnsNull()
     {
         var sessionManager = new SessionManager();
