@@ -13,6 +13,10 @@ This file must be updated at the end of every coding chunk.
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
 - Date/time: 2026-05-03
 
+## Docs Planning Note
+
+- Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
 ## Last Completed Chunk
 
 Phase 5, Chunk 5.21 - Unity-Ready Protocol Payloads.
