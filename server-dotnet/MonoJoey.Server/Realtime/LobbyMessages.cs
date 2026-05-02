@@ -5,6 +5,7 @@ public static class LobbyMessageTypes
     public const string CreateLobby = "create_lobby";
     public const string JoinLobby = "join_lobby";
     public const string LeaveLobby = "leave_lobby";
+    public const string SetProfile = "set_profile";
     public const string SetReady = "set_ready";
     public const string StartGame = "start_game";
     public const string RollDice = "roll_dice";
@@ -51,6 +52,9 @@ public static class LobbyErrorCodes
     public const string UnsupportedMessage = "unsupported_message";
     public const string PlayerNotInLobby = "player_not_in_lobby";
     public const string InvalidSessionStatus = "invalid_session_status";
+    public const string UsernameTaken = "username_taken";
+    public const string TokenTaken = "token_taken";
+    public const string ColorTaken = "color_taken";
     public const string NotEnoughPlayers = "not_enough_players";
     public const string PlayersNotReady = "players_not_ready";
     public const string InvalidSession = "invalid_session";
@@ -139,7 +143,10 @@ public sealed record LobbyStatePayload(
 public sealed record LobbyPlayerPayload(
     string PlayerId,
     string ConnectionId,
-    bool IsReady);
+    bool IsReady,
+    string Username,
+    string TokenId,
+    string ColorId);
 
 public sealed record GameStartedPayload(
     string SessionId,

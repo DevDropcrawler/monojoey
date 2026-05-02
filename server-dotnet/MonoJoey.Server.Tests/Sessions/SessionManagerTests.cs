@@ -77,11 +77,19 @@ public class SessionManagerTests
     {
         var sessionManager = new SessionManager();
         var session = sessionManager.CreateSession();
-        var player = CreatePlayerConnection("player_1");
+        var player = CreatePlayerConnection("player_1") with
+        {
+            Username = "Josh",
+            TokenId = "token_car_placeholder",
+            ColorId = "gold",
+        };
         var duplicatePlayer = player with
         {
             ConnectionId = "connection_rejoin",
             IsReady = true,
+            Username = "Changed",
+            TokenId = "token_hat_placeholder",
+            ColorId = "blue",
         };
 
         _ = sessionManager.JoinSession(session.SessionId, player);
@@ -91,6 +99,9 @@ public class SessionManagerTests
         Assert.Equal(player.PlayerId, updatedSession.Players[0].PlayerId);
         Assert.Equal("connection_rejoin", updatedSession.Players[0].ConnectionId);
         Assert.False(updatedSession.Players[0].IsReady);
+        Assert.Equal("Josh", updatedSession.Players[0].Username);
+        Assert.Equal("token_car_placeholder", updatedSession.Players[0].TokenId);
+        Assert.Equal("gold", updatedSession.Players[0].ColorId);
     }
 
     [Fact]
@@ -134,6 +145,58 @@ public class SessionManagerTests
         var updatedSession = sessionManager.SetReady(session.SessionId, player.PlayerId, isReady: false);
 
         Assert.False(updatedSession.Players[0].IsReady);
+    }
+
+    [Fact]
+    public void SetProfile_TrimsAndStoresProfileSelection()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var player = CreatePlayerConnection("player_1");
+        _ = sessionManager.JoinSession(session.SessionId, player);
+
+        var updatedSession = sessionManager.SetProfile(
+            session.SessionId,
+            player.PlayerId,
+            " Josh ",
+            " token_car_placeholder ",
+            " gold ");
+
+        Assert.Equal("Josh", updatedSession.Players[0].Username);
+        Assert.Equal("token_car_placeholder", updatedSession.Players[0].TokenId);
+        Assert.Equal("gold", updatedSession.Players[0].ColorId);
+    }
+
+    [Fact]
+    public void SetProfile_RejectsDuplicateSelectionsExceptSelf()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var firstPlayer = CreatePlayerConnection("player_1");
+        var secondPlayer = CreatePlayerConnection("player_2");
+        _ = sessionManager.JoinSession(session.SessionId, firstPlayer);
+        _ = sessionManager.JoinSession(session.SessionId, secondPlayer);
+        _ = sessionManager.SetProfile(session.SessionId, firstPlayer.PlayerId, "Josh", "token_car_placeholder", "gold");
+        _ = sessionManager.SetProfile(session.SessionId, secondPlayer.PlayerId, "Lee", "token_hat_placeholder", "blue");
+
+        var samePlayerNoOp = sessionManager.SetProfile(
+            session.SessionId,
+            firstPlayer.PlayerId,
+            "Josh",
+            "token_car_placeholder",
+            "gold");
+        var duplicateUsername = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetProfile(session.SessionId, secondPlayer.PlayerId, "josh", "token_ship_placeholder", "green"));
+        var duplicateToken = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetProfile(session.SessionId, secondPlayer.PlayerId, "Morgan", "token_car_placeholder", "green"));
+        var duplicateColor = Assert.Throws<InvalidOperationException>(
+            () => sessionManager.SetProfile(session.SessionId, secondPlayer.PlayerId, "Morgan", "token_ship_placeholder", "gold"));
+
+        Assert.Same(sessionManager.GetSession(session.SessionId), samePlayerNoOp);
+        Assert.Equal("Username is already taken.", duplicateUsername.Message);
+        Assert.Equal("Token is already taken.", duplicateToken.Message);
+        Assert.Equal("Color is already taken.", duplicateColor.Message);
+        Assert.Equal("Lee", sessionManager.GetSession(session.SessionId)?.Players[1].Username);
     }
 
     [Fact]
@@ -224,6 +287,26 @@ public class SessionManagerTests
             startedSession.GameState.Players,
             player => AssertStartedPlayer(player, "player_1"),
             player => AssertStartedPlayer(player, "player_2"));
+    }
+
+    [Fact]
+    public void StartGame_CopiesLobbyProfilesIntoEnginePlayers()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_1", isReady: true));
+        _ = sessionManager.JoinSession(session.SessionId, CreatePlayerConnection("player_2", isReady: true));
+        _ = sessionManager.SetProfile(session.SessionId, new PlayerId("player_1"), "Josh", "token_car_placeholder", "gold");
+        _ = sessionManager.SetProfile(session.SessionId, new PlayerId("player_2"), "Lee", "token_hat_placeholder", "blue");
+
+        var startedSession = sessionManager.StartGame(session.SessionId);
+
+        Assert.Equal("Josh", startedSession.GameState.Players[0].Username);
+        Assert.Equal("token_car_placeholder", startedSession.GameState.Players[0].TokenId);
+        Assert.Equal("gold", startedSession.GameState.Players[0].ColorId);
+        Assert.Equal("Lee", startedSession.GameState.Players[1].Username);
+        Assert.Equal("token_hat_placeholder", startedSession.GameState.Players[1].TokenId);
+        Assert.Equal("blue", startedSession.GameState.Players[1].ColorId);
     }
 
     [Fact]

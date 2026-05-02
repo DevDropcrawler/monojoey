@@ -173,6 +173,166 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void SetProfile_StoresProfileAndReturnsLobbyState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(
+            handler,
+            context,
+            SetProfileMessage(" Josh ", " token_car_placeholder ", " gold "));
+        var payload = AssertResponseType(response, "lobby_state");
+        var player = Assert.Single(payload.GetProperty("players").EnumerateArray());
+
+        Assert.Equal("Josh", player.GetProperty("username").GetString());
+        Assert.Equal("token_car_placeholder", player.GetProperty("tokenId").GetString());
+        Assert.Equal("gold", player.GetProperty("colorId").GetString());
+        Assert.Equal("Josh", sessionManager.GetSession(session.SessionId)?.Players[0].Username);
+    }
+
+    [Fact]
+    public void SetProfile_RejectsPayloadSessionAndPlayerIds()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(
+            handler,
+            context,
+            @"{""type"":""set_profile"",""payload"":{""sessionId"":""other_session"",""playerId"":""player_2"",""username"":""Josh"",""tokenId"":""token_car_placeholder"",""colorId"":""gold""}}");
+
+        AssertError(response, "invalid_payload");
+        Assert.Equal(string.Empty, sessionManager.GetSession(session.SessionId)?.Players[0].Username);
+    }
+
+    [Theory]
+    [InlineData(@"{""type"":""set_profile"",""payload"":{""tokenId"":""token_car_placeholder"",""colorId"":""gold""}}")]
+    [InlineData(@"{""type"":""set_profile"",""payload"":{""username"":""Josh"",""colorId"":""gold""}}")]
+    [InlineData(@"{""type"":""set_profile"",""payload"":{""username"":""Josh"",""tokenId"":""token_car_placeholder""}}")]
+    [InlineData(@"{""type"":""set_profile"",""payload"":{""username"":"""",""tokenId"":""token_car_placeholder"",""colorId"":""gold""}}")]
+    [InlineData(@"{""type"":""set_profile"",""payload"":{""username"":""Josh"",""tokenId"":5,""colorId"":""gold""}}")]
+    public void SetProfile_InvalidPayloadReturnsInvalidPayload(string message)
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, message);
+
+        AssertError(response, "invalid_payload");
+    }
+
+    [Fact]
+    public void SetProfile_UnboundContextReturnsPlayerSwitchRejected()
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, SetProfileMessage("Josh", "token_car_placeholder", "gold"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Theory]
+    [InlineData("josh", "token_ship_placeholder", "green", "username_taken")]
+    [InlineData("Morgan", "token_car_placeholder", "green", "token_taken")]
+    [InlineData("Morgan", "token_ship_placeholder", "gold", "color_taken")]
+    public void SetProfile_DuplicateSelectionsRejectWithoutMutation(
+        string username,
+        string tokenId,
+        string colorId,
+        string expectedCode)
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(SetProfileMessage("Josh", "token_car_placeholder", "gold"), firstContext);
+        _ = handler.HandleTextMessage(SetProfileMessage("Lee", "token_hat_placeholder", "blue"), secondContext);
+
+        using var response = Handle(handler, secondContext, SetProfileMessage(username, tokenId, colorId));
+
+        AssertError(response, expectedCode);
+        Assert.Equal("Lee", sessionManager.GetSession(session.SessionId)?.Players[1].Username);
+        Assert.Equal("token_hat_placeholder", sessionManager.GetSession(session.SessionId)?.Players[1].TokenId);
+        Assert.Equal("blue", sessionManager.GetSession(session.SessionId)?.Players[1].ColorId);
+    }
+
+    [Fact]
+    public void SetProfile_SamePlayerCanRepeatOrChangeValuesInLobby()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+        _ = handler.HandleTextMessage(SetProfileMessage("Josh", "token_car_placeholder", "gold"), context);
+
+        using var repeatResponse = Handle(handler, context, SetProfileMessage("Josh", "token_car_placeholder", "gold"));
+        using var changedResponse = Handle(handler, context, SetProfileMessage("Joshua", "token_hat_placeholder", "blue"));
+
+        AssertResponseType(repeatResponse, "lobby_state");
+        var changedPlayer = Assert.Single(AssertResponseType(changedResponse, "lobby_state").GetProperty("players").EnumerateArray());
+        Assert.Equal("Joshua", changedPlayer.GetProperty("username").GetString());
+        Assert.Equal("token_hat_placeholder", changedPlayer.GetProperty("tokenId").GetString());
+        Assert.Equal("blue", changedPlayer.GetProperty("colorId").GetString());
+    }
+
+    [Fact]
+    public void SetProfile_ReturnsLobbyStateAndLobbyBroadcastWithoutAllocatingSequence()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+
+        var result = handler.HandleTextMessageResult(
+            SetProfileMessage("Josh", "token_car_placeholder", "gold"),
+            firstContext);
+
+        Assert.Equal("lobby_state", result.DirectResponse.Type);
+        Assert.NotNull(result.Broadcast);
+        Assert.Equal("lobby_state", result.Broadcast.Type);
+        Assert.Equal(0, result.Broadcast.Sequence);
+        Assert.Equal(session.SessionId, result.Broadcast.SessionId);
+        Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
+        Assert.Equal(0, sessionManager.GetSession(session.SessionId)?.LastEventSequence);
+        var payload = Assert.IsType<LobbyStatePayload>(result.Broadcast.Payload);
+        Assert.Equal("Josh", payload.Players[0].Username);
+    }
+
+    [Fact]
+    public void SetProfile_AfterGameStartReturnsInvalidSessionStatus()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+        _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
+
+        using var response = Handle(handler, firstContext, SetProfileMessage("Josh", "token_car_placeholder", "gold"));
+
+        AssertError(response, "invalid_session_status");
+    }
+
+    [Fact]
     public void StartGame_ReturnsGameStartedForReadyLobby()
     {
         var sessionManager = new SessionManager();
@@ -197,6 +357,50 @@ public class LobbyMessageHandlerTests
         AssertGameStartedPlayer(players[0], "player_1");
         AssertGameStartedPlayer(players[1], "player_2");
         Assert.Equal(GameSessionStatus.InGame, sessionManager.GetSession(session.SessionId)?.Status);
+    }
+
+    [Fact]
+    public void StartGame_UsesSelectedProfilesForGameStartedSnapshotAndReconnect()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(SetProfileMessage("Josh", "token_car_placeholder", "gold"), firstContext);
+        _ = handler.HandleTextMessage(SetProfileMessage("Lee", "token_hat_placeholder", "blue"), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+
+        using var startResponse = Handle(handler, firstContext, StartGameMessage(session.SessionId, "player_1"));
+        using var snapshotResponse = Handle(handler, firstContext, GetSnapshotMessage(session.SessionId, "player_1"));
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        using var reconnectResponse = Handle(handler, reconnectContext, ReconnectMessage(session.SessionId, "player_1"));
+        var startPlayer = AssertResponseType(startResponse, "game_started")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        var snapshotPlayer = AssertResponseType(snapshotResponse, "snapshot_result")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        var reconnectPlayer = AssertResponseType(reconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+
+        Assert.Equal("Josh", startPlayer.GetProperty("username").GetString());
+        Assert.Equal("token_car_placeholder", startPlayer.GetProperty("tokenId").GetString());
+        Assert.Equal("gold", startPlayer.GetProperty("colorId").GetString());
+        Assert.Equal("Josh", snapshotPlayer.GetProperty("username").GetString());
+        Assert.Equal("token_car_placeholder", snapshotPlayer.GetProperty("tokenId").GetString());
+        Assert.Equal("gold", snapshotPlayer.GetProperty("colorId").GetString());
+        Assert.Equal("Josh", reconnectPlayer.GetProperty("username").GetString());
+        Assert.Equal("token_car_placeholder", reconnectPlayer.GetProperty("tokenId").GetString());
+        Assert.Equal("gold", reconnectPlayer.GetProperty("colorId").GetString());
     }
 
     [Fact]
@@ -3887,6 +4091,11 @@ public class LobbyMessageHandlerTests
     {
         var readyJson = isReady ? "true" : "false";
         return $@"{{""type"":""set_ready"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""isReady"":{readyJson}}}}}";
+    }
+
+    private static string SetProfileMessage(string username, string tokenId, string colorId)
+    {
+        return $@"{{""type"":""set_profile"",""payload"":{{""username"":""{username}"",""tokenId"":""{tokenId}"",""colorId"":""{colorId}""}}}}";
     }
 
     private static string StartGameMessage(string sessionId, string playerId)

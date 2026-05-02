@@ -75,6 +75,92 @@ public sealed class SessionManager
         return updatedSession;
     }
 
+    public GameSession SetProfile(
+        string sessionId,
+        PlayerId playerId,
+        string username,
+        string tokenId,
+        string colorId)
+    {
+        var trimmedUsername = (username ?? string.Empty).Trim();
+        var trimmedTokenId = (tokenId ?? string.Empty).Trim();
+        var trimmedColorId = (colorId ?? string.Empty).Trim();
+        var session = FindSession(sessionId);
+
+        if (session.Status != GameSessionStatus.Lobby)
+        {
+            throw new InvalidOperationException("Session is not in lobby status.");
+        }
+
+        if (string.IsNullOrWhiteSpace(trimmedUsername) ||
+            string.IsNullOrWhiteSpace(trimmedTokenId) ||
+            string.IsNullOrWhiteSpace(trimmedColorId))
+        {
+            throw new InvalidOperationException("Profile fields must be non-empty.");
+        }
+
+        foreach (var existingPlayer in session.Players)
+        {
+            if (existingPlayer.PlayerId == playerId)
+            {
+                continue;
+            }
+
+            if (string.Equals(existingPlayer.Username, trimmedUsername, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Username is already taken.");
+            }
+
+            if (string.Equals(existingPlayer.TokenId, trimmedTokenId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Token is already taken.");
+            }
+
+            if (string.Equals(existingPlayer.ColorId, trimmedColorId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Color is already taken.");
+            }
+        }
+
+        var playerExists = false;
+        var updatedPlayers = session.Players
+            .Select(player =>
+            {
+                if (player.PlayerId != playerId)
+                {
+                    return player;
+                }
+
+                playerExists = true;
+                return player with
+                {
+                    Username = trimmedUsername,
+                    TokenId = trimmedTokenId,
+                    ColorId = trimmedColorId,
+                };
+            })
+            .ToArray();
+
+        if (!playerExists)
+        {
+            throw new InvalidOperationException("Player is not in lobby.");
+        }
+
+        if (updatedPlayers.SequenceEqual(session.Players))
+        {
+            return session;
+        }
+
+        var updatedSession = session with
+        {
+            Players = updatedPlayers,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return updatedSession;
+    }
+
     public GameSession LeaveSession(string sessionId, PlayerConnection player)
     {
         var session = FindSession(sessionId);
@@ -222,7 +308,7 @@ public sealed class SessionManager
 
         var startTileId = GetStartTileId(session.GameState.Board);
         var enginePlayers = session.Players
-            .Select(player => CreateEnginePlayer(player.PlayerId, startTileId))
+            .Select(player => CreateEnginePlayer(player, startTileId))
             .ToArray();
 
         var lobbyGameState = new GameState(
@@ -333,13 +419,13 @@ public sealed class SessionManager
         return startTile.TileId;
     }
 
-    private static Player CreateEnginePlayer(PlayerId playerId, TileId startTileId)
+    private static Player CreateEnginePlayer(PlayerConnection player, TileId startTileId)
     {
         return new Player(
-            playerId,
-            playerId.Value,
-            $"token_{playerId.Value}",
-            $"color_{playerId.Value}",
+            player.PlayerId,
+            string.IsNullOrWhiteSpace(player.Username) ? player.PlayerId.Value : player.Username,
+            string.IsNullOrWhiteSpace(player.TokenId) ? $"token_{player.PlayerId.Value}" : player.TokenId,
+            string.IsNullOrWhiteSpace(player.ColorId) ? $"color_{player.PlayerId.Value}" : player.ColorId,
             new Money(StartingMoney),
             startTileId,
             new HashSet<TileId>(),

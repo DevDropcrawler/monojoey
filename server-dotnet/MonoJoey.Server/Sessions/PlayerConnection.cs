@@ -5,4 +5,7 @@ using MonoJoey.Shared.Protocol;
 public sealed record PlayerConnection(
     PlayerId PlayerId,
     string ConnectionId,
-    bool IsReady);
+    bool IsReady,
+    string Username = "",
+    string TokenId = "",
+    string ColorId = "");

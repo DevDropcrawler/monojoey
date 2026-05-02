@@ -5,30 +5,30 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.16 End-Game / Win Conditions
-- Completion status: Chunk 5.16 complete; the server now deterministically completes matches when a persisted terminal action leaves exactly one active player, emits ordered `game_completed` broadcasts, and exposes completed state in snapshots/reconnect.
+- Chunk: 5.19 Profile + Lobby Sync
+- Completion status: Chunk 5.19 complete; the server now accepts lobby-only `set_profile`, stores profile choices in lobby player metadata, enforces per-session username/token/color uniqueness, emits lobby-state profile broadcasts without gameplay sequence allocation, and starts games with selected profiles copied into engine players.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-05-02 10:00 +12:00
+- Date/time: 2026-05-02 20:48 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.16 - End-Game / Win Conditions.
+Phase 5, Chunk 5.19 - Profile + Lobby Sync.
 
 Completed:
 
-- Added `GameStatus` and extended `GameState` with match `Status` and `WinnerPlayerId`.
-- Added `GameCompletionManager.CompleteIfWinner(...)` with deterministic one-active-player completion, zero/multiple-active no-op behavior, idempotency, and active-auction clearing.
-- Added an atomic terminal session commit path that allocates the normal action sequence and optional `game_completed` sequence under one session update.
-- Added `game_completed` broadcast payloads with winner, turn index, end time, active count, and eliminated player IDs.
-- Generalized realtime handler results and WebSocket broadcasting from one optional broadcast to ordered broadcasts while preserving existing single-broadcast behavior.
-- Integrated completion after terminal mutation paths: rent/card tile execution, auction finalization, and end-turn advancement including start-turn loan interest effects.
-- Rejected gameplay mutations after completion with `game_already_completed` without consuming sequence numbers.
-- Kept completed matches in `GameSessionStatus.InGame` so `get_snapshot` and `reconnect_session` remain direct-only and sequence-free.
-- Added completed `gameStatus`, `winnerPlayerId`, `phase`, and `endedAtUtc` snapshot/reconnect projection.
-- Added engine, session, realtime, and WebSocket tests for completion, ordered broadcasts, atomic sequence allocation, completed-action rejection, snapshots, and reconnect.
+- Extended `PlayerConnection` lobby metadata with `Username`, `TokenId`, and `ColorId`.
+- Added `set_profile` client messages that derive `sessionId` and `playerId` from the bound WebSocket `LobbyConnectionContext`; payload `sessionId`/`playerId` are ignored when present.
+- Added trimmed non-empty profile validation and per-session uniqueness checks: username is case-insensitive, token/color are ordinal, and the current player is excluded.
+- Added `username_taken`, `token_taken`, and `color_taken` lobby error codes.
+- Extended `lobby_state` player payloads with `username`, `tokenId`, and `colorId`.
+- Added lobby-state broadcasts for accepted `set_profile` calls using the existing handler/WebSocket broadcast path, without incrementing gameplay `LastEventSequence`.
+- Preserved duplicate lobby join behavior while explicitly preserving ready/profile metadata and refreshing only the connection ID.
+- Updated `start_game` to copy selected lobby profiles into engine `Player` records; unset profiles still fall back to deterministic placeholder values.
+- Confirmed `game_started`, `get_snapshot`, and `reconnect_session` expose selected profiles from persisted `GameState.Players` after start.
+- Added session, realtime handler, and WebSocket tests for valid profiles, uniqueness rejection without mutation, idempotent same-player updates, profile changes, post-start rejection, profile copy into game state, snapshot/reconnect projection, and direct-response-then-broadcast ordering.
 
 Not included by explicit user scope:
 
@@ -40,7 +40,7 @@ Not included by explicit user scope:
 - Scaling.
 - Event replay storage and missed-event catch-up.
 - Auth, accounts, reconnect tokens, or reconnect secrets.
-- Lobby broadcasts.
+- Broader lobby broadcasts beyond the `set_profile` profile-sync broadcast.
 - Reconnect identity.
 - Authentication.
 - Unity client.
@@ -50,18 +50,11 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `shared/MonoJoey.Shared/Schemas/SchemaEnums.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameCompletionManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/GameStateEventPersistenceResult.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
-- `docs/DATA_SCHEMAS.md`
-- `docs/MULTIPLAYER_PROTOCOL.md`
-- `docs/RULES_ENGINE.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -142,7 +135,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 413 tests passed.
+  - Output summary: 447 tests passed.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -159,18 +152,25 @@ Not included by explicit user scope:
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - Successful state-changing gameplay requests then emit one or more best-effort ordered broadcast events to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `game_completed`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `game_completed`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
+- `set_profile` requires an already-bound lobby connection and derives `sessionId` and `playerId` only from `LobbyConnectionContext`; payload `sessionId`/`playerId` are not required and are ignored if present.
+- `set_profile` requires non-empty string `username`, `tokenId`, and `colorId`; values are trimmed before storage.
+- `set_profile` enforces uniqueness within the lobby session, excluding the requesting player: usernames compare case-insensitively, token IDs and color IDs compare ordinally.
+- `set_profile` returns direct `lobby_state` and emits a best-effort `lobby_state` broadcast to connected lobby players, including the sender, through the existing WebSocket broadcast path.
+- Lobby profile broadcasts use the current `LastEventSequence` value and do not allocate gameplay event sequences.
+- Same-player repeated `set_profile` values are idempotent; same-player changes are allowed while the session is still in lobby status.
+- Accepted `set_profile` updates are rejected after game start through `invalid_session_status`.
 - On WebSocket disconnect, the bound player is removed from the known session only while the session is still in lobby status; after game start, cleanup clears only the socket binding.
-- Lobby responses are still direct request/response only; no lobby broadcasts were added in this chunk.
+- Other lobby messages remain direct request/response only; only `set_profile` currently emits lobby-state broadcasts.
 - `/health` returns a minimal plain-text `healthy` response.
 - `PlayerConnection.ConnectionId` is populated from the WebSocket transport connection ID for lobby joins and in-game reconnects, but there is still no authenticated identity.
-- `PlayerConnection.IsReady` is lobby metadata only; `start_game` requires every lobby player to be ready.
+- `PlayerConnection.IsReady`, `Username`, `TokenId`, and `ColorId` are lobby metadata only; `start_game` requires every lobby player to be ready and copies profile metadata into engine players.
 - `GameSession.Players` tracks lobby connection metadata and is intentionally separate from `GameState.Players`; joining a session does not create an engine player.
 - `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
-- Started engine players use temporary deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
+- Started engine players use selected lobby profiles when present; unset profile fields still fall back to deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
 - `roll_dice` rolls dice and moves the current player only.
 - `roll_result` contains the rolling `playerId`, two dice values, landing tile ID as `newPosition`, `passedStart`, and `hasRolledThisTurn`.
@@ -236,7 +236,7 @@ Not included by explicit user scope:
 - Completed games keep `GameSessionStatus.InGame`; only `GameState.Status` and `GameState.Phase` move to completed.
 - Completed gameplay mutations reject with `game_already_completed` before mutation and without sequence allocation.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
-- Duplicate lobby joins are idempotent by `PlayerId` for membership count; they refresh the stored connection ID while preserving the existing ready state.
+- Duplicate lobby joins are idempotent by `PlayerId` for membership count; they refresh the stored connection ID while preserving the existing ready state and profile metadata.
 - Leaving with a player not present in the session is a safe no-op.
 - Leaving after game start can remove lobby connection metadata, but it does not remove any player from `GameState.Players`.
 - `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
@@ -272,10 +272,11 @@ Not included by explicit user scope:
 - WebSocket transport connection IDs are bound to `PlayerConnection.ConnectionId` for active lobby membership created by `join_lobby` and for in-game reconnects through `reconnect_session`.
 - One WebSocket connection may bind to only one `playerId`; attempts to switch players are rejected.
 - `set_ready` and `start_game` require the WebSocket connection to be bound to the same `sessionId` and `playerId` named in the payload.
+- `set_profile` deliberately does not trust payload identity fields; it uses only the already-bound `LobbyConnectionContext` session/player identity.
 - Game start is deterministic: engine players are created in lobby order and `TurnManager.StartFirstTurn` selects the first eligible lobby-order player.
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not remove engine players and clears only the matching current connection ID, so stale sockets closing after reconnect cannot erase the newer binding.
-- Lobby messages are direct request/response only; lobby broadcasts are intentionally deferred.
+- Lobby broadcasts exist only for accepted `set_profile` updates; broader join/leave/ready lobby broadcasts are still intentionally deferred.
 - Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan` now keep direct request/response behavior and emit sequenced broadcasts after successful state changes. `get_snapshot` remains direct-only.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
 - Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
@@ -358,7 +359,7 @@ Phase 5 follow-up - choose the next narrow networking/session slice only if expl
 Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
-- Add lobby broadcasts if/when a broader client synchronization chunk is assigned.
+- Add broader lobby broadcasts for join/leave/ready if/when a wider client synchronization chunk is assigned.
 - Add automatic auction timers/expiry, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
@@ -399,4 +400,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.16 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.19 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

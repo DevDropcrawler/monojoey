@@ -79,6 +79,48 @@ public class WebSocketConnectionHandlerTests
     }
 
     [Fact]
+    public async Task SetProfile_SendsDirectLobbyStateThenLobbyBroadcast()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        _ = sessionManager.JoinSession(
+            session.SessionId,
+            new PlayerConnection(new PlayerId("player_2"), "other_connection", IsReady: false));
+        var connectionManager = new TestConnectionManager("sender_connection");
+        using var otherWebSocket = new ScriptedWebSocket();
+        connectionManager.Register("other_connection", otherWebSocket);
+        var lobbyMessageHandler = new LobbyMessageHandler(sessionManager);
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var senderWebSocket = new ScriptedWebSocket(
+            TextFrame(JoinMessage(session.SessionId, "player_1")),
+            TextFrame(SetProfileMessage("Josh", "token_car_placeholder", "gold")),
+            CloseFrame());
+
+        await handler.HandleAsync(senderWebSocket, CancellationToken.None);
+
+        Assert.Equal(3, senderWebSocket.SentTextMessages.Count);
+        using var joinResponse = JsonDocument.Parse(senderWebSocket.SentTextMessages[0]);
+        Assert.Equal("lobby_state", joinResponse.RootElement.GetProperty("type").GetString());
+        using var directResponse = JsonDocument.Parse(senderWebSocket.SentTextMessages[1]);
+        Assert.Equal("lobby_state", directResponse.RootElement.GetProperty("type").GetString());
+        Assert.Equal(
+            "Josh",
+            directResponse.RootElement
+                .GetProperty("payload")
+                .GetProperty("players")
+                .EnumerateArray()
+                .First(player => player.GetProperty("playerId").GetString() == "player_1")
+                .GetProperty("username")
+                .GetString());
+        using var senderBroadcast = JsonDocument.Parse(senderWebSocket.SentTextMessages[2]);
+        Assert.Equal("lobby_state", senderBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Equal(0, senderBroadcast.RootElement.GetProperty("sequence").GetInt64());
+        var otherBroadcastMessage = Assert.Single(otherWebSocket.SentTextMessages);
+        using var otherBroadcast = JsonDocument.Parse(otherBroadcastMessage);
+        Assert.Equal("lobby_state", otherBroadcast.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task CardTileExecute_SendsOneExecuteTileResultResponse()
     {
         var sessionManager = new SessionManager();
@@ -496,6 +538,11 @@ public class WebSocketConnectionHandlerTests
     {
         var readyJson = isReady ? "true" : "false";
         return $@"{{""type"":""set_ready"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""isReady"":{readyJson}}}}}";
+    }
+
+    private static string SetProfileMessage(string username, string tokenId, string colorId)
+    {
+        return $@"{{""type"":""set_profile"",""payload"":{{""username"":""{username}"",""tokenId"":""{tokenId}"",""colorId"":""{colorId}""}}}}";
     }
 
     private static string StartGameMessage(string sessionId, string playerId)

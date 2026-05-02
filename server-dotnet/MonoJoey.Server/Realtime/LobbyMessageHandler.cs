@@ -125,6 +125,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.CreateLobby => HandleCreateLobby(),
             LobbyMessageTypes.JoinLobby => HandleJoinLobby(root, connectionContext),
             LobbyMessageTypes.LeaveLobby => HandleLeaveLobby(root, connectionContext),
+            LobbyMessageTypes.SetProfile => HandleSetProfile(root, connectionContext),
             LobbyMessageTypes.SetReady => HandleSetReady(root, connectionContext),
             LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
             LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
@@ -1260,6 +1261,89 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyMessageHandleResult HandleSetProfile(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadSetProfilePayload(root, out var username, out var tokenId, out var colorId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "set_profile requires payload.username, payload.tokenId, and payload.colorId.");
+        }
+
+        if (connectionContext.SessionId is null || connectionContext.PlayerId is null)
+        {
+            return CreateError(
+                LobbyErrorCodes.PlayerSwitchRejected,
+                "This connection is not bound to a lobby session and playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            try
+            {
+                var updatedSession = sessionManager.SetProfile(
+                    connectionContext.SessionId,
+                    new PlayerId(connectionContext.PlayerId),
+                    username,
+                    tokenId,
+                    colorId);
+
+                return CreateLobbyBroadcastResult(CreateLobbyState(updatedSession), updatedSession);
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session not found.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.SessionNotFound,
+                    "Session not found.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session is not in lobby status.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Profile fields must be non-empty.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidPayload,
+                    "set_profile fields must be non-empty strings.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Player is not in lobby.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotInLobby,
+                    "Player is not in lobby.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Username is already taken.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.UsernameTaken,
+                    "Username is already taken.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Token is already taken.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.TokenTaken,
+                    "Token is already taken.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Color is already taken.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.ColorTaken,
+                    "Color is already taken.");
+            }
+        }
+    }
+
     private LobbyServerEnvelope HandleSetReady(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1714,6 +1798,36 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadSetProfilePayload(
+        JsonElement root,
+        out string username,
+        out string tokenId,
+        out string colorId)
+    {
+        username = string.Empty;
+        tokenId = string.Empty;
+        colorId = string.Empty;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            payload.TryGetProperty("sessionId", out _) ||
+            payload.TryGetProperty("playerId", out _) ||
+            !TryReadString(payload, "username", out username) ||
+            !TryReadString(payload, "tokenId", out tokenId) ||
+            !TryReadString(payload, "colorId", out colorId))
+        {
+            return false;
+        }
+
+        username = username.Trim();
+        tokenId = tokenId.Trim();
+        colorId = colorId.Trim();
+
+        return username.Length > 0 &&
+            tokenId.Length > 0 &&
+            colorId.Length > 0;
+    }
+
     private static bool TryReadPlaceBidPayload(
         JsonElement root,
         out string sessionId,
@@ -1803,7 +1917,10 @@ public sealed class LobbyMessageHandler
                     .Select(player => new LobbyPlayerPayload(
                         player.PlayerId.Value,
                         player.ConnectionId,
-                        player.IsReady))
+                        player.IsReady,
+                        player.Username,
+                        player.TokenId,
+                        player.ColorId))
                     .ToArray()));
     }
 
@@ -2012,6 +2129,22 @@ public sealed class LobbyMessageHandler
             CreateBroadcastTargetConnectionIds(session));
     }
 
+    private static LobbyMessageHandleResult CreateLobbyBroadcastResult(
+        LobbyServerEnvelope directResponse,
+        GameSession session)
+    {
+        return new LobbyMessageHandleResult(
+            directResponse,
+            new LobbyBroadcastEnvelope(
+                LobbyMessageTypes.LobbyState,
+                session.LastEventSequence,
+                session.SessionId,
+                session.GameState.MatchId.Value,
+                DateTimeOffset.UtcNow,
+                directResponse.Payload),
+            CreateLobbyBroadcastTargetConnectionIds(session));
+    }
+
     private static LobbyMessageHandleResult CreateTerminalBroadcastResult(
         LobbyServerEnvelope directResponse,
         string eventType,
@@ -2061,6 +2194,20 @@ public sealed class LobbyMessageHandler
 
         return session.Players
             .Where(player => gamePlayerIds.Contains(player.PlayerId.Value))
+            .Where(player => !string.IsNullOrWhiteSpace(player.ConnectionId))
+            .Select(player => player.ConnectionId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> CreateLobbyBroadcastTargetConnectionIds(GameSession session)
+    {
+        if (session.Status != GameSessionStatus.Lobby)
+        {
+            return Array.Empty<string>();
+        }
+
+        return session.Players
             .Where(player => !string.IsNullOrWhiteSpace(player.ConnectionId))
             .Select(player => player.ConnectionId)
             .Distinct(StringComparer.Ordinal)
