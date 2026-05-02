@@ -161,6 +161,30 @@ public sealed class SessionManager
         return updatedSession;
     }
 
+    public GameSession SetDraftRules(string sessionId, PlayerId playerId, GameRules rules)
+    {
+        var session = FindSession(sessionId);
+
+        if (session.Status != GameSessionStatus.Lobby)
+        {
+            throw new InvalidOperationException("Session is not in lobby status.");
+        }
+
+        if (!session.Players.Any(player => player.PlayerId == playerId))
+        {
+            throw new InvalidOperationException("Player is not in lobby.");
+        }
+
+        var updatedSession = session with
+        {
+            DraftRules = rules,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return updatedSession;
+    }
+
     public GameSession LeaveSession(string sessionId, PlayerConnection player)
     {
         var session = FindSession(sessionId);
@@ -322,6 +346,7 @@ public sealed class SessionManager
             EndedAtUtc: null)
         {
             CardDeckStates = CreateInitialCardDeckStates(),
+            Rules = session.DraftRules.DeepCopy(),
         };
         var startedGameState = TurnManager.StartFirstTurn(lobbyGameState);
 

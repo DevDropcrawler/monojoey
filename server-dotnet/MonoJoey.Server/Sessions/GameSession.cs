@@ -7,4 +7,7 @@ public sealed record GameSession(
     IReadOnlyList<PlayerConnection> Players,
     GameState GameState,
     GameSessionStatus Status,
-    long LastEventSequence);
+    long LastEventSequence)
+{
+    public GameRules DraftRules { get; init; } = GameRulesPresets.MonoJoeyDefault;
+}

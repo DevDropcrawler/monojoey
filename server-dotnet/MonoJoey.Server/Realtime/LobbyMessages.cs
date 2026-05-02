@@ -1,6 +1,7 @@
 namespace MonoJoey.Server.Realtime;
 
 using System.Text.Json.Serialization;
+using MonoJoey.Server.GameEngine;
 
 public static class LobbyMessageTypes
 {
@@ -9,6 +10,7 @@ public static class LobbyMessageTypes
     public const string LeaveLobby = "leave_lobby";
     public const string SetProfile = "set_profile";
     public const string SetReady = "set_ready";
+    public const string SetRules = "set_rules";
     public const string StartGame = "start_game";
     public const string RollDice = "roll_dice";
     public const string ResolveTile = "resolve_tile";
@@ -32,6 +34,7 @@ public static class LobbyMessageTypes
     public const string UseHeldCardResult = "use_held_card_result";
     public const string SnapshotResult = "snapshot_result";
     public const string ReconnectResult = "reconnect_result";
+    public const string RulesUpdated = "rules_updated";
     public const string DiceRolled = "dice_rolled";
     public const string TileResolved = "tile_resolved";
     public const string TileExecuted = "tile_executed";
@@ -69,6 +72,7 @@ public static class LobbyErrorCodes
     public const string AuctionNotActive = "auction_not_active";
     public const string BidTooLow = "bid_too_low";
     public const string InvalidLoanAmount = "invalid_loan_amount";
+    public const string InvalidRules = "invalid_rules";
     public const string LoanModeDisabled = "loan_mode_disabled";
     public const string LoanReasonBlocked = "loan_reason_blocked";
     public const string CardDeckNotFound = "card_deck_not_found";
@@ -140,7 +144,8 @@ public sealed record LobbyErrorPayload(
 public sealed record LobbyStatePayload(
     string SessionId,
     string Status,
-    IReadOnlyList<LobbyPlayerPayload> Players);
+    IReadOnlyList<LobbyPlayerPayload> Players,
+    GameRules Rules);
 
 public sealed record LobbyPlayerPayload(
     string PlayerId,
@@ -317,7 +322,12 @@ public sealed record SnapshotPayload(
     SnapshotBoardPayload Board,
     SnapshotAuctionPayload? ActiveAuction,
     IReadOnlyList<SnapshotCardDeckPayload> CardDecks,
-    SnapshotLoanSharkPayload LoanShark);
+    SnapshotLoanSharkPayload LoanShark,
+    GameRules Rules);
+
+public sealed record RulesUpdatedPayload(
+    string SessionId,
+    GameRules Rules);
 
 public sealed record ReconnectResultPayload(
     string SessionId,

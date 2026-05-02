@@ -139,6 +139,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.LeaveLobby => HandleLeaveLobby(root, connectionContext),
             LobbyMessageTypes.SetProfile => HandleSetProfile(root, connectionContext),
             LobbyMessageTypes.SetReady => HandleSetReady(root, connectionContext),
+            LobbyMessageTypes.SetRules => HandleSetRules(root, connectionContext),
             LobbyMessageTypes.StartGame => HandleStartGame(root, connectionContext),
             LobbyMessageTypes.RollDice => HandleRollDice(root, connectionContext),
             LobbyMessageTypes.ResolveTile => HandleResolveTile(root, connectionContext),
@@ -162,6 +163,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.UseHeldCardResult or
                 LobbyMessageTypes.SnapshotResult or
                 LobbyMessageTypes.ReconnectResult or
+                LobbyMessageTypes.RulesUpdated or
                 LobbyMessageTypes.DiceRolled or
                 LobbyMessageTypes.TileResolved or
                 LobbyMessageTypes.TileExecuted or
@@ -1477,6 +1479,86 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyMessageHandleResult HandleSetRules(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadSetRulesPayload(root, out var sessionId, out var playerId, out var rulesPayload))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "set_rules requires payload.sessionId, payload.playerId, and object payload.rules.");
+        }
+
+        if (!IsBoundToSessionPlayer(connectionContext, sessionId, playerId))
+        {
+            return CreateError(
+                LobbyErrorCodes.PlayerSwitchRejected,
+                "This connection is not bound to that session and playerId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.SessionNotFound,
+                    "Session not found.");
+            }
+
+            if (session.Status != GameSessionStatus.Lobby)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
+
+            if (session.Players.All(player => player.PlayerId.Value != playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotInLobby,
+                    "Player is not in lobby.");
+            }
+
+            GameRules resolvedRules;
+            try
+            {
+                resolvedRules = GameRulesResolver.Resolve(rulesPayload);
+            }
+            catch (GameRulesValidationException exception)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidRules,
+                    exception.Message);
+            }
+
+            try
+            {
+                var updatedSession = sessionManager.SetDraftRules(
+                    sessionId,
+                    new PlayerId(playerId),
+                    resolvedRules);
+
+                return CreateRulesUpdatedBroadcastResult(updatedSession);
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Session is not in lobby status.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionStatus,
+                    "Session is not in lobby status.");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Player is not in lobby.")
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotInLobby,
+                    "Player is not in lobby.");
+            }
+        }
+    }
+
     private LobbyServerEnvelope HandleStartGame(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1912,6 +1994,29 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadSetRulesPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out JsonElement rules)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        rules = default;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !payload.TryGetProperty("rules", out rules) ||
+            rules.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TryReadSetProfilePayload(
         JsonElement root,
         out string username,
@@ -2035,7 +2140,8 @@ public sealed class LobbyMessageHandler
                         player.Username,
                         player.TokenId,
                         player.ColorId))
-                    .ToArray()));
+                    .ToArray(),
+                session.DraftRules));
     }
 
     private static LobbyServerEnvelope CreateGameStarted(GameSession session)
@@ -2101,7 +2207,8 @@ public sealed class LobbyMessageHandler
                 .OrderBy(deckState => deckState.Value.DeckId, StringComparer.Ordinal)
                 .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
                 .ToArray(),
-            LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled));
+            LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled),
+            Rules: gameState.Rules);
     }
 
     private static GameCompletedPayload CreateGameCompletedPayload(GameState gameState)
@@ -2253,6 +2360,24 @@ public sealed class LobbyMessageHandler
             directResponse,
             new LobbyBroadcastEnvelope(
                 LobbyMessageTypes.LobbyState,
+                session.LastEventSequence,
+                session.SessionId,
+                session.GameState.MatchId.Value,
+                DateTimeOffset.UtcNow,
+                directResponse.Payload),
+            CreateLobbyBroadcastTargetConnectionIds(session));
+    }
+
+    private static LobbyMessageHandleResult CreateRulesUpdatedBroadcastResult(GameSession session)
+    {
+        var directResponse = new LobbyServerEnvelope(
+            LobbyMessageTypes.RulesUpdated,
+            new RulesUpdatedPayload(session.SessionId, session.DraftRules));
+
+        return new LobbyMessageHandleResult(
+            directResponse,
+            new LobbyBroadcastEnvelope(
+                LobbyMessageTypes.RulesUpdated,
                 session.LastEventSequence,
                 session.SessionId,
                 session.GameState.MatchId.Value,
