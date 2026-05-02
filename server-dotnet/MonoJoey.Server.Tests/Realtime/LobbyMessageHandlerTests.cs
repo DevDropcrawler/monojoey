@@ -886,14 +886,45 @@ public class LobbyMessageHandlerTests
         Assert.Equal(3, auction.GetProperty("bidResetSeconds").GetInt32());
         Assert.Equal(JsonValueKind.Null, auction.GetProperty("highestBid").ValueKind);
         Assert.Equal(JsonValueKind.Null, auction.GetProperty("highestBidderId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, auction.GetProperty("countdownDurationSeconds").ValueKind);
+        Assert.Equal(9, auction.GetProperty("countdownDurationSeconds").GetInt32());
+        Assert.Equal(JsonValueKind.String, auction.GetProperty("timerEndsAtUtc").ValueKind);
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("rent").ValueKind);
         Assert.True(updatedSession.GameState.HasExecutedTileThisTurn);
         Assert.NotNull(updatedSession.GameState.ActiveAuctionState);
         Assert.Equal("property_01", updatedSession.GameState.ActiveAuctionState?.PropertyTileId.Value);
+        Assert.NotNull(updatedSession.GameState.ActiveAuctionState?.TimerEndsAtUtc);
         Assert.Equal(beforeExecute.Phase, updatedSession.GameState.Phase);
         Assert.Equal(beforeExecute.Players[0].Money, updatedSession.GameState.Players[0].Money);
         Assert.Equal(beforeExecute.Players[1].Money, updatedSession.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void ExecuteTile_UnownedPropertySchedulesAuctionTimer()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var persistedDeadline = sessionManager
+            .GetSession(started.Session.SessionId)!
+            .GameState
+            .ActiveAuctionState!
+            .TimerEndsAtUtc;
+        var foundTimer = timerService.TryGetActiveTimerForTesting(
+            started.Session.SessionId,
+            out var activeDeadline,
+            out _);
+
+        AssertResponseType(response, "execute_tile_result");
+        Assert.True(foundTimer);
+        Assert.Equal(persistedDeadline, activeDeadline);
+        Assert.Equal(1, timerService.ActiveTimerCount);
     }
 
     [Fact]
@@ -1857,12 +1888,44 @@ public class LobbyMessageHandlerTests
         Assert.Equal(25, payload.GetProperty("amount").GetInt32());
         Assert.Equal(25, payload.GetProperty("currentHighestBid").GetInt32());
         Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(JsonValueKind.String, payload.GetProperty("timerEndsAtUtc").ValueKind);
         Assert.Equal(AuctionStatus.ActiveBidCountdown, afterBid.ActiveAuctionState?.Status);
         Assert.Equal(new Money(25), afterBid.ActiveAuctionState?.HighestBid);
         Assert.Equal(new PlayerId("player_2"), afterBid.ActiveAuctionState?.HighestBidderId);
         Assert.Equal(3, afterBid.ActiveAuctionState?.CountdownDurationSeconds);
+        Assert.NotNull(afterBid.ActiveAuctionState?.TimerEndsAtUtc);
         Assert.Single(afterBid.ActiveAuctionState?.Bids ?? Array.Empty<AuctionBid>());
         Assert.Equal(beforeBid.Phase, afterBid.Phase);
+    }
+
+    [Fact]
+    public void PlaceBid_ValidBidReplacesAuctionTimer()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var initialDeadline = session.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+        timerService.Schedule(session.SessionId, initialDeadline);
+        _ = timerService.TryGetActiveTimerForTesting(session.SessionId, out _, out var initialVersion);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 25));
+        var persistedAuction = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState!;
+        var foundTimer = timerService.TryGetActiveTimerForTesting(
+            session.SessionId,
+            out var activeDeadline,
+            out var bidVersion);
+
+        AssertResponseType(response, "bid_result");
+        Assert.True(foundTimer);
+        Assert.Equal(persistedAuction.TimerEndsAtUtc, activeDeadline);
+        Assert.NotEqual(initialDeadline, activeDeadline);
+        Assert.NotEqual(initialVersion, bidVersion);
+        Assert.Equal(1, timerService.ActiveTimerCount);
     }
 
     [Fact]
@@ -2593,7 +2656,8 @@ public class LobbyMessageHandlerTests
                         new[] { new AuctionBid(new PlayerId("player_2"), new Money(20), placedAtUtc) },
                         new Money(20),
                         new PlayerId("player_2"),
-                        CountdownDurationSeconds: 3),
+                        CountdownDurationSeconds: 3,
+                        TimerEndsAtUtc: placedAtUtc.AddSeconds(3)),
                     CardDeckStates = deckStates,
                 };
             });
@@ -2619,6 +2683,7 @@ public class LobbyMessageHandlerTests
         Assert.Equal(started.Session.SessionId, payload.GetProperty("sessionId").GetString());
         Assert.Equal("in_game", payload.GetProperty("status").GetString());
         Assert.Equal("in_progress", payload.GetProperty("gameStatus").GetString());
+        Assert.Equal(JsonValueKind.String, payload.GetProperty("serverNowUtc").ValueKind);
         Assert.Equal(started.Session.SessionId, payload.GetProperty("matchId").GetString());
         Assert.Equal("awaiting_roll", payload.GetProperty("phase").GetString());
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("winnerPlayerId").ValueKind);
@@ -2641,6 +2706,7 @@ public class LobbyMessageHandlerTests
         Assert.Equal("active_bid_countdown", auction.GetProperty("status").GetString());
         Assert.Equal(20, auction.GetProperty("highestBid").GetInt32());
         Assert.Equal("player_2", auction.GetProperty("highestBidderId").GetString());
+        Assert.Equal(placedAtUtc.AddSeconds(3), auction.GetProperty("timerEndsAtUtc").GetDateTimeOffset());
         Assert.Equal("player_2", bid.GetProperty("bidderPlayerId").GetString());
         Assert.Equal(20, bid.GetProperty("amount").GetInt32());
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
@@ -3004,6 +3070,99 @@ public class LobbyMessageHandlerTests
         Assert.Equal(2, updatedSession.Players.Count);
         Assert.Equal(2, updatedSession.GameState.Players.Count);
         Assert.False(started.FirstContext.IsBound);
+    }
+
+    [Fact]
+    public void AuctionTimerExpired_NoBidsFinalizesNoSaleOnce()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var deadline = session.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+        timerService.Schedule(session.SessionId, deadline);
+
+        var result = handler.HandleAuctionTimerExpired(session.SessionId, deadline, deadline);
+        var payload = result is null
+            ? throw new InvalidOperationException("Timer expiry should finalize an active auction.")
+            : Assert.IsType<AuctionResultPayload>(result.DirectResponse.Payload);
+        var afterFirstExpiry = sessionManager.GetSession(session.SessionId)!;
+        var lastSequence = afterFirstExpiry.LastEventSequence;
+        var duplicateResult = handler.HandleAuctionTimerExpired(session.SessionId, deadline, deadline.AddTicks(1));
+
+        Assert.Equal("no_sale", payload.ResultType);
+        Assert.Null(payload.WinnerPlayerId);
+        Assert.Null(afterFirstExpiry.GameState.ActiveAuctionState);
+        Assert.Null(duplicateResult);
+        Assert.Equal(lastSequence, sessionManager.GetSession(session.SessionId)!.LastEventSequence);
+        Assert.Equal(0, timerService.ActiveTimerCount);
+    }
+
+    [Fact]
+    public void AuctionTimerExpired_BidDeadlineAwardsHighestBidder()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+        var deadline = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+
+        var result = handler.HandleAuctionTimerExpired(started.Session.SessionId, deadline, deadline);
+        var payload = result is null
+            ? throw new InvalidOperationException("Timer expiry should finalize an active auction.")
+            : Assert.IsType<AuctionResultPayload>(result.DirectResponse.Payload);
+        var afterExpiry = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var winner = afterExpiry.Players.Single(player => player.PlayerId.Value == "player_2");
+
+        Assert.Equal("won", payload.ResultType);
+        Assert.Equal("player_2", payload.WinnerPlayerId);
+        Assert.Equal(260, payload.Amount);
+        Assert.Contains(new TileId("property_01"), winner.OwnedPropertyIds);
+        Assert.Null(afterExpiry.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void AuctionTimerExpired_StaleInitialDeadlineAfterBidDoesNotFinalize()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var initialDeadline = session.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 25), started.SecondContext);
+        var lastSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        var result = handler.HandleAuctionTimerExpired(started.Session.SessionId, initialDeadline, initialDeadline);
+        var afterStaleExpiry = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Null(result);
+        Assert.NotNull(afterStaleExpiry.GameState.ActiveAuctionState);
+        Assert.Equal(new PlayerId("player_2"), afterStaleExpiry.GameState.ActiveAuctionState?.HighestBidderId);
+        Assert.Equal(lastSequence, afterStaleExpiry.LastEventSequence);
+    }
+
+    [Fact]
+    public void FinalizeAuction_ManualFinalizationCancelsAuctionTimer()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var deadline = session.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+        timerService.Schedule(session.SessionId, deadline);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+
+        AssertResponseType(response, "auction_result");
+        Assert.Equal(0, timerService.ActiveTimerCount);
     }
 
     [Fact]
@@ -3940,6 +4099,17 @@ public class LobbyMessageHandlerTests
     private static LobbyMessageHandler CreateHandler(SessionManager sessionManager, DiceRoll diceRoll)
     {
         return new LobbyMessageHandler(sessionManager, new DiceService(new FixedDiceRoller(diceRoll)));
+    }
+
+    private static LobbyMessageHandler CreateHandler(
+        SessionManager sessionManager,
+        DiceRoll diceRoll,
+        AuctionTimerService auctionTimerService)
+    {
+        return new LobbyMessageHandler(
+            sessionManager,
+            new DiceService(new FixedDiceRoller(diceRoll)),
+            auctionTimerService);
     }
 
     private static StartedRealtimeGame StartReadyGame(

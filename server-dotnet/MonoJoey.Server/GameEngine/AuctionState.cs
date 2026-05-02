@@ -13,4 +13,5 @@ public sealed record AuctionState(
     IReadOnlyList<AuctionBid> Bids,
     Money? HighestBid,
     PlayerId? HighestBidderId,
-    int? CountdownDurationSeconds);
+    int? CountdownDurationSeconds,
+    DateTimeOffset? TimerEndsAtUtc);

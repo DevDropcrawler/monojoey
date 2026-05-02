@@ -201,7 +201,8 @@ public sealed record ExecuteTileAuctionPayload(
     int BidResetSeconds,
     int? HighestBid,
     string? HighestBidderId,
-    int? CountdownDurationSeconds);
+    int? CountdownDurationSeconds,
+    DateTimeOffset? TimerEndsAtUtc);
 
 public sealed record ExecuteTileRentPayload(
     string PayerId,
@@ -235,7 +236,8 @@ public sealed record BidResultPayload(
     string BidderPlayerId,
     int Amount,
     int CurrentHighestBid,
-    string HighestBidderId);
+    string HighestBidderId,
+    DateTimeOffset? TimerEndsAtUtc);
 
 public sealed record AuctionResultPayload(
     string ResultType,
@@ -271,6 +273,7 @@ public sealed record SnapshotPayload(
     string SessionId,
     string Status,
     string GameStatus,
+    DateTimeOffset ServerNowUtc,
     string MatchId,
     string Phase,
     string? WinnerPlayerId,
@@ -346,6 +349,7 @@ public sealed record SnapshotAuctionPayload(
     int? HighestBid,
     string? HighestBidderId,
     int? CountdownDurationSeconds,
+    DateTimeOffset? TimerEndsAtUtc,
     IReadOnlyList<SnapshotAuctionBidPayload> Bids);
 
 public sealed record SnapshotAuctionBidPayload(

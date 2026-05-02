@@ -28,7 +28,12 @@ public class AuctionManagerTests
         var propertyTileId = new TileId("property_01");
         var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
 
-        var result = AuctionManager.StartMandatoryAuction(gameState, playerId, propertyTileId);
+        var startedAtUtc = DateTimeOffset.Parse("2026-04-26T00:30:00+00:00");
+        var result = AuctionManager.StartMandatoryAuction(
+            gameState,
+            playerId,
+            propertyTileId,
+            startedAtUtc: startedAtUtc);
 
         Assert.True(result.AuctionStarted);
         Assert.Equal(AuctionStartResultKind.Started, result.ResultKind);
@@ -43,7 +48,8 @@ public class AuctionManagerTests
         Assert.Empty(result.AuctionState.Bids);
         Assert.Null(result.AuctionState.HighestBid);
         Assert.Null(result.AuctionState.HighestBidderId);
-        Assert.Null(result.AuctionState.CountdownDurationSeconds);
+        Assert.Equal(9, result.AuctionState.CountdownDurationSeconds);
+        Assert.Equal(startedAtUtc.AddSeconds(9), result.AuctionState.TimerEndsAtUtc);
     }
 
     [Fact]
@@ -144,6 +150,7 @@ public class AuctionManagerTests
         Assert.Equal(new Money(100), result.AuctionState.HighestBid);
         Assert.Equal(bidderId, result.AuctionState.HighestBidderId);
         Assert.Equal(3, result.AuctionState.CountdownDurationSeconds);
+        Assert.Equal(FirstBidTime.AddSeconds(3), result.AuctionState.TimerEndsAtUtc);
         var bid = Assert.Single(result.AuctionState.Bids);
         Assert.Equal(bidderId, bid.BidderId);
         Assert.Equal(new Money(100), bid.Amount);
@@ -252,6 +259,7 @@ public class AuctionManagerTests
 
         Assert.True(result.BidAccepted);
         Assert.Equal(3, result.AuctionState.CountdownDurationSeconds);
+        Assert.Equal(SecondBidTime.AddSeconds(3), result.AuctionState.TimerEndsAtUtc);
     }
 
     [Fact]

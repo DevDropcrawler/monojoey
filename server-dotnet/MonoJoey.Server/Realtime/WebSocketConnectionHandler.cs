@@ -11,9 +11,25 @@ public sealed class WebSocketConnectionHandler
     public WebSocketConnectionHandler(
         IWebSocketConnectionManager connectionManager,
         LobbyMessageHandler lobbyMessageHandler)
+        : this(connectionManager, lobbyMessageHandler, lobbyMessageHandler.AuctionTimerService)
+    {
+    }
+
+    public WebSocketConnectionHandler(
+        IWebSocketConnectionManager connectionManager,
+        LobbyMessageHandler lobbyMessageHandler,
+        AuctionTimerService auctionTimerService)
     {
         this.connectionManager = connectionManager;
         this.lobbyMessageHandler = lobbyMessageHandler;
+        auctionTimerService.SetExpiryHandler(async (sessionId, timerEndsAtUtc, cancellationToken) =>
+        {
+            var result = lobbyMessageHandler.HandleAuctionTimerExpired(sessionId, timerEndsAtUtc);
+            if (result is not null)
+            {
+                await BroadcastIfNeededAsync(result, cancellationToken);
+            }
+        });
     }
 
     public async Task HandleAsync(WebSocket webSocket, CancellationToken cancellationToken)

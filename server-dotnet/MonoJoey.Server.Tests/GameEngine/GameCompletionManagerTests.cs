@@ -92,7 +92,8 @@ public class GameCompletionManagerTests
                 },
                 new Money(10),
                 new PlayerId("player_1"),
-                CountdownDurationSeconds: 3),
+                CountdownDurationSeconds: 3,
+                TimerEndsAtUtc: StartedAtUtc.AddSeconds(3)),
         };
 
         var result = GameCompletionManager.CompleteIfWinner(gameState, EndedAtUtc);

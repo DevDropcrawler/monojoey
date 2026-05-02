@@ -410,6 +410,7 @@ public class TurnManagerTests
             Array.Empty<AuctionBid>(),
             HighestBid: null,
             HighestBidderId: null,
-            CountdownDurationSeconds: null);
+            CountdownDurationSeconds: 9,
+            TimerEndsAtUtc: DateTimeOffset.Parse("2026-04-26T00:00:09+00:00"));
     }
 }

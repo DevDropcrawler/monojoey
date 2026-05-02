@@ -10,7 +10,8 @@ public static class AuctionManager
         GameState gameState,
         PlayerId triggeringPlayerId,
         TileId propertyTileId,
-        AuctionConfig? config = null)
+        AuctionConfig? config = null,
+        DateTimeOffset? startedAtUtc = null)
     {
         var auctionConfig = config ?? AuctionConfig.Default;
         if (!auctionConfig.MandatoryAuctionsEnabled)
@@ -48,7 +49,8 @@ public static class AuctionManager
             Array.Empty<AuctionBid>(),
             HighestBid: null,
             HighestBidderId: null,
-            CountdownDurationSeconds: null);
+            CountdownDurationSeconds: auctionConfig.InitialPreBidSeconds,
+            TimerEndsAtUtc: (startedAtUtc ?? DateTimeOffset.UtcNow).AddSeconds(auctionConfig.InitialPreBidSeconds));
 
         return new AuctionStartResult(
             AuctionStartResultKind.Started,
@@ -112,6 +114,7 @@ public static class AuctionManager
             HighestBid = amount,
             HighestBidderId = bidderId,
             CountdownDurationSeconds = auctionState.BidResetSeconds,
+            TimerEndsAtUtc = placedAtUtc.AddSeconds(auctionState.BidResetSeconds),
         };
 
         return new AuctionBidResult(AuctionBidResultKind.Accepted, nextState, "Auction bid accepted.");

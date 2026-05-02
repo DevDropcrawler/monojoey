@@ -20,6 +20,7 @@ public sealed class Program
         builder.Services.AddSingleton<IDiceRoller, RandomDiceRoller>();
         builder.Services.AddSingleton<DiceService>();
         builder.Services.AddSingleton<SessionManager>();
+        builder.Services.AddSingleton<AuctionTimerService>();
         builder.Services.AddSingleton<LobbyMessageHandler>();
         builder.Services.AddSingleton<WebSocketConnectionHandler>();
 

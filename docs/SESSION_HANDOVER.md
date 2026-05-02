@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.19 Profile + Lobby Sync
-- Completion status: Chunk 5.19 complete; the server now accepts lobby-only `set_profile`, stores profile choices in lobby player metadata, enforces per-session username/token/color uniqueness, emits lobby-state profile broadcasts without gameplay sequence allocation, and starts games with selected profiles copied into engine players.
+- Chunk: 5.20 Server-Owned Auction Timers
+- Completion status: Chunk 5.20 complete; the server now owns mandatory auction countdown timers, persists only `AuctionState.TimerEndsAtUtc`, resets the deadline only on accepted bids, and finalizes expired auctions through the existing locked realtime/session mutation path.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
@@ -15,20 +15,20 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.19 - Profile + Lobby Sync.
+Phase 5, Chunk 5.20 - Server-Owned Auction Timers.
 
 Completed:
 
-- Extended `PlayerConnection` lobby metadata with `Username`, `TokenId`, and `ColorId`.
-- Added `set_profile` client messages that derive `sessionId` and `playerId` from the bound WebSocket `LobbyConnectionContext`; payload `sessionId`/`playerId` are ignored when present.
-- Added trimmed non-empty profile validation and per-session uniqueness checks: username is case-insensitive, token/color are ordinal, and the current player is excluded.
-- Added `username_taken`, `token_taken`, and `color_taken` lobby error codes.
-- Extended `lobby_state` player payloads with `username`, `tokenId`, and `colorId`.
-- Added lobby-state broadcasts for accepted `set_profile` calls using the existing handler/WebSocket broadcast path, without incrementing gameplay `LastEventSequence`.
-- Preserved duplicate lobby join behavior while explicitly preserving ready/profile metadata and refreshing only the connection ID.
-- Updated `start_game` to copy selected lobby profiles into engine `Player` records; unset profiles still fall back to deterministic placeholder values.
-- Confirmed `game_started`, `get_snapshot`, and `reconnect_session` expose selected profiles from persisted `GameState.Players` after start.
-- Added session, realtime handler, and WebSocket tests for valid profiles, uniqueness rejection without mutation, idempotent same-player updates, profile changes, post-start rejection, profile copy into game state, snapshot/reconnect projection, and direct-response-then-broadcast ordering.
+- Implemented server-owned auction timers for active mandatory auctions.
+- Added only `AuctionState.TimerEndsAtUtc` as persisted timer state; runtime timer versioning remains internal to `AuctionTimerService` and is not stored in `AuctionState`, `GameState`, snapshots, or wire commands.
+- Auction start now persists `CountdownDurationSeconds = 9` and `TimerEndsAtUtc = now + 9 seconds`.
+- Each accepted valid bid now persists `CountdownDurationSeconds = 3` and `TimerEndsAtUtc = acceptedAtUtc + 3 seconds`.
+- Rejected bids still return the unchanged auction state and do not reset deadlines, schedule timers, or allocate gameplay event sequences.
+- Timer expiry re-enters `LobbyMessageHandler`, takes the existing session lock, validates session/game/auction state and matching persisted `TimerEndsAtUtc`, then finalizes through existing auction finalization and terminal broadcast helpers.
+- Manual auction finalization and successful timer-expiry finalization cancel the session timer.
+- Existing `tile_executed`, `bid_accepted`, `auction_finalized`, and optional `game_completed` broadcast paths are preserved; no new broadcast abstraction was added.
+- Snapshot/reconnect authority now exposes `activeAuction.timerEndsAtUtc` and top-level `serverNowUtc` so clients can render countdowns from server time.
+- Added focused game-engine, realtime, and timer-service tests for persisted deadlines, bid resets, rejected-bid preservation, timer replacement/cancel behavior, stale/duplicate expiry no-ops, expiry finalization, and snapshot payloads.
 
 Not included by explicit user scope:
 
@@ -36,7 +36,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Unsupported tile effects beyond unowned property auction start, owned property rent, and no-action completion.
-- Automatic auction expiry or retry handling.
+- Auction retry handling.
 - Scaling.
 - Event replay storage and missed-event catch-up.
 - Auth, accounts, reconnect tokens, or reconnect secrets.
@@ -50,11 +50,16 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/AuctionTimerService.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionState.cs`
+- `server-dotnet/MonoJoey.Server/Program.cs`
+- `server-dotnet/MonoJoey.Server/Properties/AssemblyInfo.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/AuctionTimerServiceTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -135,14 +140,14 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 447 tests passed.
+  - Output summary: 457 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
 
 - `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
-- No UI, persistence, stats, timers, event replay, or reconnect catch-up was added.
+- No UI, persistence, stats, event replay, or reconnect catch-up was added.
 
 ## Placeholders Introduced Or Preserved
 
@@ -182,7 +187,7 @@ Not included by explicit user scope:
 - A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `execute_tile` requires a successful roll and resolve in the same turn before execution.
 - `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, and nullable `auction`, `rent`, and `card` metadata.
-- `execute_tile` starts mandatory auctions for unowned auctionable property placeholders and stores the resulting `AuctionState` in `GameState.ActiveAuctionState`; it does not place bids, finalize auctions, transfer auction ownership, start timers, or change `GamePhase`. Successful executions emit `tile_executed`.
+- `execute_tile` starts mandatory auctions for unowned auctionable property placeholders, stores the resulting `AuctionState` in `GameState.ActiveAuctionState`, and schedules the server-owned auction timer from the persisted `TimerEndsAtUtc`; it does not place bids, finalize auctions, transfer auction ownership, or change `GamePhase`. Successful executions emit `tile_executed`.
 - `execute_tile` pays base rent for property placeholders owned by another player through `PropertyManager.PayRentForCurrentTile`; insufficient rent uses the existing hard-elimination bankruptcy behavior.
 - `execute_tile` reports `rent_not_charged` for self-owned properties and leaves balances unchanged.
 - `execute_tile` treats start/free/no-action tiles as no-op execution and only marks `GameState.HasExecutedTileThisTurn = true`.
@@ -239,12 +244,12 @@ Not included by explicit user scope:
 - Duplicate lobby joins are idempotent by `PlayerId` for membership count; they refresh the stored connection ID while preserving the existing ready state and profile metadata.
 - Leaving with a player not present in the session is a safe no-op.
 - Leaving after game start can remove lobby connection metadata, but it does not remove any player from `GameState.Players`.
-- `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
-- `AuctionConfig.BidResetSeconds` defaults to `3`; valid bids now copy this value into `AuctionState.CountdownDurationSeconds`, but no actual time passes.
+- `AuctionConfig.InitialPreBidSeconds` defaults to `9`; auction start persists `CountdownDurationSeconds = 9` and `TimerEndsAtUtc = now + 9 seconds`.
+- `AuctionConfig.BidResetSeconds` defaults to `3`; valid bids copy this value into `AuctionState.CountdownDurationSeconds`, persist `TimerEndsAtUtc = acceptedAtUtc + 3 seconds`, and replace the server-owned timer.
 - `AuctionConfig.MinimumBidIncrement` defaults to `1`; bid validation now uses it after the first bid.
 - `AuctionConfig.StartingBid` defaults to `0`; first-bid validation now uses it.
-- `AuctionStatus.ActiveBidCountdown` is metadata only; it does not trigger asynchronous behavior.
-- `AuctionState.CountdownDurationSeconds` stores deterministic countdown duration metadata only.
+- `AuctionStatus.ActiveBidCountdown` is paired with the persisted `TimerEndsAtUtc` deadline and server-owned timer expiry path.
+- `AuctionState.CountdownDurationSeconds` stores deterministic countdown duration metadata; `AuctionState.TimerEndsAtUtc` is the persisted deadline authority.
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Placeholder card IDs/display names from Chunk 4.1 are functional identifiers only, not final card names or text.
@@ -301,7 +306,7 @@ Not included by explicit user scope:
 - `AuctionManager.PlaceBid` returns a new `AuctionState` inside `AuctionBidResult`; rejected bids return the unchanged auction state.
 - `AuctionManager.PlaceBid` requires a caller-supplied `DateTimeOffset` for bid history and does not read wall-clock time.
 - Bid validation still does not check bidder cash balance; finalization handles payment failure deterministically.
-- `AuctionManager.FinalizeAuction` assumes the auction has already ended; it does not read wall-clock time or advance timers.
+- `AuctionManager.FinalizeAuction` assumes the auction has already ended; it does not read wall-clock time or own timers. Timer expiry validation lives in `LobbyMessageHandler`.
 - Auction finalization selects the highest non-eliminated bidder from bid history.
 - Affordable auction winners pay the winning bid and receive ownership through `PropertyManager.AssignOwner`.
 - Unaffordable auction winners are eliminated through `BankruptcyManager.EliminateForFailedPayment`; no money is deducted and the property remains unowned.
@@ -360,7 +365,7 @@ Possible next scopes:
 
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add broader lobby broadcasts for join/leave/ready if/when a wider client synchronization chunk is assigned.
-- Add automatic auction timers/expiry, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
+- Add auction retry handling, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
 
 Recommended validation:
 
@@ -372,8 +377,8 @@ Recommended validation:
 
 Do not implement before its assigned chunk:
 
-- Real wall-clock timers.
-- Async countdown loop.
+- Client-owned auction timers.
+- Persisted runtime timer identifiers or timer versions.
 - Event replay storage and reconnect catch-up.
 - Lobby broadcasts.
 - Non-lobby WebSocket message handling.

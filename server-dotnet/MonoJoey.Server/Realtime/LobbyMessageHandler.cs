@@ -14,17 +14,29 @@ public sealed class LobbyMessageHandler
     private readonly object sessionLock = new();
     private readonly DiceService diceService;
     private readonly SessionManager sessionManager;
+    private readonly AuctionTimerService auctionTimerService;
 
     public LobbyMessageHandler(SessionManager sessionManager)
-        : this(sessionManager, new DiceService(new RandomDiceRoller()))
+        : this(sessionManager, new DiceService(new RandomDiceRoller()), new AuctionTimerService())
     {
     }
 
     public LobbyMessageHandler(SessionManager sessionManager, DiceService diceService)
+        : this(sessionManager, diceService, new AuctionTimerService())
+    {
+    }
+
+    public LobbyMessageHandler(
+        SessionManager sessionManager,
+        DiceService diceService,
+        AuctionTimerService auctionTimerService)
     {
         this.sessionManager = sessionManager;
         this.diceService = diceService;
+        this.auctionTimerService = auctionTimerService;
     }
+
+    internal AuctionTimerService AuctionTimerService => auctionTimerService;
 
     public string HandleTextMessage(string messageJson, LobbyConnectionContext connectionContext)
     {
@@ -681,12 +693,13 @@ public sealed class LobbyMessageHandler
                     "No active auction is available for bidding.");
             }
 
+            var bidAcceptedAtUtc = DateTimeOffset.UtcNow;
             var bidResult = AuctionManager.PlaceBid(
                 session.GameState,
                 activeAuctionState,
                 player.PlayerId,
                 new Money(amount),
-                DateTimeOffset.UtcNow);
+                bidAcceptedAtUtc);
 
             if (!bidResult.BidAccepted)
             {
@@ -700,6 +713,7 @@ public sealed class LobbyMessageHandler
             var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
             var persistedAuctionState = persistence.Session.GameState.ActiveAuctionState
                 ?? throw new InvalidOperationException("Accepted auction bids must persist active auction state.");
+            ScheduleAuctionTimer(sessionId, persistedAuctionState);
 
             return CreateBroadcastResult(
                 CreateBidResult(player.PlayerId, amount, persistedAuctionState),
@@ -806,6 +820,75 @@ public sealed class LobbyMessageHandler
                 sessionId,
                 updatedGameState,
                 DateTimeOffset.UtcNow);
+            auctionTimerService.Cancel(sessionId);
+
+            return CreateTerminalBroadcastResult(
+                CreateAuctionResult(finalizationResult, persistence.Session.GameState),
+                LobbyMessageTypes.AuctionFinalized,
+                persistence.Session,
+                persistence);
+        }
+    }
+
+    internal LobbyMessageHandleResult? HandleAuctionTimerExpired(
+        string sessionId,
+        DateTimeOffset expiredTimerEndsAtUtc,
+        DateTimeOffset? serverNowUtc = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                auctionTimerService.Cancel(sessionId);
+                return null;
+            }
+
+            if (session.Status != GameSessionStatus.InGame ||
+                session.GameState.Status == GameStatus.Completed)
+            {
+                auctionTimerService.Cancel(sessionId);
+                return null;
+            }
+
+            var activeAuctionState = session.GameState.ActiveAuctionState;
+            if (activeAuctionState is null || !IsActiveAuctionStatus(activeAuctionState.Status))
+            {
+                auctionTimerService.Cancel(sessionId);
+                return null;
+            }
+
+            if (activeAuctionState.TimerEndsAtUtc != expiredTimerEndsAtUtc)
+            {
+                return null;
+            }
+
+            var nowUtc = serverNowUtc ?? DateTimeOffset.UtcNow;
+            if (nowUtc < expiredTimerEndsAtUtc)
+            {
+                return null;
+            }
+
+            var finalizationResult = AuctionManager.FinalizeAuction(
+                session.GameState,
+                activeAuctionState);
+
+            if (finalizationResult.ResultKind == AuctionFinalizationResultKind.InvalidAuctionState)
+            {
+                return null;
+            }
+
+            var updatedGameState = finalizationResult.GameState with
+            {
+                ActiveAuctionState = null,
+            };
+            var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+                sessionId,
+                updatedGameState,
+                nowUtc);
+            auctionTimerService.Cancel(sessionId);
 
             return CreateTerminalBroadcastResult(
                 CreateAuctionResult(finalizationResult, persistence.Session.GameState),
@@ -1496,10 +1579,12 @@ public sealed class LobbyMessageHandler
         GameState gameState,
         TileResolutionResult resolution)
     {
+        var auctionStartedAtUtc = DateTimeOffset.UtcNow;
         var auctionStart = AuctionManager.StartMandatoryAuction(
             gameState,
             resolution.PlayerId,
-            resolution.TileId);
+            resolution.TileId,
+            startedAtUtc: auctionStartedAtUtc);
 
         if (auctionStart.AuctionStarted)
         {
@@ -1512,6 +1597,7 @@ public sealed class LobbyMessageHandler
             var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
             var persistedAuctionState = persistence.Session.GameState.ActiveAuctionState
                 ?? throw new InvalidOperationException("Started auctions must persist active auction state.");
+            ScheduleAuctionTimer(sessionId, persistedAuctionState);
 
             return CreateBroadcastResult(
                 CreateExecuteTileResult(
@@ -1969,6 +2055,7 @@ public sealed class LobbyMessageHandler
             SessionId: gameState.MatchId.Value,
             Status: "in_game",
             GameStatus: FormatGameStatus(gameState.Status),
+            ServerNowUtc: DateTimeOffset.UtcNow,
             MatchId: gameState.MatchId.Value,
             Phase: FormatGamePhase(gameState.Phase),
             WinnerPlayerId: gameState.WinnerPlayerId?.Value,
@@ -2095,6 +2182,7 @@ public sealed class LobbyMessageHandler
             auctionState.HighestBid?.Amount,
             auctionState.HighestBidderId?.Value,
             auctionState.CountdownDurationSeconds,
+            auctionState.TimerEndsAtUtc,
             auctionState.Bids
                 .Select(bid => new SnapshotAuctionBidPayload(
                     bid.BidderId.Value,
@@ -2143,6 +2231,16 @@ public sealed class LobbyMessageHandler
                 DateTimeOffset.UtcNow,
                 directResponse.Payload),
             CreateLobbyBroadcastTargetConnectionIds(session));
+    }
+
+    private void ScheduleAuctionTimer(string sessionId, AuctionState auctionState)
+    {
+        if (auctionState.TimerEndsAtUtc is null)
+        {
+            throw new InvalidOperationException("Active auction timers must persist a deadline.");
+        }
+
+        auctionTimerService.Schedule(sessionId, auctionState.TimerEndsAtUtc.Value);
     }
 
     private static LobbyMessageHandleResult CreateTerminalBroadcastResult(
@@ -2294,7 +2392,8 @@ public sealed class LobbyMessageHandler
                 auctionState.HighestBid?.Amount
                     ?? throw new InvalidOperationException("Accepted auction bids must have a highest bid."),
                 auctionState.HighestBidderId?.Value
-                    ?? throw new InvalidOperationException("Accepted auction bids must have a highest bidder.")));
+                    ?? throw new InvalidOperationException("Accepted auction bids must have a highest bidder."),
+                auctionState.TimerEndsAtUtc));
     }
 
     private static LobbyServerEnvelope CreateAuctionResult(
@@ -2427,7 +2526,8 @@ public sealed class LobbyMessageHandler
             auctionState.BidResetSeconds,
             auctionState.HighestBid?.Amount,
             auctionState.HighestBidderId?.Value,
-            auctionState.CountdownDurationSeconds);
+            auctionState.CountdownDurationSeconds,
+            auctionState.TimerEndsAtUtc);
     }
 
     private static ExecuteTileRentPayload CreateRentPayload(RentPaymentResult rent, GameState gameState)
