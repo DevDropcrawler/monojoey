@@ -63,6 +63,24 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void StartFirstTurn_WhenAllActivePlayersAreLockedSelectsLockedActivePlayer()
+    {
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("lockup_01"), isLockedUp: true),
+                CreatePlayer("player_2", new TileId("lockup_01"), isLockedUp: true),
+            },
+        };
+
+        var started = TurnManager.StartFirstTurn(gameState);
+
+        Assert.Equal("player_1", started.CurrentTurnPlayerId?.Value);
+        Assert.True(started.Players[0].IsLockedUp);
+    }
+
+    [Fact]
     public void StartFirstTurn_ChargesLoanInterestBeforePlayerCanRoll()
     {
         var gameState = CreateGameState("player_1", "player_2") with
@@ -214,6 +232,28 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void AdvanceToNextTurn_WhenAllActivePlayersAreLockedSelectsLockedActivePlayerWithoutUnlocking()
+    {
+        var gameState = CreateGameState("player_1", "player_2", "player_3") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("lockup_01"), isLockedUp: true),
+                CreatePlayer("player_2", new TileId("lockup_01"), isLockedUp: true),
+                CreatePlayer("player_3", new TileId("start"), isEliminated: true),
+            },
+        };
+
+        var next = TurnManager.AdvanceToNextTurn(gameState);
+
+        Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
+        Assert.True(next.Players[1].IsLockedUp);
+        Assert.Equal(2, next.TurnNumber);
+    }
+
+    [Fact]
     public void AdvanceToNextTurn_SkipsMultipleEliminatedPlayers()
     {
         var gameState = CreateGameState("player_1", "player_2", "player_3", "player_4") with
@@ -303,7 +343,7 @@ public class TurnManagerTests
     }
 
     [Fact]
-    public void GetCurrentPlayer_RejectsLockedCurrentPlayer()
+    public void GetCurrentPlayer_ReturnsLockedCurrentPlayer()
     {
         var gameState = CreateGameState("player_1") with
         {
@@ -311,9 +351,10 @@ public class TurnManagerTests
             Players = new[] { CreatePlayer("player_1", new TileId("lockup_01"), isLockedUp: true) },
         };
 
-        var exception = Assert.Throws<InvalidOperationException>(() => TurnManager.GetCurrentPlayer(gameState));
+        var currentPlayer = TurnManager.GetCurrentPlayer(gameState);
 
-        Assert.Equal("Locked up players cannot take normal turns.", exception.Message);
+        Assert.Equal("player_1", currentPlayer.PlayerId.Value);
+        Assert.True(currentPlayer.IsLockedUp);
     }
 
     private static GameState CreateGameState(params string[] playerIds)

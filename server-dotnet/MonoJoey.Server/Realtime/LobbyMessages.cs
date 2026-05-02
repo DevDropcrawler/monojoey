@@ -14,6 +14,7 @@ public static class LobbyMessageTypes
     public const string PlaceBid = "place_bid";
     public const string FinalizeAuction = "finalize_auction";
     public const string TakeLoan = "take_loan";
+    public const string UseHeldCard = "use_held_card";
     public const string GetSnapshot = "get_snapshot";
     public const string ReconnectSession = "reconnect_session";
     public const string LobbyState = "lobby_state";
@@ -25,6 +26,7 @@ public static class LobbyMessageTypes
     public const string BidResult = "bid_result";
     public const string AuctionResult = "auction_result";
     public const string LoanResult = "loan_result";
+    public const string UseHeldCardResult = "use_held_card_result";
     public const string SnapshotResult = "snapshot_result";
     public const string ReconnectResult = "reconnect_result";
     public const string DiceRolled = "dice_rolled";
@@ -34,6 +36,7 @@ public static class LobbyMessageTypes
     public const string BidAccepted = "bid_accepted";
     public const string AuctionFinalized = "auction_finalized";
     public const string LoanTaken = "loan_taken";
+    public const string HeldCardUsed = "held_card_used";
     public const string GameCompleted = "game_completed";
     public const string Error = "error";
 }
@@ -67,6 +70,7 @@ public static class LobbyErrorCodes
     public const string InvalidCard = "invalid_card";
     public const string UnsupportedCardAction = "unsupported_card_action";
     public const string GameAlreadyCompleted = "game_already_completed";
+    public const string HeldCardNotHeld = "held_card_not_held";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -241,6 +245,12 @@ public sealed record LoanResultPayload(
     int CurrentInterestRatePercent,
     int NextTurnInterestDue,
     int LoanTier);
+
+public sealed record UseHeldCardResultPayload(
+    string PlayerId,
+    string CardId,
+    bool IsLockedUp,
+    IReadOnlyList<string> HeldCardIds);
 
 public sealed record GameCompletedPayload(
     string WinnerPlayerId,

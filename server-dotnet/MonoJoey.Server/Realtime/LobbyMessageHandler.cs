@@ -134,6 +134,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
             LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
             LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
+            LobbyMessageTypes.UseHeldCard => HandleUseHeldCard(root, connectionContext),
             LobbyMessageTypes.GetSnapshot => HandleGetSnapshot(root, connectionContext),
             LobbyMessageTypes.ReconnectSession => HandleReconnectSession(root, connectionContext),
             LobbyMessageTypes.LobbyState or
@@ -145,6 +146,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidResult or
                 LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.LoanResult or
+                LobbyMessageTypes.UseHeldCardResult or
                 LobbyMessageTypes.SnapshotResult or
                 LobbyMessageTypes.ReconnectResult or
                 LobbyMessageTypes.DiceRolled or
@@ -154,6 +156,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidAccepted or
                 LobbyMessageTypes.AuctionFinalized or
                 LobbyMessageTypes.LoanTaken or
+                LobbyMessageTypes.HeldCardUsed or
                 LobbyMessageTypes.GameCompleted or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
@@ -256,7 +259,10 @@ public sealed class LobbyMessageHandler
                 session.GameState,
                 player.PlayerId,
                 dice.Total);
-            var updatedGameState = movementResult.GameState with
+            var rewardedGameState = movementResult.PassedStart
+                ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, DefaultTurnRules.PassStartReward)
+                : movementResult.GameState;
+            var updatedGameState = rewardedGameState with
             {
                 HasRolledThisTurn = true,
                 HasResolvedTileThisTurn = false,
@@ -482,6 +488,8 @@ public sealed class LobbyMessageHandler
                     TileResolutionActionKind.StartPlaceholder => ExecuteNoActionTile(sessionId, session.GameState, resolution),
                 TileResolutionActionKind.PropertyPlaceholder => ExecutePropertyTile(sessionId, session.GameState, resolution),
                 TileResolutionActionKind.DeckPlaceholder => ExecuteCardTile(sessionId, session.GameState, resolution, player),
+                TileResolutionActionKind.TaxPlaceholder => ExecuteTaxTile(sessionId, session.GameState, resolution),
+                TileResolutionActionKind.GoToLockupPlaceholder => ExecuteGoToLockupTile(sessionId, session.GameState, resolution),
                 _ => CreateError(
                     LobbyErrorCodes.UnsupportedTileEffect,
                     "This resolved tile effect is not supported yet."),
@@ -545,18 +553,18 @@ public sealed class LobbyMessageHandler
                     "It is not this player's turn.");
             }
 
-            if (player.IsEliminated)
-            {
-                return CreateError(
-                    LobbyErrorCodes.PlayerEliminated,
-                    "Eliminated players cannot end turns.");
-            }
-
             var hasCompletedTurn =
                 session.GameState.HasRolledThisTurn &&
                 session.GameState.HasResolvedTileThisTurn &&
                 session.GameState.HasExecutedTileThisTurn &&
                 session.GameState.ActiveAuctionState is null;
+            if (player.IsEliminated && !hasCompletedTurn)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot end incomplete turns.");
+            }
+
             if (player.IsLockedUp && !hasCompletedTurn)
             {
                 return CreateError(
@@ -1006,6 +1014,100 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyMessageHandleResult HandleUseHeldCard(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadUseHeldCardPayload(root, out var sessionId, out var playerId, out var cardId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "use_held_card requires payload.sessionId, payload.playerId, and payload.cardId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var player = session.GameState.Players.FirstOrDefault(
+                gamePlayer => gamePlayer.PlayerId.Value == playerId);
+            if (player is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerNotFound,
+                    "Player is not in the game.");
+            }
+
+            if (session.GameState.CurrentTurnPlayerId?.Value != playerId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.NotYourTurn,
+                    "It is not this player's turn.");
+            }
+
+            if (player.IsEliminated)
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerEliminated,
+                    "Eliminated players cannot use held cards.");
+            }
+
+            var escapeId = new CardId(cardId);
+            var escapeUse = LockupManager.UseGetOutOfLockupEscape(
+                session.GameState,
+                player.PlayerId,
+                escapeId);
+            if (escapeUse.Kind == LockupEscapeUseResultKind.PlayerNotLockedUp)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Player is not locked up.");
+            }
+
+            if (escapeUse.Kind == LockupEscapeUseResultKind.EscapeNotHeld)
+            {
+                return CreateError(
+                    LobbyErrorCodes.HeldCardNotHeld,
+                    "Player does not hold that lockup escape card.");
+            }
+
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, escapeUse.GameState);
+            var persistedPlayer = persistence.Session.GameState.Players.First(
+                gamePlayer => gamePlayer.PlayerId == player.PlayerId);
+
+            return CreateBroadcastResult(
+                CreateUseHeldCardResult(persistedPlayer, escapeId),
+                LobbyMessageTypes.HeldCardUsed,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
     private LobbyServerEnvelope HandleReconnectSession(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1371,6 +1473,63 @@ public sealed class LobbyMessageHandler
             rentPersistence);
     }
 
+    private LobbyMessageHandleResult ExecuteTaxTile(
+        string sessionId,
+        GameState gameState,
+        TileResolutionResult resolution)
+    {
+        var taxedGameState = ChangePlayerMoney(gameState, resolution.PlayerId, new Money(-DefaultTurnRules.TaxAmount.Amount));
+        var eliminatedGameState = BankruptcyManager.EliminateIfBankrupt(taxedGameState, resolution.PlayerId).GameState;
+        var persistedGameState = eliminatedGameState with
+        {
+            HasExecutedTileThisTurn = true,
+        };
+
+        var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+            sessionId,
+            persistedGameState,
+            DateTimeOffset.UtcNow);
+        var persistedPlayer = persistence.Session.GameState.Players.First(player => player.PlayerId == resolution.PlayerId);
+        var executionKind = persistedPlayer.IsEliminated ? "tax_eliminated_player" : "tax_paid";
+
+        return CreateTerminalBroadcastResult(
+            CreateExecuteTileResult(
+                resolution,
+                executionKind,
+                persistence.Session.GameState,
+                auction: null,
+                rent: null,
+                card: null),
+            LobbyMessageTypes.TileExecuted,
+            persistence.Session,
+            persistence);
+    }
+
+    private LobbyMessageHandleResult ExecuteGoToLockupTile(
+        string sessionId,
+        GameState gameState,
+        TileResolutionResult resolution)
+    {
+        var lockedGameState = LockupManager.SendToLockup(gameState, resolution.PlayerId) with
+        {
+            HasExecutedTileThisTurn = true,
+        };
+
+        var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, lockedGameState);
+
+        return CreateBroadcastResult(
+            CreateExecuteTileResult(
+                resolution,
+                "sent_to_lockup",
+                persistence.Session.GameState,
+                auction: null,
+                rent: null,
+                card: null),
+            LobbyMessageTypes.TileExecuted,
+            persistence.Session,
+            persistence.Sequence);
+    }
+
     private LobbyMessageHandleResult ExecuteCardTile(
         string sessionId,
         GameState gameState,
@@ -1502,6 +1661,28 @@ public sealed class LobbyMessageHandler
             payload.ValueKind != JsonValueKind.Object ||
             !TryReadString(payload, "sessionId", out sessionId) ||
             !TryReadString(payload, "playerId", out playerId))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadUseHeldCardPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out string cardId)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        cardId = string.Empty;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !TryReadString(payload, "cardId", out cardId))
         {
             return false;
         }
@@ -2027,6 +2208,17 @@ public sealed class LobbyMessageHandler
                 loanState.LoanTier));
     }
 
+    private static LobbyServerEnvelope CreateUseHeldCardResult(Player player, CardId cardId)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.UseHeldCardResult,
+            new UseHeldCardResultPayload(
+                player.PlayerId.Value,
+                cardId.Value,
+                player.IsLockedUp,
+                player.HeldCardIds.Select(heldCardId => heldCardId.Value).OrderBy(heldCardId => heldCardId).ToArray()));
+    }
+
     private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
     {
         return bidResult.ResultKind switch
@@ -2155,9 +2347,15 @@ public sealed class LobbyMessageHandler
     private static bool IsSupportedCardResolutionAction(CardResolutionActionKind actionKind)
     {
         return actionKind is CardResolutionActionKind.MoveToStart or
+            CardResolutionActionKind.MoveToTile or
             CardResolutionActionKind.MoveSteps or
+            CardResolutionActionKind.MoveToNearestTransport or
+            CardResolutionActionKind.MoveToNearestUtility or
             CardResolutionActionKind.ReceiveMoney or
             CardResolutionActionKind.PayMoney or
+            CardResolutionActionKind.ReceiveMoneyFromEveryPlayer or
+            CardResolutionActionKind.PayMoneyToEveryPlayer or
+            CardResolutionActionKind.RepairOwnedProperties or
             CardResolutionActionKind.GoToLockup or
             CardResolutionActionKind.GetOutOfLockup;
     }
@@ -2240,6 +2438,27 @@ public sealed class LobbyMessageHandler
         }
 
         return null;
+    }
+
+    private static GameState ChangePlayerMoney(GameState gameState, PlayerId playerId, Money delta)
+    {
+        var players = gameState.Players.ToArray();
+        for (var index = 0; index < players.Length; index++)
+        {
+            if (players[index].PlayerId != playerId)
+            {
+                continue;
+            }
+
+            players[index] = players[index] with
+            {
+                Money = new Money(players[index].Money.Amount + delta.Amount),
+            };
+
+            return gameState with { Players = players };
+        }
+
+        throw new InvalidOperationException("Player must exist before money can be changed.");
     }
 
     private static string? FindPersistedPlayerId(GameState gameState, PlayerId? playerId)

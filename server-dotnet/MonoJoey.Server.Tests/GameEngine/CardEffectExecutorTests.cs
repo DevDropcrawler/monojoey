@@ -39,6 +39,52 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_MoveToTileMovesPlayerForwardToTarget()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "tax_01"));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.MoveToTile,
+            new CardActionParameters(TargetTileId: new TileId("property_01")));
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal("property_01", result.Players[0].CurrentTileId.Value);
+        Assert.Equal(new Money(1500), result.Players[0].Money);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_MoveToNearestTransportMovesForwardToNearestTransport()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "property_01"));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.MoveToNearestTransport,
+            parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal("transport_01", result.Players[0].CurrentTileId.Value);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_MoveToNearestUtilityMovesForwardToNearestUtility()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "transport_01"));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.MoveToNearestUtility,
+            parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal("utility_01", result.Players[0].CurrentTileId.Value);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_ReceiveMoneyIncreasesPlayerBalance()
     {
         var playerId = new PlayerId("player_1");
@@ -90,6 +136,69 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_ReceiveMoneyFromEveryPlayerTransfersFromActiveOpponents()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(
+            CreatePlayer(playerId.Value, "start", money: 100),
+            CreatePlayer("player_2", "start", money: 100),
+            CreatePlayer("player_3", "start", money: 100));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.ReceiveMoneyFromEveryPlayer,
+            new CardActionParameters(Amount: new Money(10)));
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal(new Money(120), result.Players[0].Money);
+        Assert.Equal(new Money(90), result.Players[1].Money);
+        Assert.Equal(new Money(90), result.Players[2].Money);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_PayMoneyToEveryPlayerTransfersToActiveOpponents()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(
+            CreatePlayer(playerId.Value, "start", money: 100),
+            CreatePlayer("player_2", "start", money: 100),
+            CreatePlayer("player_3", "start", money: 100));
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.PayMoneyToEveryPlayer,
+            new CardActionParameters(Amount: new Money(10)));
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal(new Money(80), result.Players[0].Money);
+        Assert.Equal(new Money(110), result.Players[1].Money);
+        Assert.Equal(new Money(110), result.Players[2].Money);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_RepairOwnedPropertiesChargesOwnedPropertyCountWithoutUpgrades()
+    {
+        var playerId = new PlayerId("player_1");
+        var player = CreatePlayer(playerId.Value, "start", money: 100) with
+        {
+            OwnedPropertyIds = new HashSet<TileId>
+            {
+                new("property_01"),
+                new("property_02"),
+            },
+        };
+        var gameState = CreateGameState(player);
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.RepairOwnedProperties,
+            new CardActionParameters(Amount: new Money(25)));
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal(new Money(50), result.Players[0].Money);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_GoToLockupSendsPlayerToLockup()
     {
         var playerId = new PlayerId("player_1");
@@ -120,6 +229,31 @@ public class CardEffectExecutorTests
 
         Assert.Contains(cardResolution.CardId, result.Players[0].HeldCardIds);
         Assert.False(result.Players[0].IsLockedUp);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_AllDefaultPlaceholderCardsExecute()
+    {
+        var playerId = new PlayerId("player_1");
+        var cards = PlaceholderCardDeckFactory.CreateAll().SelectMany(deck => deck.Cards);
+
+        foreach (var card in cards)
+        {
+            var player = CreatePlayer(playerId.Value, "property_02", money: 1500) with
+            {
+                OwnedPropertyIds = new HashSet<TileId> { new("property_01"), new("property_03") },
+            };
+            var gameState = CreateGameState(
+                player,
+                CreatePlayer("player_2", "start", money: 1500),
+                CreatePlayer("player_3", "start", money: 1500));
+            var resolution = CardResolver.ResolveCard(player, card);
+
+            var result = CardEffectExecutor.ExecuteCardEffect(gameState, resolution);
+
+            Assert.True(resolution.IsValid);
+            Assert.Contains(result.Players, updatedPlayer => updatedPlayer.PlayerId == playerId);
+        }
     }
 
     [Fact]

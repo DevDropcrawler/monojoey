@@ -356,6 +356,7 @@ public class LobbyMessageHandlerTests
     [InlineData("place_bid")]
     [InlineData("finalize_auction")]
     [InlineData("take_loan")]
+    [InlineData("use_held_card")]
     public void CompletedGame_RejectsGameplayMutationsBeforeMutation(string messageType)
     {
         var sessionManager = new SessionManager();
@@ -396,6 +397,7 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("property_01", payload.GetProperty("newPosition").GetString());
         Assert.True(payload.GetProperty("passedStart").GetBoolean());
+        Assert.Equal(new Money(1700), sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].Money);
     }
 
     [Fact]
@@ -855,6 +857,128 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ExecuteTile_TaxDeductsMoneyMarksExecutedAndPermitsEndTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "tax_01");
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("tax_placeholder", executePayload.GetProperty("actionKind").GetString());
+        Assert.Equal("tax_paid", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal(new Money(1400), afterExecute.Players[0].Money);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        AssertResponseType(endTurnResponse, "end_turn_result");
+    }
+
+    [Fact]
+    public void ExecuteTile_TaxCanEliminatePlayerAndCompletesTerminalMatch()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "tax_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { Money = new Money(50) });
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("tax_eliminated_player", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal(new Money(-50), afterExecute.Players[0].Money);
+        Assert.True(afterExecute.Players[0].IsEliminated);
+        Assert.Equal(GameStatus.Completed, afterExecute.Status);
+        Assert.Equal(new PlayerId("player_2"), afterExecute.WinnerPlayerId);
+    }
+
+    [Fact]
+    public void ExecuteTile_TaxEliminatedPlayerCanEndCompletedTurnWhenMatchContinues()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var session = sessionManager.CreateSession();
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        var thirdContext = new LobbyConnectionContext("connection_3");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_3"), thirdContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_3", isReady: true), thirdContext);
+        _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, session.SessionId, "player_1", "tax_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            session.SessionId,
+            "player_1",
+            player => player with { Money = new Money(50) });
+        _ = handler.HandleTextMessage(ExecuteTileMessage(session.SessionId, "player_1"), firstContext);
+        var afterExecute = sessionManager.GetSession(session.SessionId)!.GameState;
+
+        using var endTurnResponse = Handle(
+            handler,
+            firstContext,
+            EndTurnMessage(session.SessionId, "player_1"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterEndTurn = sessionManager.GetSession(session.SessionId)!.GameState;
+
+        Assert.Equal(GameStatus.InProgress, afterExecute.Status);
+        Assert.True(afterExecute.Players[0].IsEliminated);
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal(new PlayerId("player_2"), afterEndTurn.CurrentTurnPlayerId);
+    }
+
+    [Fact]
+    public void ExecuteTile_GoToLockupMovesLocksMarksExecutedAndPermitsEndTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "go_to_lockup_01");
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("go_to_lockup_placeholder", executePayload.GetProperty("actionKind").GetString());
+        Assert.Equal("sent_to_lockup", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("lockup_01", afterExecute.Players[0].CurrentTileId.Value);
+        Assert.True(afterExecute.Players[0].IsLockedUp);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+    }
+
+    [Fact]
     public void ExecuteTile_ChanceDeckDrawsExecutesPersistsDeckAndReturnsCardPayload()
     {
         var sessionManager = new SessionManager();
@@ -1113,7 +1237,7 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
-    public void ExecuteTile_UnsupportedResolvedCardActionReturnsUnsupportedCardActionWithoutMutation()
+    public void ExecuteTile_MoveToTileCardExecutesWithoutUnsupportedCardAction()
     {
         var sessionManager = new SessionManager();
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
@@ -1128,16 +1252,18 @@ public class LobbyMessageHandlerTests
             started.Session.SessionId,
             CardDeckIds.Chance,
             new CardDeckState(CardDeckIds.Chance, new[] { unsupportedCard }, Array.Empty<Card>()));
-        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
-
         using var response = Handle(
             handler,
             started.FirstContext,
             ExecuteTileMessage(started.Session.SessionId, "player_1"));
         var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var card = payload.GetProperty("card");
 
-        AssertError(response, "unsupported_card_action");
-        Assert.Same(beforeExecute, afterExecute);
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("move_to_tile", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal("property_01", afterExecute.Players[0].CurrentTileId.Value);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
     }
 
     [Fact]
@@ -1162,27 +1288,6 @@ public class LobbyMessageHandlerTests
         var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
         AssertError(response, "invalid_card");
-        Assert.Same(beforeExecute, afterExecute);
-    }
-
-    [Theory]
-    [InlineData("tax_01")]
-    [InlineData("go_to_lockup_01")]
-    public void ExecuteTile_UnsupportedTileEffectsReturnUnsupportedTileEffectWithoutMutation(string tileId)
-    {
-        var sessionManager = new SessionManager();
-        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
-        var started = StartReadyGame(sessionManager, handler);
-        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", tileId);
-        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
-
-        using var response = Handle(
-            handler,
-            started.FirstContext,
-            ExecuteTileMessage(started.Session.SessionId, "player_1"));
-        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
-
-        AssertError(response, "unsupported_tile_effect");
         Assert.Same(beforeExecute, afterExecute);
     }
 
@@ -2129,6 +2234,92 @@ public class LobbyMessageHandlerTests
         AssertResponseType(response, "loan_result");
         Assert.Equal(beforeLoan.Phase, afterLoan.Phase);
         Assert.Same(beforeAuction, afterLoan.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void UseHeldCard_ClearsLockupConsumesHeldEscapeAndBroadcasts()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var escapeId = new CardId("escape_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                CurrentTileId = new TileId("lockup_01"),
+                IsLockedUp = true,
+                HeldCardIds = new HashSet<CardId> { escapeId },
+            });
+
+        var result = handler.HandleTextMessageResult(
+            UseHeldCardMessage(started.Session.SessionId, "player_1", escapeId.Value),
+            started.FirstContext);
+        var payload = Assert.IsType<UseHeldCardResultPayload>(result.DirectResponse.Payload);
+        var afterUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("use_held_card_result", result.DirectResponse.Type);
+        Assert.Equal("player_1", payload.PlayerId);
+        Assert.Equal(escapeId.Value, payload.CardId);
+        Assert.False(payload.IsLockedUp);
+        Assert.Empty(payload.HeldCardIds);
+        Assert.False(afterUse.Players[0].IsLockedUp);
+        Assert.DoesNotContain(escapeId, afterUse.Players[0].HeldCardIds);
+        Assert.Equal("held_card_used", Assert.Single(result.Broadcasts).Type);
+    }
+
+    [Fact]
+    public void UseHeldCard_InvalidUseReturnsClearErrorWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { CurrentTileId = new TileId("lockup_01"), IsLockedUp = true });
+        var beforeUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            UseHeldCardMessage(started.Session.SessionId, "player_1", "missing_escape"));
+        var afterUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "held_card_not_held");
+        Assert.Same(beforeUse, afterUse);
+    }
+
+    [Fact]
+    public void UseHeldCard_NonCurrentPlayerReturnsNotYourTurnWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var escapeId = new CardId("escape_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                CurrentTileId = new TileId("lockup_01"),
+                IsLockedUp = true,
+                HeldCardIds = new HashSet<CardId> { escapeId },
+            });
+        var beforeUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            UseHeldCardMessage(started.Session.SessionId, "player_2", escapeId.Value));
+        var afterUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "not_your_turn");
+        Assert.Same(beforeUse, afterUse);
     }
 
     [Fact]
@@ -3738,12 +3929,18 @@ public class LobbyMessageHandlerTests
         return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
     }
 
+    private static string UseHeldCardMessage(string sessionId, string playerId, string cardId)
+    {
+        return $@"{{""type"":""use_held_card"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""cardId"":""{cardId}""}}}}";
+    }
+
     private static string GameplayMessage(string type, string sessionId, string playerId)
     {
         return type switch
         {
             "place_bid" => PlaceBidMessage(sessionId, playerId, 10),
             "take_loan" => TakeLoanMessage(sessionId, playerId, 10, "rent_payment"),
+            "use_held_card" => UseHeldCardMessage(sessionId, playerId, "escape_01"),
             _ => $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}",
         };
     }

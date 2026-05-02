@@ -12,10 +12,10 @@ public static class TurnManager
             throw new InvalidOperationException("A game must have at least one player before turns can start.");
         }
 
-        var firstActivePlayer = gameState.Players.FirstOrDefault(IsTurnEligible);
+        var firstActivePlayer = SelectFirstTurnPlayer(gameState.Players);
         if (firstActivePlayer is null)
         {
-            throw new InvalidOperationException("A game must have at least one unlocked active player before turns can start.");
+            throw new InvalidOperationException("A game must have at least one active player before turns can start.");
         }
 
         var startedGameState = gameState with
@@ -43,11 +43,6 @@ public static class TurnManager
         if (currentPlayer.IsEliminated)
         {
             throw new InvalidOperationException("Eliminated players cannot take turns.");
-        }
-
-        if (currentPlayer.IsLockedUp)
-        {
-            throw new InvalidOperationException("Locked up players cannot take normal turns.");
         }
 
         return currentPlayer;
@@ -101,17 +96,36 @@ public static class TurnManager
         for (var offset = 1; offset <= players.Count; offset++)
         {
             var nextIndex = (currentIndex + offset) % players.Count;
-            if (IsTurnEligible(players[nextIndex]))
+            if (IsUnlockedActive(players[nextIndex]))
             {
                 return nextIndex;
             }
         }
 
-        throw new InvalidOperationException("A game must have at least one unlocked active player before turns can advance.");
+        for (var offset = 1; offset <= players.Count; offset++)
+        {
+            var nextIndex = (currentIndex + offset) % players.Count;
+            if (IsActive(players[nextIndex]))
+            {
+                return nextIndex;
+            }
+        }
+
+        throw new InvalidOperationException("A game must have at least one active player before turns can advance.");
     }
 
-    private static bool IsTurnEligible(Player player)
+    private static Player? SelectFirstTurnPlayer(IReadOnlyList<Player> players)
     {
-        return !player.IsEliminated && !player.IsLockedUp;
+        return players.FirstOrDefault(IsUnlockedActive) ?? players.FirstOrDefault(IsActive);
+    }
+
+    private static bool IsUnlockedActive(Player player)
+    {
+        return IsActive(player) && !player.IsLockedUp;
+    }
+
+    private static bool IsActive(Player player)
+    {
+        return !player.IsEliminated;
     }
 }
