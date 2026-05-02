@@ -9,6 +9,13 @@ public static class CardEffectExecutor
 
     public static GameState ExecuteCardEffect(GameState gameState, CardResolutionResult cardResolution)
     {
+        return ExecuteCardEffectWithResult(gameState, cardResolution).GameState;
+    }
+
+    public static CardEffectExecutionResult ExecuteCardEffectWithResult(
+        GameState gameState,
+        CardResolutionResult cardResolution)
+    {
         return cardResolution.ActionKind switch
         {
             CardResolutionActionKind.MoveToStart => MoveToStart(gameState, cardResolution),
@@ -42,60 +49,64 @@ public static class CardEffectExecutor
                 gameState,
                 cardResolution.PlayerId,
                 CalculatePropertyRepairCost(gameState, cardResolution.PlayerId, RequireAmount(cardResolution))),
-            CardResolutionActionKind.GoToLockup => LockupManager.SendToLockup(
-                gameState,
-                cardResolution.PlayerId),
-            CardResolutionActionKind.GetOutOfLockup => LockupManager.GrantGetOutOfLockupEscape(
-                gameState,
-                cardResolution.PlayerId,
-                cardResolution.CardId),
-            _ => gameState,
+            CardResolutionActionKind.GoToLockup => new CardEffectExecutionResult(
+                LockupManager.SendToLockup(gameState, cardResolution.PlayerId)),
+            CardResolutionActionKind.GetOutOfLockup => new CardEffectExecutionResult(
+                LockupManager.GrantGetOutOfLockupEscape(
+                    gameState,
+                    cardResolution.PlayerId,
+                    cardResolution.CardId)),
+            _ => new CardEffectExecutionResult(gameState),
         };
     }
 
-    private static GameState MoveToStart(GameState gameState, CardResolutionResult cardResolution)
+    private static CardEffectExecutionResult MoveToStart(GameState gameState, CardResolutionResult cardResolution)
     {
         var steps = CalculateForwardStepsToTile(gameState, cardResolution.PlayerId, StartTileId);
+        var movement = MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps);
 
-        return MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps).GameState;
+        return new CardEffectExecutionResult(movement.GameState, movement);
     }
 
-    private static GameState MoveSteps(GameState gameState, CardResolutionResult cardResolution)
+    private static CardEffectExecutionResult MoveSteps(GameState gameState, CardResolutionResult cardResolution)
     {
         var steps = cardResolution.Parameters?.StepCount
             ?? throw new InvalidOperationException("Resolved card movement must include a step count.");
+        var movement = MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps);
 
-        return MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps).GameState;
+        return new CardEffectExecutionResult(movement.GameState, movement);
     }
 
-    private static GameState MoveToTile(GameState gameState, CardResolutionResult cardResolution)
+    private static CardEffectExecutionResult MoveToTile(GameState gameState, CardResolutionResult cardResolution)
     {
         var targetTileId = cardResolution.Parameters?.TargetTileId
             ?? throw new InvalidOperationException("Resolved card movement must include a target tile.");
         var steps = CalculateForwardStepsToTile(gameState, cardResolution.PlayerId, targetTileId);
+        var movement = MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps);
 
-        return MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps).GameState;
+        return new CardEffectExecutionResult(movement.GameState, movement);
     }
 
-    private static GameState MoveToNearestTileType(
+    private static CardEffectExecutionResult MoveToNearestTileType(
         GameState gameState,
         CardResolutionResult cardResolution,
         TileType targetTileType)
     {
         var targetTile = FindNearestTileByType(gameState, cardResolution.PlayerId, targetTileType);
         var steps = CalculateForwardStepsToTile(gameState, cardResolution.PlayerId, targetTile.TileId);
+        var movement = MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps);
 
-        return MovementManager.MovePlayer(gameState, cardResolution.PlayerId, steps).GameState;
+        return new CardEffectExecutionResult(movement.GameState, movement);
     }
 
-    private static GameState PayMoney(GameState gameState, PlayerId playerId, Money amount)
+    private static CardEffectExecutionResult PayMoney(GameState gameState, PlayerId playerId, Money amount)
     {
-        var paidGameState = ChangeMoney(gameState, playerId, new Money(-amount.Amount));
+        var paidGameState = ChangeMoney(gameState, playerId, new Money(-amount.Amount)).GameState;
 
-        return BankruptcyManager.EliminateIfBankrupt(paidGameState, playerId).GameState;
+        return new CardEffectExecutionResult(BankruptcyManager.EliminateIfBankrupt(paidGameState, playerId).GameState);
     }
 
-    private static GameState ReceiveMoneyFromEveryPlayer(GameState gameState, PlayerId playerId, Money amount)
+    private static CardEffectExecutionResult ReceiveMoneyFromEveryPlayer(GameState gameState, PlayerId playerId, Money amount)
     {
         var receiverIndex = FindPlayerIndex(gameState.Players, playerId);
         var players = gameState.Players.ToArray();
@@ -123,10 +134,10 @@ public static class CardEffectExecutor
             players[receiverIndex] = receiver with { Money = new Money(receiver.Money.Amount + amount.Amount) };
         }
 
-        return gameState with { Players = players };
+        return new CardEffectExecutionResult(gameState with { Players = players });
     }
 
-    private static GameState PayMoneyToEveryPlayer(GameState gameState, PlayerId playerId, Money amount)
+    private static CardEffectExecutionResult PayMoneyToEveryPlayer(GameState gameState, PlayerId playerId, Money amount)
     {
         var payerIndex = FindPlayerIndex(gameState.Players, playerId);
         var activeOpponentCount = gameState.Players.Count(player => player.PlayerId != playerId && !player.IsEliminated);
@@ -134,7 +145,7 @@ public static class CardEffectExecutor
         var payer = gameState.Players[payerIndex];
         if (payer.Money.Amount < totalDue.Amount)
         {
-            return BankruptcyManager.EliminateForFailedPayment(gameState, playerId, totalDue).GameState;
+            return new CardEffectExecutionResult(BankruptcyManager.EliminateForFailedPayment(gameState, playerId, totalDue).GameState);
         }
 
         var players = gameState.Players.ToArray();
@@ -149,7 +160,7 @@ public static class CardEffectExecutor
             players[index] = players[index] with { Money = new Money(players[index].Money.Amount + amount.Amount) };
         }
 
-        return gameState with { Players = players };
+        return new CardEffectExecutionResult(gameState with { Players = players });
     }
 
     private static Money CalculatePropertyRepairCost(GameState gameState, PlayerId playerId, Money amountPerProperty)
@@ -159,7 +170,7 @@ public static class CardEffectExecutor
         return new Money(amountPerProperty.Amount * player.OwnedPropertyIds.Count);
     }
 
-    private static GameState ChangeMoney(GameState gameState, PlayerId playerId, Money delta)
+    private static CardEffectExecutionResult ChangeMoney(GameState gameState, PlayerId playerId, Money delta)
     {
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         var player = gameState.Players[playerIndex];
@@ -169,7 +180,7 @@ public static class CardEffectExecutor
             Money = new Money(player.Money.Amount + delta.Amount),
         };
 
-        return gameState with { Players = players };
+        return new CardEffectExecutionResult(gameState with { Players = players });
     }
 
     private static Money RequireAmount(CardResolutionResult cardResolution)
@@ -251,3 +262,7 @@ public static class CardEffectExecutor
         throw new InvalidOperationException("Card movement target tile type must exist on the board.");
     }
 }
+
+public sealed record CardEffectExecutionResult(
+    GameState GameState,
+    MovementResult? MovementResult = null);

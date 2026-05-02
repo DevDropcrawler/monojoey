@@ -76,6 +76,77 @@ Gameplay mutations (`roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `pl
 `finalize_auction`, and `take_loan`) are rejected with `game_already_completed` once `gameStatus` is
 `completed`.
 
+## Additive Unity helper payloads
+
+Sequenced gameplay broadcasts and their matching direct result payloads may include helper fields for animation and incremental UI sync. These fields are hints only. Snapshot and reconnect payloads remain the authoritative recovery truth, and reconnect does not replay missed events.
+
+Helper fields are additive and omitted when irrelevant:
+
+- `movement`: `playerId`, `fromTileId`, `toTileId`, `pathTileIds`, `stepCount`, `movementKind`, `passedStart`.
+- `moneyDeltas`: `playerId`, `delta`, `balance`, `reason`, and optional `counterpartyPlayerId`, `tileId`, `cardId`.
+- `propertyOwnershipChanges`: `tileId`, nullable `previousOwnerPlayerId`, nullable `newOwnerPlayerId`, `reason`.
+- `playerEliminations`: `playerId`, `reason`, `money`, and optional `paymentDue`.
+
+`roll_result` / `dice_rolled` also includes `total` and `isDouble`. Dice and card path movement is sourced from `MovementManager`; direct lockup movement uses `movementKind = "direct"`.
+
+Example `dice_rolled` payload:
+
+```json
+{
+  "playerId": "player_1",
+  "dice": [1, 2],
+  "total": 3,
+  "isDouble": false,
+  "newPosition": "property_02",
+  "passedStart": false,
+  "hasRolledThisTurn": true,
+  "movement": {
+    "playerId": "player_1",
+    "fromTileId": "start",
+    "toTileId": "property_02",
+    "pathTileIds": ["property_01", "chance_01", "property_02"],
+    "stepCount": 3,
+    "movementKind": "path",
+    "passedStart": false
+  }
+}
+```
+
+Example rent `tile_executed` payload:
+
+```json
+{
+  "executionKind": "rent_paid",
+  "rent": {
+    "payerId": "player_1",
+    "ownerId": "player_2",
+    "rentDue": 2,
+    "rentPaid": 2
+  },
+  "moneyDeltas": [
+    { "playerId": "player_1", "delta": -2, "balance": 1498, "reason": "rent", "counterpartyPlayerId": "player_2", "tileId": "property_01" },
+    { "playerId": "player_2", "delta": 2, "balance": 1502, "reason": "rent", "counterpartyPlayerId": "player_1", "tileId": "property_01" }
+  ]
+}
+```
+
+Example `auction_finalized` payload:
+
+```json
+{
+  "resultType": "won",
+  "winnerPlayerId": "player_2",
+  "amount": 260,
+  "tileId": "property_01",
+  "moneyDeltas": [
+    { "playerId": "player_2", "delta": -260, "balance": 1240, "reason": "auction_payment", "tileId": "property_01" }
+  ],
+  "propertyOwnershipChanges": [
+    { "tileId": "property_01", "previousOwnerPlayerId": null, "newOwnerPlayerId": "player_2", "reason": "auction_won" }
+  ]
+}
+```
+
 ## Client request types
 
 Lobby:
@@ -238,7 +309,10 @@ Accepted loans return one direct sender `loan_result`, emit one `loan_taken` bro
     "totalBorrowed": 200,
     "currentInterestRatePercent": 20,
     "nextTurnInterestDue": 40,
-    "loanTier": 1
+    "loanTier": 1,
+    "moneyDeltas": [
+      { "playerId": "player_1", "delta": 200, "balance": 1700, "reason": "loan" }
+    ]
   }
 }
 ```
@@ -458,6 +532,15 @@ When the current tile is a chance/table deck placeholder, the server maps the ti
       "isEliminated": false,
       "isLockedUp": false,
       "heldCardIds": []
+    },
+    "movement": {
+      "playerId": "player_1",
+      "fromTileId": "chance_01",
+      "toTileId": "start",
+      "pathTileIds": ["property_02", "tax_01", "transport_01", "free_space_01", "property_03", "table_01", "utility_01", "lockup_01", "go_to_lockup_01", "start"],
+      "stepCount": 10,
+      "movementKind": "path",
+      "passedStart": true
     }
   }
 }

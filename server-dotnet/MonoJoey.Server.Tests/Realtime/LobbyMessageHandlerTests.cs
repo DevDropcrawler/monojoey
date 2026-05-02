@@ -420,9 +420,22 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
         Assert.Equal(new[] { 3, 5 }, dice);
+        Assert.Equal(8, payload.GetProperty("total").GetInt32());
+        Assert.False(payload.GetProperty("isDouble").GetBoolean());
         Assert.Equal("table_01", payload.GetProperty("newPosition").GetString());
         Assert.False(payload.GetProperty("passedStart").GetBoolean());
         Assert.True(payload.GetProperty("hasRolledThisTurn").GetBoolean());
+        var movement = payload.GetProperty("movement");
+        Assert.Equal("player_1", movement.GetProperty("playerId").GetString());
+        Assert.Equal("start", movement.GetProperty("fromTileId").GetString());
+        Assert.Equal("table_01", movement.GetProperty("toTileId").GetString());
+        Assert.Equal(
+            new[] { "property_01", "chance_01", "property_02", "tax_01", "transport_01", "free_space_01", "property_03", "table_01" },
+            movement.GetProperty("pathTileIds").EnumerateArray().Select(tileId => tileId.GetString()).ToArray());
+        Assert.Equal(8, movement.GetProperty("stepCount").GetInt32());
+        Assert.Equal("path", movement.GetProperty("movementKind").GetString());
+        Assert.False(movement.GetProperty("passedStart").GetBoolean());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
         Assert.Equal("table_01", updatedSession?.GameState.Players[0].CurrentTileId.Value);
         Assert.True(updatedSession?.GameState.HasRolledThisTurn);
         Assert.False(updatedSession?.GameState.HasResolvedTileThisTurn);
@@ -450,6 +463,11 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
         var payload = Assert.IsType<RollResultPayload>(result.Broadcast.Payload);
         Assert.Equal("table_01", payload.NewPosition);
+        Assert.Equal(8, payload.Total);
+        Assert.False(payload.IsDouble);
+        Assert.NotNull(payload.Movement);
+        Assert.Equal("start", payload.Movement.FromTileId);
+        Assert.Equal("table_01", payload.Movement.ToTileId);
         Assert.True(payload.HasRolledThisTurn);
         Assert.Equal(1, sessionManager.GetSession(started.Session.SessionId)?.LastEventSequence);
     }
@@ -601,6 +619,11 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("property_01", payload.GetProperty("newPosition").GetString());
         Assert.True(payload.GetProperty("passedStart").GetBoolean());
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(200, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1700, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("pass_start", moneyDelta.GetProperty("reason").GetString());
         Assert.Equal(new Money(1700), sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].Money);
     }
 
@@ -969,6 +992,19 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1502, rent.GetProperty("ownerMoney").GetInt32());
         Assert.False(rent.GetProperty("playerEliminated").GetBoolean());
         Assert.Equal(JsonValueKind.Null, rent.GetProperty("eliminationReason").ValueKind);
+        var moneyDeltas = payload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+        Assert.Equal(2, moneyDeltas.Length);
+        Assert.Equal("player_1", moneyDeltas[0].GetProperty("playerId").GetString());
+        Assert.Equal(-2, moneyDeltas[0].GetProperty("delta").GetInt32());
+        Assert.Equal(1498, moneyDeltas[0].GetProperty("balance").GetInt32());
+        Assert.Equal("rent", moneyDeltas[0].GetProperty("reason").GetString());
+        Assert.Equal("player_2", moneyDeltas[0].GetProperty("counterpartyPlayerId").GetString());
+        Assert.Equal("property_01", moneyDeltas[0].GetProperty("tileId").GetString());
+        Assert.Equal("player_2", moneyDeltas[1].GetProperty("playerId").GetString());
+        Assert.Equal(2, moneyDeltas[1].GetProperty("delta").GetInt32());
+        Assert.Equal(1502, moneyDeltas[1].GetProperty("balance").GetInt32());
+        Assert.Equal("player_1", moneyDeltas[1].GetProperty("counterpartyPlayerId").GetString());
+        Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
         Assert.True(afterExecute.HasExecutedTileThisTurn);
         Assert.Null(afterExecute.ActiveAuctionState);
         Assert.Equal(beforeExecute.Phase, afterExecute.Phase);
@@ -1015,6 +1051,12 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1500, rent.GetProperty("ownerMoney").GetInt32());
         Assert.True(rent.GetProperty("playerEliminated").GetBoolean());
         Assert.Equal("cannot_fulfill_payment", rent.GetProperty("eliminationReason").GetString());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        var elimination = Assert.Single(payload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
+        Assert.Equal("cannot_fulfill_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(1, elimination.GetProperty("money").GetInt32());
+        Assert.Equal(2, elimination.GetProperty("paymentDue").GetInt32());
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
     }
@@ -1108,6 +1150,12 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("tax_placeholder", executePayload.GetProperty("actionKind").GetString());
         Assert.Equal("tax_paid", executePayload.GetProperty("executionKind").GetString());
+        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(-100, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1400, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("tax", moneyDelta.GetProperty("reason").GetString());
+        Assert.Equal("tax_01", moneyDelta.GetProperty("tileId").GetString());
         Assert.Equal(new Money(1400), afterExecute.Players[0].Money);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
 
@@ -1139,6 +1187,13 @@ public class LobbyMessageHandlerTests
         var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
         Assert.Equal("tax_eliminated_player", executePayload.GetProperty("executionKind").GetString());
+        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal(-100, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(-50, moneyDelta.GetProperty("balance").GetInt32());
+        var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
+        Assert.Equal("negative_balance", elimination.GetProperty("reason").GetString());
+        Assert.Equal(-50, elimination.GetProperty("money").GetInt32());
         Assert.Equal(new Money(-50), afterExecute.Players[0].Money);
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
@@ -1246,6 +1301,16 @@ public class LobbyMessageHandlerTests
         Assert.False(card.GetProperty("isEliminated").GetBoolean());
         Assert.False(card.GetProperty("isLockedUp").GetBoolean());
         Assert.Empty(card.GetProperty("heldCardIds").EnumerateArray());
+        var movement = payload.GetProperty("movement");
+        Assert.Equal("player_1", movement.GetProperty("playerId").GetString());
+        Assert.Equal("chance_01", movement.GetProperty("fromTileId").GetString());
+        Assert.Equal("start", movement.GetProperty("toTileId").GetString());
+        Assert.Equal(
+            new[] { "property_02", "tax_01", "transport_01", "free_space_01", "property_03", "table_01", "utility_01", "lockup_01", "go_to_lockup_01", "start" },
+            movement.GetProperty("pathTileIds").EnumerateArray().Select(tileId => tileId.GetString()).ToArray());
+        Assert.Equal(10, movement.GetProperty("stepCount").GetInt32());
+        Assert.True(movement.GetProperty("passedStart").GetBoolean());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
         Assert.True(afterExecute.HasExecutedTileThisTurn);
         Assert.Equal("start", afterExecute.Players[0].CurrentTileId.Value);
         Assert.Equal(15, chanceDeckState.DrawPile.Count);
@@ -1276,6 +1341,13 @@ public class LobbyMessageHandlerTests
         Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", card.GetProperty("cardId").GetString());
         Assert.Equal("receive_money", card.GetProperty("resolutionKind").GetString());
         Assert.Equal(1525, card.GetProperty("money").GetInt32());
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(25, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1525, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("card", moneyDelta.GetProperty("reason").GetString());
+        Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", moneyDelta.GetProperty("cardId").GetString());
+        Assert.False(payload.TryGetProperty("movement", out _));
         Assert.Equal(new Money(1525), afterExecute.Players[0].Money);
         Assert.Equal(15, afterExecute.CardDeckStates[CardDeckIds.Table].DrawPile.Count);
         Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Table].DiscardPile);
@@ -1363,6 +1435,15 @@ public class LobbyMessageHandlerTests
         Assert.Equal("pay_money", card.GetProperty("resolutionKind").GetString());
         Assert.Equal(-5, card.GetProperty("money").GetInt32());
         Assert.True(card.GetProperty("isEliminated").GetBoolean());
+        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(-15, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(-5, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("card", moneyDelta.GetProperty("reason").GetString());
+        Assert.Equal("TEST_PAY_BANK", moneyDelta.GetProperty("cardId").GetString());
+        var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
+        Assert.Equal("card_payment", elimination.GetProperty("reason").GetString());
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
@@ -1402,6 +1483,11 @@ public class LobbyMessageHandlerTests
         Assert.Equal("card_executed", executePayload.GetProperty("executionKind").GetString());
         Assert.Equal("go_to_lockup", card.GetProperty("resolutionKind").GetString());
         Assert.True(card.GetProperty("isLockedUp").GetBoolean());
+        var movement = executePayload.GetProperty("movement");
+        Assert.Equal("chance_01", movement.GetProperty("fromTileId").GetString());
+        Assert.Equal("lockup_01", movement.GetProperty("toTileId").GetString());
+        Assert.Equal(new[] { "lockup_01" }, movement.GetProperty("pathTileIds").EnumerateArray().Select(tileId => tileId.GetString()).ToArray());
+        Assert.Equal("direct", movement.GetProperty("movementKind").GetString());
         Assert.True(afterExecute.Players[0].IsLockedUp);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
 
@@ -1775,6 +1861,37 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void EndTurn_ReturnsLoanInterestMoneyDeltaForNextPlayer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                LoanState = new PlayerLoanState(new Money(100), 20, new Money(20), LoanTier: 1),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_2", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(-20, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1480, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("loan_interest", moneyDelta.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void EndTurn_BeforeRollReturnsInvalidSessionState()
     {
         var sessionManager = new SessionManager();
@@ -1888,6 +2005,11 @@ public class LobbyMessageHandlerTests
         Assert.Equal(25, payload.GetProperty("amount").GetInt32());
         Assert.Equal(25, payload.GetProperty("currentHighestBid").GetInt32());
         Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal("property_01", payload.GetProperty("propertyTileId").GetString());
+        Assert.Equal("active_bid_countdown", payload.GetProperty("status").GetString());
+        Assert.Equal(26, payload.GetProperty("minimumNextBid").GetInt32());
+        Assert.Equal(1, payload.GetProperty("bidCount").GetInt32());
+        Assert.Equal(3, payload.GetProperty("countdownDurationSeconds").GetInt32());
         Assert.Equal(JsonValueKind.String, payload.GetProperty("timerEndsAtUtc").ValueKind);
         Assert.Equal(AuctionStatus.ActiveBidCountdown, afterBid.ActiveAuctionState?.Status);
         Assert.Equal(new Money(25), afterBid.ActiveAuctionState?.HighestBid);
@@ -2162,6 +2284,11 @@ public class LobbyMessageHandlerTests
         Assert.Equal(20, payload.GetProperty("currentInterestRatePercent").GetInt32());
         Assert.Equal(40, payload.GetProperty("nextTurnInterestDue").GetInt32());
         Assert.Equal(1, payload.GetProperty("loanTier").GetInt32());
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(200, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1700, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("loan", moneyDelta.GetProperty("reason").GetString());
         Assert.Equal(new Money(1700), player.Money);
         Assert.Equal(new Money(200), player.LoanState?.TotalBorrowed);
     }
@@ -3187,6 +3314,17 @@ public class LobbyMessageHandlerTests
         Assert.Equal("player_2", payload.GetProperty("winnerPlayerId").GetString());
         Assert.Equal(260, payload.GetProperty("amount").GetInt32());
         Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_2", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(-260, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1240, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("auction_payment", moneyDelta.GetProperty("reason").GetString());
+        Assert.Equal("property_01", moneyDelta.GetProperty("tileId").GetString());
+        var ownershipChange = Assert.Single(payload.GetProperty("propertyOwnershipChanges").EnumerateArray());
+        Assert.Equal("property_01", ownershipChange.GetProperty("tileId").GetString());
+        Assert.Equal(JsonValueKind.Null, ownershipChange.GetProperty("previousOwnerPlayerId").ValueKind);
+        Assert.Equal("player_2", ownershipChange.GetProperty("newOwnerPlayerId").GetString());
+        Assert.Equal("auction_won", ownershipChange.GetProperty("reason").GetString());
         Assert.Equal(1240, winner.Money.Amount);
         Assert.Contains(new TileId("property_01"), winner.OwnedPropertyIds);
         Assert.Null(afterFinalize.ActiveAuctionState);
@@ -3243,6 +3381,13 @@ public class LobbyMessageHandlerTests
         Assert.Equal("player_2", payload.GetProperty("winnerPlayerId").GetString());
         Assert.Equal(260, payload.GetProperty("amount").GetInt32());
         Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
+        var elimination = Assert.Single(payload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("player_2", elimination.GetProperty("playerId").GetString());
+        Assert.Equal("cannot_fulfill_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(100, elimination.GetProperty("money").GetInt32());
+        Assert.Equal(260, elimination.GetProperty("paymentDue").GetInt32());
         Assert.True(failedWinner.IsEliminated);
         Assert.True(failedWinner.IsBankrupt);
         Assert.Equal(100, failedWinner.Money.Amount);
@@ -3269,6 +3414,9 @@ public class LobbyMessageHandlerTests
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("winnerPlayerId").ValueKind);
         Assert.Equal(0, payload.GetProperty("amount").GetInt32());
         Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
+        Assert.False(payload.TryGetProperty("playerEliminations", out _));
         Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
         Assert.Null(afterFinalize.ActiveAuctionState);
     }

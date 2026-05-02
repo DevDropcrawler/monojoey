@@ -5,30 +5,33 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.20 Server-Owned Auction Timers
-- Completion status: Chunk 5.20 complete; the server now owns mandatory auction countdown timers, persists only `AuctionState.TimerEndsAtUtc`, resets the deadline only on accepted bids, and finalizes expired auctions through the existing locked realtime/session mutation path.
+- Chunk: 5.21 Unity-Ready Protocol Payloads
+- Completion status: Chunk 5.21 complete; sequenced gameplay broadcasts and matching direct results now include additive Unity animation/sync helpers for movement, money deltas, ownership changes, and eliminations while snapshots/reconnect remain the authoritative recovery path.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-05-02 20:48 +12:00
+- Date/time: 2026-05-03
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.20 - Server-Owned Auction Timers.
+Phase 5, Chunk 5.21 - Unity-Ready Protocol Payloads.
 
 Completed:
 
-- Implemented server-owned auction timers for active mandatory auctions.
-- Added only `AuctionState.TimerEndsAtUtc` as persisted timer state; runtime timer versioning remains internal to `AuctionTimerService` and is not stored in `AuctionState`, `GameState`, snapshots, or wire commands.
-- Auction start now persists `CountdownDurationSeconds = 9` and `TimerEndsAtUtc = now + 9 seconds`.
-- Each accepted valid bid now persists `CountdownDurationSeconds = 3` and `TimerEndsAtUtc = acceptedAtUtc + 3 seconds`.
-- Rejected bids still return the unchanged auction state and do not reset deadlines, schedule timers, or allocate gameplay event sequences.
-- Timer expiry re-enters `LobbyMessageHandler`, takes the existing session lock, validates session/game/auction state and matching persisted `TimerEndsAtUtc`, then finalizes through existing auction finalization and terminal broadcast helpers.
-- Manual auction finalization and successful timer-expiry finalization cancel the session timer.
-- Existing `tile_executed`, `bid_accepted`, `auction_finalized`, and optional `game_completed` broadcast paths are preserved; no new broadcast abstraction was added.
-- Snapshot/reconnect authority now exposes `activeAuction.timerEndsAtUtc` and top-level `serverNowUtc` so clients can render countdowns from server time.
-- Added focused game-engine, realtime, and timer-service tests for persisted deadlines, bid resets, rejected-bid preservation, timer replacement/cancel behavior, stale/duplicate expiry no-ops, expiry finalization, and snapshot payloads.
+- Extended `MovementResult` with source/destination tile IDs, entered tile path IDs, signed step count, movement kind, and pass-start metadata.
+- Updated `MovementManager` to calculate forward, wrapping, and backward movement paths as the movement source of truth.
+- Preserved the existing `CardEffectExecutor.ExecuteCardEffect()` API and added a richer execution result path so card movement metadata is available to realtime payloads.
+- Added additive helper records in `LobbyMessages`: `movement`, `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`.
+- Added `total` and `isDouble` to roll result payloads.
+- Added movement helpers to dice rolls, card movement, and direct lockup moves.
+- Added money delta helpers for pass-start rewards, rent, tax, card money effects, auction payments, loans, and start-turn loan interest during `end_turn`.
+- Added auction ownership change helpers for successful auction wins and elimination helpers for failed rent, failed auction payment, tax/card bankruptcy, and loan-interest bankruptcy diffs.
+- Expanded `bid_result` / `bid_accepted` with active auction metadata: `propertyTileId`, `status`, `minimumNextBid`, `bidCount`, `countdownDurationSeconds`, and `timerEndsAtUtc`.
+- Kept helper arrays nullable/omitted when irrelevant; no existing event type or existing field was removed or renamed.
+- Preserved direct-first response behavior, broadcast sequencing, terminal `game_completed` ordering, reconnect behavior, and snapshot version/shape.
+- Updated protocol docs with helper payload shapes and examples.
+- Added focused MovementManager and realtime tests covering movement paths, dice metadata, rent/tax/card/loan/auction money deltas, auction ownership changes, helper omission, and end-turn loan-interest deltas.
 
 Not included by explicit user scope:
 
@@ -44,22 +47,18 @@ Not included by explicit user scope:
 - Reconnect identity.
 - Authentication.
 - Unity client.
+- New game rules, Unity client code, status effects, property damage, Slimer, Earthquake, or broad engine refactors.
 
 ## Files Changed In This Chunk
 
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/AuctionTimerService.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionState.cs`
-- `server-dotnet/MonoJoey.Server/Program.cs`
-- `server-dotnet/MonoJoey.Server/Properties/AssemblyInfo.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/AuctionTimerServiceTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MovementResult.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/MovementManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -140,7 +139,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 457 passed, 0 failed, 0 skipped.
+  - Output summary: 459 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -178,7 +177,7 @@ Not included by explicit user scope:
 - Started engine players use selected lobby profiles when present; unset profile fields still fall back to deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
 - `roll_dice` rolls dice and moves the current player only.
-- `roll_result` contains the rolling `playerId`, two dice values, landing tile ID as `newPosition`, `passedStart`, and `hasRolledThisTurn`.
+- `roll_result` contains the rolling `playerId`, two dice values, `total`, `isDouble`, landing tile ID as `newPosition`, `passedStart`, `hasRolledThisTurn`, and optional helper `movement` / `moneyDeltas`.
 - `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, or change `GamePhase`; successful rolls emit `dice_rolled`.
 - A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
 - `resolve_tile` passively classifies the current player's current tile only after `HasRolledThisTurn` is true.
@@ -186,7 +185,7 @@ Not included by explicit user scope:
 - `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats. Successful resolves emit `tile_resolved`.
 - A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `execute_tile` requires a successful roll and resolve in the same turn before execution.
-- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, and nullable `auction`, `rent`, and `card` metadata.
+- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, nullable `auction`, `rent`, and `card` metadata, plus optional helper `movement`, `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`.
 - `execute_tile` starts mandatory auctions for unowned auctionable property placeholders, stores the resulting `AuctionState` in `GameState.ActiveAuctionState`, and schedules the server-owned auction timer from the persisted `TimerEndsAtUtc`; it does not place bids, finalize auctions, transfer auction ownership, or change `GamePhase`. Successful executions emit `tile_executed`.
 - `execute_tile` pays base rent for property placeholders owned by another player through `PropertyManager.PayRentForCurrentTile`; insufficient rent uses the existing hard-elimination bankruptcy behavior.
 - `execute_tile` reports `rent_not_charged` for self-owned properties and leaves balances unchanged.
@@ -206,12 +205,12 @@ Not included by explicit user scope:
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
 - `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
 - Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, turn flags, or phase values are changed.
-- `bid_result` is the direct sender response and contains `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId` from the persisted updated active auction state. Accepted bids emit `bid_accepted`.
+- `bid_result` is the direct sender response and contains `bidderPlayerId`, `amount`, `currentHighestBid`, `highestBidderId`, `propertyTileId`, `status`, `minimumNextBid`, `bidCount`, `countdownDurationSeconds`, and `timerEndsAtUtc` from the persisted updated active auction state. Accepted bids emit `bid_accepted`.
 - Rejected `place_bid` calls return `error` and do not update `GameState`.
 - Bid affordability is still not checked in the WebSocket layer; this preserves existing `AuctionManager.PlaceBid` behavior and leaves loan/affordability policy to a later chunk.
 - `finalize_auction` requires a bound in-game session/player connection, the current turn player, a non-eliminated caller, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`; locked current players may finalize active auctions.
 - Successful `finalize_auction` calls clear `GameState.ActiveAuctionState` and preserve `GamePhase`; turn advancement remains an explicit later `end_turn` request.
-- `auction_result` is the direct sender response and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, and `tileId`. Successful finalization emits `auction_finalized`, including no-sale outcomes.
+- `auction_result` is the direct sender response and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, `tileId`, and optional helper `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`. Successful finalization emits `auction_finalized`, including no-sale outcomes.
 - `won` responses reflect the persisted owner after payment and property transfer; `no_sale` responses use `winnerPlayerId = null` and `amount = 0`; `failed_payment` responses identify the failed winner and attempted winning amount while leaving the property unowned.
 - Rejected `finalize_auction` calls return `error` and do not update `GameState`.
 - `take_loan` requires a positive integer `amount`, a strict snake_case `reason`, a bound in-game session/player connection, a non-eliminated engine player, and enabled `GameState.LoanSharkConfig`.
@@ -405,4 +404,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.19 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.21 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

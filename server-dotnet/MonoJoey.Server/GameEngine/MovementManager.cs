@@ -17,6 +17,7 @@ public static class MovementManager
         var boardLength = gameState.Board.Tiles.Count;
         var landingTileIndex = PositiveModulo(currentTile.Index + steps, boardLength);
         var landingTile = FindTileByIndex(gameState.Board, landingTileIndex);
+        var pathTileIds = CalculatePathTileIds(gameState.Board, currentTile.Index, steps);
         var movedPlayer = player with { CurrentTileId = landingTile.TileId };
         var players = gameState.Players.ToArray();
         players[playerIndex] = movedPlayer;
@@ -24,9 +25,34 @@ public static class MovementManager
         return new MovementResult(
             gameState with { Players = players },
             playerId,
+            currentTile.TileId,
+            landingTile.TileId,
             landingTile.TileId,
             landingTileIndex,
+            pathTileIds,
+            steps,
+            "path",
             steps > 0 && currentTile.Index + steps >= boardLength);
+    }
+
+    private static IReadOnlyList<TileId> CalculatePathTileIds(Board board, int fromTileIndex, int steps)
+    {
+        if (steps == 0)
+        {
+            return Array.Empty<TileId>();
+        }
+
+        var direction = steps > 0 ? 1 : -1;
+        var enteredTileCount = Math.Abs(steps);
+        var pathTileIds = new TileId[enteredTileCount];
+
+        for (var offset = 1; offset <= enteredTileCount; offset++)
+        {
+            var tileIndex = PositiveModulo(fromTileIndex + (offset * direction), board.Tiles.Count);
+            pathTileIds[offset - 1] = FindTileByIndex(board, tileIndex).TileId;
+        }
+
+        return pathTileIds;
     }
 
     private static int PositiveModulo(int value, int divisor)

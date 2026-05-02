@@ -15,6 +15,11 @@ public class MovementManagerTests
 
         Assert.Equal(3, result.LandingTileIndex);
         Assert.Equal("property_02", result.LandingTileId.Value);
+        Assert.Equal("start", result.FromTileId.Value);
+        Assert.Equal("property_02", result.ToTileId.Value);
+        Assert.Equal(new[] { "property_01", "chance_01", "property_02" }, result.PathTileIds.Select(tileId => tileId.Value).ToArray());
+        Assert.Equal(3, result.StepCount);
+        Assert.Equal("path", result.MovementKind);
         Assert.False(result.PassedStart);
         Assert.Equal("property_02", result.GameState.Players[0].CurrentTileId.Value);
     }
@@ -28,7 +33,29 @@ public class MovementManagerTests
 
         Assert.Equal(1, result.LandingTileIndex);
         Assert.Equal("property_01", result.LandingTileId.Value);
+        Assert.Equal("go_to_lockup_01", result.FromTileId.Value);
+        Assert.Equal("property_01", result.ToTileId.Value);
+        Assert.Equal(new[] { "start", "property_01" }, result.PathTileIds.Select(tileId => tileId.Value).ToArray());
+        Assert.Equal(2, result.StepCount);
         Assert.True(result.PassedStart);
+        Assert.Equal("property_01", result.GameState.Players[0].CurrentTileId.Value);
+    }
+
+    [Fact]
+    public void MovePlayer_TracksBackwardPathWithoutPassingStart()
+    {
+        var gameState = CreateGameState(CreatePlayer("player_1", "property_02"));
+
+        var result = MovementManager.MovePlayer(gameState, new PlayerId("player_1"), -2);
+
+        Assert.Equal(1, result.LandingTileIndex);
+        Assert.Equal("property_01", result.LandingTileId.Value);
+        Assert.Equal("property_02", result.FromTileId.Value);
+        Assert.Equal("property_01", result.ToTileId.Value);
+        Assert.Equal(new[] { "chance_01", "property_01" }, result.PathTileIds.Select(tileId => tileId.Value).ToArray());
+        Assert.Equal(-2, result.StepCount);
+        Assert.Equal("path", result.MovementKind);
+        Assert.False(result.PassedStart);
         Assert.Equal("property_01", result.GameState.Players[0].CurrentTileId.Value);
     }
 

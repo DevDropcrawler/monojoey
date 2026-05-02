@@ -1,5 +1,7 @@
 namespace MonoJoey.Server.Realtime;
 
+using System.Text.Json.Serialization;
+
 public static class LobbyMessageTypes
 {
     public const string CreateLobby = "create_lobby";
@@ -166,9 +168,15 @@ public sealed record GameStartedPlayerPayload(
 public sealed record RollResultPayload(
     string PlayerId,
     IReadOnlyList<int> Dice,
+    int Total,
+    bool IsDouble,
     string NewPosition,
     bool PassedStart,
-    bool HasRolledThisTurn);
+    bool HasRolledThisTurn,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    MovementPayload? Movement = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
 
 public sealed record ResolveTileResultPayload(
     string PlayerId,
@@ -189,7 +197,15 @@ public sealed record ExecuteTileResultPayload(
     bool HasExecutedTileThisTurn,
     ExecuteTileAuctionPayload? Auction,
     ExecuteTileRentPayload? Rent,
-    ExecuteTileCardPayload? Card);
+    ExecuteTileCardPayload? Card,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    MovementPayload? Movement = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PropertyOwnershipChangePayload>? PropertyOwnershipChanges = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
 
 public sealed record ExecuteTileAuctionPayload(
     string PropertyTileId,
@@ -230,20 +246,35 @@ public sealed record ExecuteTileCardPayload(
 public sealed record EndTurnResultPayload(
     string PreviousPlayerId,
     string? NextPlayerId,
-    int TurnIndex);
+    int TurnIndex,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
 
 public sealed record BidResultPayload(
     string BidderPlayerId,
     int Amount,
     int CurrentHighestBid,
     string HighestBidderId,
+    string PropertyTileId,
+    string Status,
+    int MinimumNextBid,
+    int BidCount,
+    int? CountdownDurationSeconds,
     DateTimeOffset? TimerEndsAtUtc);
 
 public sealed record AuctionResultPayload(
     string ResultType,
     string? WinnerPlayerId,
     int Amount,
-    string TileId);
+    string TileId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PropertyOwnershipChangePayload>? PropertyOwnershipChanges = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
 
 public sealed record LoanResultPayload(
     string PlayerId,
@@ -253,7 +284,9 @@ public sealed record LoanResultPayload(
     int TotalBorrowed,
     int CurrentInterestRatePercent,
     int NextTurnInterestDue,
-    int LoanTier);
+    int LoanTier,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
 
 public sealed record UseHeldCardResultPayload(
     string PlayerId,
@@ -364,3 +397,37 @@ public sealed record SnapshotCardDeckPayload(
 
 public sealed record SnapshotLoanSharkPayload(
     bool Enabled);
+
+public sealed record MovementPayload(
+    string PlayerId,
+    string FromTileId,
+    string ToTileId,
+    IReadOnlyList<string> PathTileIds,
+    int StepCount,
+    string MovementKind,
+    bool PassedStart);
+
+public sealed record MoneyDeltaPayload(
+    string PlayerId,
+    int Delta,
+    int Balance,
+    string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? CounterpartyPlayerId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TileId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? CardId = null);
+
+public sealed record PropertyOwnershipChangePayload(
+    string TileId,
+    string? PreviousOwnerPlayerId,
+    string? NewOwnerPlayerId,
+    string Reason);
+
+public sealed record PlayerEliminationPayload(
+    string PlayerId,
+    string Reason,
+    int Money,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? PaymentDue = null);

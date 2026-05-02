@@ -287,8 +287,7 @@ public sealed class LobbyMessageHandler
             return CreateBroadcastResult(
                 CreateRollResult(
                     dice,
-                    movementResult.PlayerId,
-                    movementResult.PassedStart,
+                    movementResult,
                     persistence.Session.GameState),
                 LobbyMessageTypes.DiceRolled,
                 persistence.Session,
@@ -614,7 +613,8 @@ public sealed class LobbyMessageHandler
             }
 
             var previousPlayerId = player.PlayerId;
-            var advancedGameState = TurnManager.AdvanceToNextTurn(session.GameState);
+            var beforeAdvanceGameState = session.GameState;
+            var advancedGameState = TurnManager.AdvanceToNextTurn(beforeAdvanceGameState);
 
             var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
                 sessionId,
@@ -622,7 +622,7 @@ public sealed class LobbyMessageHandler
                 DateTimeOffset.UtcNow);
 
             return CreateTerminalBroadcastResult(
-                CreateEndTurnResult(previousPlayerId, persistence.Session.GameState),
+                CreateEndTurnResult(previousPlayerId, beforeAdvanceGameState, persistence.Session.GameState),
                 LobbyMessageTypes.TurnEnded,
                 persistence.Session,
                 persistence);
@@ -1637,7 +1637,9 @@ public sealed class LobbyMessageHandler
                 rentPersistence.Session.GameState,
                 auction: null,
                 rent: CreateRentPayload(rent, rentPersistence.Session.GameState),
-                card: null),
+                card: null,
+                moneyDeltas: CreateRentMoneyDeltas(rent, rentPersistence.Session.GameState),
+                playerEliminations: CreateRentPlayerEliminations(rent, rentPersistence.Session.GameState)),
             LobbyMessageTypes.TileExecuted,
             rentPersistence.Session,
             rentPersistence);
@@ -1669,7 +1671,16 @@ public sealed class LobbyMessageHandler
                 persistence.Session.GameState,
                 auction: null,
                 rent: null,
-                card: null),
+                card: null,
+                moneyDeltas: CreateMoneyDeltasFromDiff(
+                    gameState,
+                    persistence.Session.GameState,
+                    "tax",
+                    tileId: resolution.TileId),
+                playerEliminations: CreatePlayerEliminationsFromDiff(
+                    gameState,
+                    persistence.Session.GameState,
+                    "negative_balance")),
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
             persistence);
@@ -1694,7 +1705,8 @@ public sealed class LobbyMessageHandler
                 persistence.Session.GameState,
                 auction: null,
                 rent: null,
-                card: null),
+                card: null,
+                movement: CreateDirectMovementPayload(gameState, persistence.Session.GameState, resolution.PlayerId, "direct")),
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
             persistence.Sequence);
@@ -1744,7 +1756,8 @@ public sealed class LobbyMessageHandler
                 "Drawn card action is not supported yet.");
         }
 
-        var executedGameState = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+        var executionResult = CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
+        var executedGameState = executionResult.GameState;
         var finalDeckState = ShouldDiscardCard(cardResolution.ActionKind)
             ? CardDeckManager.Discard(drawResult.DeckState, card)
             : drawResult.DeckState;
@@ -1773,7 +1786,22 @@ public sealed class LobbyMessageHandler
                 persistence.Session.GameState,
                 auction: null,
                 rent: null,
-                card: CreateCardPayload(deckId, card, cardResolution, executionKind, persistedPlayer)),
+                card: CreateCardPayload(deckId, card, cardResolution, executionKind, persistedPlayer),
+                movement: CreateCardMovementPayload(
+                    gameState,
+                    persistence.Session.GameState,
+                    player.PlayerId,
+                    cardResolution,
+                    executionResult.MovementResult),
+                moneyDeltas: CreateMoneyDeltasFromDiff(
+                    gameState,
+                    persistence.Session.GameState,
+                    "card",
+                    cardId: card.CardId),
+                playerEliminations: CreatePlayerEliminationsFromDiff(
+                    gameState,
+                    persistence.Session.GameState,
+                    "card_payment")),
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
             persistence);
@@ -2314,20 +2342,32 @@ public sealed class LobbyMessageHandler
 
     private static LobbyServerEnvelope CreateRollResult(
         DiceRoll dice,
-        PlayerId playerId,
-        bool passedStart,
+        MovementResult movementResult,
         GameState gameState)
     {
-        var persistedPlayer = gameState.Players.First(player => player.PlayerId == playerId);
+        var persistedPlayer = gameState.Players.First(player => player.PlayerId == movementResult.PlayerId);
 
         return new LobbyServerEnvelope(
             LobbyMessageTypes.RollResult,
             new RollResultPayload(
                 persistedPlayer.PlayerId.Value,
                 new[] { dice.FirstDie, dice.SecondDie },
+                dice.Total,
+                dice.IsDouble,
                 persistedPlayer.CurrentTileId.Value,
-                passedStart,
-                gameState.HasRolledThisTurn));
+                movementResult.PassedStart,
+                gameState.HasRolledThisTurn,
+                CreateMovementPayload(movementResult),
+                movementResult.PassedStart
+                    ? new[]
+                    {
+                        new MoneyDeltaPayload(
+                            persistedPlayer.PlayerId.Value,
+                            DefaultTurnRules.PassStartReward.Amount,
+                            persistedPlayer.Money.Amount,
+                            "pass_start"),
+                    }
+                    : null));
     }
 
     private static LobbyServerEnvelope CreateResolveTileResult(TileResolutionResult resolution)
@@ -2349,7 +2389,11 @@ public sealed class LobbyMessageHandler
         GameState gameState,
         ExecuteTileAuctionPayload? auction,
         ExecuteTileRentPayload? rent,
-        ExecuteTileCardPayload? card)
+        ExecuteTileCardPayload? card,
+        MovementPayload? movement = null,
+        IReadOnlyList<MoneyDeltaPayload>? moneyDeltas = null,
+        IReadOnlyList<PropertyOwnershipChangePayload>? propertyOwnershipChanges = null,
+        IReadOnlyList<PlayerEliminationPayload>? playerEliminations = null)
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.ExecuteTileResult,
@@ -2364,11 +2408,16 @@ public sealed class LobbyMessageHandler
                 gameState.HasExecutedTileThisTurn,
                 auction,
                 rent,
-                card));
+                card,
+                movement,
+                moneyDeltas,
+                propertyOwnershipChanges,
+                playerEliminations));
     }
 
     private static LobbyServerEnvelope CreateEndTurnResult(
         PlayerId previousPlayerId,
+        GameState previousGameState,
         GameState gameState)
     {
         return new LobbyServerEnvelope(
@@ -2376,7 +2425,9 @@ public sealed class LobbyMessageHandler
             new EndTurnResultPayload(
                 previousPlayerId.Value,
                 gameState.CurrentTurnPlayerId?.Value,
-                gameState.TurnNumber));
+                gameState.TurnNumber,
+                CreateMoneyDeltasFromDiff(previousGameState, gameState, "loan_interest"),
+                CreatePlayerEliminationsFromDiff(previousGameState, gameState, "negative_balance")));
     }
 
     private static LobbyServerEnvelope CreateBidResult(
@@ -2393,6 +2444,13 @@ public sealed class LobbyMessageHandler
                     ?? throw new InvalidOperationException("Accepted auction bids must have a highest bid."),
                 auctionState.HighestBidderId?.Value
                     ?? throw new InvalidOperationException("Accepted auction bids must have a highest bidder."),
+                auctionState.PropertyTileId.Value,
+                FormatAuctionStatus(auctionState.Status),
+                (auctionState.HighestBid?.Amount
+                    ?? throw new InvalidOperationException("Accepted auction bids must have a highest bid.")) +
+                    auctionState.MinimumBidIncrement.Amount,
+                auctionState.Bids.Count,
+                auctionState.CountdownDurationSeconds,
                 auctionState.TimerEndsAtUtc));
     }
 
@@ -2430,7 +2488,10 @@ public sealed class LobbyMessageHandler
                 resultType,
                 winnerPlayerId,
                 amount,
-                tileId.Value));
+                tileId.Value,
+                CreateAuctionMoneyDeltas(finalizationResult, persistedGameState),
+                CreateAuctionOwnershipChanges(finalizationResult),
+                CreateAuctionPlayerEliminations(finalizationResult, persistedGameState)));
     }
 
     private static LobbyServerEnvelope CreateLoanResult(
@@ -2451,7 +2512,15 @@ public sealed class LobbyMessageHandler
                 loanState.TotalBorrowed.Amount,
                 loanState.CurrentInterestRatePercent,
                 loanState.NextTurnInterestDue.Amount,
-                loanState.LoanTier));
+                loanState.LoanTier,
+                new[]
+                {
+                    new MoneyDeltaPayload(
+                        persistedPlayer.PlayerId.Value,
+                        amount,
+                        persistedPlayer.Money.Amount,
+                        "loan"),
+                }));
     }
 
     private static LobbyServerEnvelope CreateUseHeldCardResult(Player player, CardId cardId)
@@ -2512,6 +2581,228 @@ public sealed class LobbyMessageHandler
         return CreateError(
             LobbyErrorCodes.GameAlreadyCompleted,
             "Game is already completed.");
+    }
+
+    private static MovementPayload CreateMovementPayload(MovementResult movementResult)
+    {
+        return new MovementPayload(
+            movementResult.PlayerId.Value,
+            movementResult.FromTileId.Value,
+            movementResult.ToTileId.Value,
+            movementResult.PathTileIds.Select(tileId => tileId.Value).ToArray(),
+            movementResult.StepCount,
+            movementResult.MovementKind,
+            movementResult.PassedStart);
+    }
+
+    private static MovementPayload? CreateDirectMovementPayload(
+        GameState previousGameState,
+        GameState gameState,
+        PlayerId playerId,
+        string movementKind)
+    {
+        var previousPlayer = previousGameState.Players.First(player => player.PlayerId == playerId);
+        var player = gameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == playerId);
+        if (previousPlayer.CurrentTileId == player.CurrentTileId)
+        {
+            return null;
+        }
+
+        return new MovementPayload(
+            playerId.Value,
+            previousPlayer.CurrentTileId.Value,
+            player.CurrentTileId.Value,
+            new[] { player.CurrentTileId.Value },
+            StepCount: 0,
+            MovementKind: movementKind,
+            PassedStart: false);
+    }
+
+    private static MovementPayload? CreateCardMovementPayload(
+        GameState previousGameState,
+        GameState gameState,
+        PlayerId playerId,
+        CardResolutionResult cardResolution,
+        MovementResult? movementResult)
+    {
+        if (movementResult is not null)
+        {
+            return CreateMovementPayload(movementResult);
+        }
+
+        return cardResolution.ActionKind == CardResolutionActionKind.GoToLockup
+            ? CreateDirectMovementPayload(previousGameState, gameState, playerId, "direct")
+            : null;
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateRentMoneyDeltas(
+        RentPaymentResult rent,
+        GameState gameState)
+    {
+        if (rent.RentPaid.Amount == 0 || rent.OwnerId is null)
+        {
+            return null;
+        }
+
+        var payer = gameState.Players.First(player => player.PlayerId == rent.LandingPlayerId);
+        var owner = gameState.Players.First(player => player.PlayerId == rent.OwnerId.Value);
+
+        return new[]
+        {
+            new MoneyDeltaPayload(
+                payer.PlayerId.Value,
+                -rent.RentPaid.Amount,
+                payer.Money.Amount,
+                "rent",
+                owner.PlayerId.Value,
+                rent.TileId.Value),
+            new MoneyDeltaPayload(
+                owner.PlayerId.Value,
+                rent.RentPaid.Amount,
+                owner.Money.Amount,
+                "rent",
+                payer.PlayerId.Value,
+                rent.TileId.Value),
+        };
+    }
+
+    private static IReadOnlyList<PlayerEliminationPayload>? CreateRentPlayerEliminations(
+        RentPaymentResult rent,
+        GameState gameState)
+    {
+        if (rent.EliminationResult is null || !rent.EliminationResult.WasEliminated)
+        {
+            return null;
+        }
+
+        var player = gameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == rent.LandingPlayerId);
+        return new[]
+        {
+            new PlayerEliminationPayload(
+                player.PlayerId.Value,
+                FormatEliminationReason(rent.EliminationResult.Reason),
+                player.Money.Amount,
+                rent.RentDue.Amount),
+        };
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateMoneyDeltasFromDiff(
+        GameState previousGameState,
+        GameState gameState,
+        string reason,
+        TileId? tileId = null,
+        CardId? cardId = null)
+    {
+        var deltas = new List<MoneyDeltaPayload>();
+        foreach (var player in gameState.Players)
+        {
+            var previousPlayer = previousGameState.Players.FirstOrDefault(
+                candidate => candidate.PlayerId == player.PlayerId);
+            if (previousPlayer is null)
+            {
+                continue;
+            }
+
+            var delta = player.Money.Amount - previousPlayer.Money.Amount;
+            if (delta == 0)
+            {
+                continue;
+            }
+
+            deltas.Add(new MoneyDeltaPayload(
+                player.PlayerId.Value,
+                delta,
+                player.Money.Amount,
+                reason,
+                CounterpartyPlayerId: null,
+                TileId: tileId?.Value,
+                CardId: cardId?.Value));
+        }
+
+        return deltas.Count == 0 ? null : deltas;
+    }
+
+    private static IReadOnlyList<PlayerEliminationPayload>? CreatePlayerEliminationsFromDiff(
+        GameState previousGameState,
+        GameState gameState,
+        string reason)
+    {
+        var eliminations = gameState.Players
+            .Where(player => player.IsEliminated)
+            .Where(player => previousGameState.Players.FirstOrDefault(
+                previousPlayer => previousPlayer.PlayerId == player.PlayerId)?.IsEliminated == false)
+            .Select(player => new PlayerEliminationPayload(
+                player.PlayerId.Value,
+                reason,
+                player.Money.Amount))
+            .ToArray();
+
+        return eliminations.Length == 0 ? null : eliminations;
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateAuctionMoneyDeltas(
+        AuctionFinalizationResult finalizationResult,
+        GameState gameState)
+    {
+        if (finalizationResult.ResultKind != AuctionFinalizationResultKind.FinalizedWithWinner ||
+            finalizationResult.WinnerId is null ||
+            finalizationResult.WinningBid is null)
+        {
+            return null;
+        }
+
+        var winner = gameState.Players.First(player => player.PlayerId == finalizationResult.WinnerId.Value);
+        return new[]
+        {
+            new MoneyDeltaPayload(
+                winner.PlayerId.Value,
+                -finalizationResult.WinningBid.Value.Amount,
+                winner.Money.Amount,
+                "auction_payment",
+                CounterpartyPlayerId: null,
+                TileId: finalizationResult.PropertyTileId.Value),
+        };
+    }
+
+    private static IReadOnlyList<PropertyOwnershipChangePayload>? CreateAuctionOwnershipChanges(
+        AuctionFinalizationResult finalizationResult)
+    {
+        if (finalizationResult.ResultKind != AuctionFinalizationResultKind.FinalizedWithWinner ||
+            finalizationResult.WinnerId is null)
+        {
+            return null;
+        }
+
+        return new[]
+        {
+            new PropertyOwnershipChangePayload(
+                finalizationResult.PropertyTileId.Value,
+                PreviousOwnerPlayerId: null,
+                NewOwnerPlayerId: finalizationResult.WinnerId.Value.Value,
+                Reason: "auction_won"),
+        };
+    }
+
+    private static IReadOnlyList<PlayerEliminationPayload>? CreateAuctionPlayerEliminations(
+        AuctionFinalizationResult finalizationResult,
+        GameState gameState)
+    {
+        if (finalizationResult.EliminationResult is null ||
+            !finalizationResult.EliminationResult.WasEliminated ||
+            finalizationResult.WinnerId is null)
+        {
+            return null;
+        }
+
+        var player = gameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == finalizationResult.WinnerId.Value);
+        return new[]
+        {
+            new PlayerEliminationPayload(
+                player.PlayerId.Value,
+                FormatEliminationReason(finalizationResult.EliminationResult.Reason),
+                player.Money.Amount,
+                finalizationResult.WinningBid?.Amount),
+        };
     }
 
     private static ExecuteTileAuctionPayload CreateAuctionPayload(AuctionState auctionState)
