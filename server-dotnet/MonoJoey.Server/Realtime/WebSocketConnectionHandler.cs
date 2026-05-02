@@ -158,27 +158,30 @@ public sealed class WebSocketConnectionHandler
         LobbyMessageHandleResult result,
         CancellationToken cancellationToken)
     {
-        if (result.Broadcast is null || result.BroadcastConnectionIds.Count == 0)
+        if (result.Broadcasts.Count == 0 || result.BroadcastConnectionIds.Count == 0)
         {
             return;
         }
 
-        var message = lobbyMessageHandler.SerializeBroadcastMessage(result.Broadcast);
-        foreach (var connectionId in result.BroadcastConnectionIds)
+        foreach (var broadcast in result.Broadcasts)
         {
-            var connection = connectionManager.Get(connectionId);
-            if (connection is null || connection.WebSocket.State != WebSocketState.Open)
+            var message = lobbyMessageHandler.SerializeBroadcastMessage(broadcast);
+            foreach (var connectionId in result.BroadcastConnectionIds)
             {
-                continue;
-            }
+                var connection = connectionManager.Get(connectionId);
+                if (connection is null || connection.WebSocket.State != WebSocketState.Open)
+                {
+                    continue;
+                }
 
-            try
-            {
-                await SendTextAsync(connection, message, cancellationToken);
-            }
-            catch (Exception exception) when (
-                exception is WebSocketException or ObjectDisposedException or InvalidOperationException)
-            {
+                try
+                {
+                    await SendTextAsync(connection, message, cancellationToken);
+                }
+                catch (Exception exception) when (
+                    exception is WebSocketException or ObjectDisposedException or InvalidOperationException)
+                {
+                }
             }
         }
     }

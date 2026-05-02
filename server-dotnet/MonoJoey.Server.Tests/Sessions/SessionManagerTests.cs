@@ -452,6 +452,35 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public void UpdateTerminalGameStateAndAllocateEventSequences_CommitsActionAndCompletionAtomically()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var actionGameState = startedSession.GameState with
+        {
+            Players = startedSession.GameState.Players
+                .Select(player => player.PlayerId.Value == "player_2"
+                    ? player with { IsBankrupt = true, IsEliminated = true }
+                    : player)
+                .ToArray(),
+        };
+
+        var result = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+            startedSession.SessionId,
+            actionGameState,
+            DateTimeOffset.Parse("2026-04-26T01:00:00+00:00"));
+
+        Assert.Equal(1, result.Sequence);
+        Assert.Equal(2, result.CompletionSequence);
+        Assert.Equal(2, result.Session.LastEventSequence);
+        Assert.Same(result.Session, sessionManager.GetSession(startedSession.SessionId));
+        Assert.Equal(GameStatus.Completed, result.Session.GameState.Status);
+        Assert.Equal(GamePhase.Completed, result.Session.GameState.Phase);
+        Assert.Equal(new PlayerId("player_1"), result.Session.GameState.WinnerPlayerId);
+        Assert.Equal(GameSessionStatus.InGame, result.Session.Status);
+    }
+
+    [Fact]
     public void UpdateGameState_InvalidSessionThrows()
     {
         var sessionManager = new SessionManager();

@@ -278,6 +278,105 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void TerminalExecuteTile_EmitsActionAndGameCompletedBroadcastsAtomically()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var readySession = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            readySession.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with { Money = new Money(1) },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+
+        var result = handler.HandleTextMessageResult(
+            ExecuteTileMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var updatedSession = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("execute_tile_result", result.DirectResponse.Type);
+        Assert.Equal(2, result.Broadcasts.Count);
+        Assert.Equal("tile_executed", result.Broadcasts[0].Type);
+        Assert.Equal(1, result.Broadcasts[0].Sequence);
+        Assert.Equal("game_completed", result.Broadcasts[1].Type);
+        Assert.Equal(2, result.Broadcasts[1].Sequence);
+        Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
+        var completion = Assert.IsType<GameCompletedPayload>(result.Broadcasts[1].Payload);
+        Assert.Equal("player_2", completion.WinnerPlayerId);
+        Assert.Equal(1, completion.ActivePlayerCount);
+        Assert.Equal(new[] { "player_1" }, completion.EliminatedPlayerIds);
+        Assert.Equal(GameSessionStatus.InGame, updatedSession.Status);
+        Assert.Equal(GameStatus.Completed, updatedSession.GameState.Status);
+        Assert.Equal(GamePhase.Completed, updatedSession.GameState.Phase);
+        Assert.Equal(new PlayerId("player_2"), updatedSession.GameState.WinnerPlayerId);
+        Assert.NotNull(updatedSession.GameState.EndedAtUtc);
+        Assert.Null(updatedSession.GameState.ActiveAuctionState);
+        Assert.Equal(2, updatedSession.LastEventSequence);
+    }
+
+    [Fact]
+    public void CompletedGame_DoesNotEmitDuplicateCompletionOrConsumeSequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = CompleteStartedGame(sessionManager, started.Session.SessionId);
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        var result = handler.HandleTextMessageResult(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        Assert.Equal("error", result.DirectResponse.Type);
+        var payload = Assert.IsType<LobbyErrorPayload>(result.DirectResponse.Payload);
+        Assert.Equal("game_already_completed", payload.Code);
+        Assert.Empty(result.Broadcasts);
+        Assert.Equal(beforeSequence, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
+    }
+
+    [Theory]
+    [InlineData("roll_dice")]
+    [InlineData("resolve_tile")]
+    [InlineData("execute_tile")]
+    [InlineData("end_turn")]
+    [InlineData("place_bid")]
+    [InlineData("finalize_auction")]
+    [InlineData("take_loan")]
+    public void CompletedGame_RejectsGameplayMutationsBeforeMutation(string messageType)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = CompleteStartedGame(sessionManager, started.Session.SessionId);
+        var beforeGameState = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GameplayMessage(messageType, started.Session.SessionId, "player_1"));
+        var afterSession = sessionManager.GetSession(started.Session.SessionId)!;
+
+        AssertError(response, "game_already_completed");
+        Assert.Same(beforeGameState, afterSession.GameState);
+        Assert.Equal(beforeSequence, afterSession.LastEventSequence);
+    }
+
+    [Fact]
     public void RollDice_ReturnsPassedStartFromMovement()
     {
         var sessionManager = new SessionManager();
@@ -907,6 +1006,8 @@ public class LobbyMessageHandlerTests
         Assert.True(card.GetProperty("isEliminated").GetBoolean());
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Equal(GameStatus.Completed, afterExecute.Status);
+        Assert.Equal(new PlayerId("player_2"), afterExecute.WinnerPlayerId);
         Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
 
         using var endTurnResponse = Handle(
@@ -914,7 +1015,7 @@ public class LobbyMessageHandlerTests
             started.FirstContext,
             EndTurnMessage(started.Session.SessionId, "player_1"));
 
-        AssertError(endTurnResponse, "player_eliminated");
+        AssertError(endTurnResponse, "game_already_completed");
     }
 
     [Fact]
@@ -2122,8 +2223,10 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1, payload.GetProperty("snapshotVersion").GetInt32());
         Assert.Equal(started.Session.SessionId, payload.GetProperty("sessionId").GetString());
         Assert.Equal("in_game", payload.GetProperty("status").GetString());
+        Assert.Equal("in_progress", payload.GetProperty("gameStatus").GetString());
         Assert.Equal(started.Session.SessionId, payload.GetProperty("matchId").GetString());
         Assert.Equal("awaiting_roll", payload.GetProperty("phase").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("winnerPlayerId").ValueKind);
         Assert.Equal("player_1", turn.GetProperty("currentPlayerId").GetString());
         Assert.Equal(3, turn.GetProperty("turnIndex").GetInt32());
         Assert.True(turn.GetProperty("hasRolledThisTurn").GetBoolean());
@@ -2148,6 +2251,28 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
         Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
         Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void GetSnapshot_CompletedGameReturnsCompletedStatusWinnerAndEndTime()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = CompleteStartedGame(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+
+        Assert.Equal("completed", payload.GetProperty("gameStatus").GetString());
+        Assert.Equal("completed", payload.GetProperty("phase").GetString());
+        Assert.Equal("player_1", payload.GetProperty("winnerPlayerId").GetString());
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-04-26T01:00:00+00:00"),
+            payload.GetProperty("endedAtUtc").GetDateTimeOffset());
     }
 
     [Fact]
@@ -2335,6 +2460,27 @@ public class LobbyMessageHandlerTests
         Assert.Equal("reconnect_result", result.DirectResponse.Type);
         Assert.Null(result.Broadcast);
         Assert.Empty(result.BroadcastConnectionIds);
+        Assert.Equal(beforeSequence, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
+    }
+
+    [Fact]
+    public void ReconnectSession_CompletedGameReturnsCompletedSnapshotAndDoesNotConsumeSequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = CompleteStartedGame(sessionManager, started.Session.SessionId);
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+        var snapshot = payload.GetProperty("snapshot");
+
+        Assert.Equal(beforeSequence, payload.GetProperty("lastEventSequence").GetInt64());
+        Assert.Equal("completed", snapshot.GetProperty("gameStatus").GetString());
+        Assert.Equal("completed", snapshot.GetProperty("phase").GetString());
+        Assert.Equal("player_1", snapshot.GetProperty("winnerPlayerId").GetString());
         Assert.Equal(beforeSequence, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
     }
 
@@ -2860,7 +3006,7 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
-    public void EndTurn_EliminatedCurrentPlayerAfterExecuteReturnsPlayerEliminated()
+    public void EndTurn_EliminatedCurrentPlayerAfterTerminalExecuteReturnsGameAlreadyCompleted()
     {
         var sessionManager = new SessionManager();
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
@@ -2891,7 +3037,7 @@ public class LobbyMessageHandlerTests
             started.FirstContext,
             EndTurnMessage(started.Session.SessionId, "player_1"));
 
-        AssertError(response, "player_eliminated");
+        AssertError(response, "game_already_completed");
     }
 
     [Fact]
@@ -3466,6 +3612,20 @@ public class LobbyMessageHandlerTests
             });
     }
 
+    private static GameSession CompleteStartedGame(SessionManager sessionManager, string sessionId)
+    {
+        return UpdateGameState(
+            sessionManager,
+            sessionId,
+            gameState => gameState with
+            {
+                Status = GameStatus.Completed,
+                Phase = GamePhase.Completed,
+                WinnerPlayerId = new PlayerId("player_1"),
+                EndedAtUtc = DateTimeOffset.Parse("2026-04-26T01:00:00+00:00"),
+            });
+    }
+
     private static Card CreateCard(
         string cardId,
         CardActionKind actionKind,
@@ -3576,6 +3736,16 @@ public class LobbyMessageHandlerTests
     private static string TakeLoanMessage(string sessionId, string playerId, int amount, string reason)
     {
         return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
+    }
+
+    private static string GameplayMessage(string type, string sessionId, string playerId)
+    {
+        return type switch
+        {
+            "place_bid" => PlaceBidMessage(sessionId, playerId, 10),
+            "take_loan" => TakeLoanMessage(sessionId, playerId, 10, "rent_payment"),
+            _ => $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}",
+        };
     }
 
     private static string GetSnapshotMessage(string sessionId, string playerId)

@@ -54,9 +54,11 @@ The first event in a session is `1`. Rejected requests, malformed payloads, unsu
 or consume sequence numbers.
 
 For gameplay actions that broadcast, `/ws` sends exactly one direct response to the sender first, then
-best-effort broadcasts exactly one event to all connected in-game players in the same session, including
-the sender. Broadcast payloads reuse the existing safe result DTOs and exclude WebSocket IDs, connection
-metadata, lobby-only player metadata, auth data, and raw domain records.
+best-effort broadcasts one or more ordered events to all connected in-game players in the same session,
+including the sender. Most actions still emit exactly one broadcast. Terminal actions that complete the
+match emit the normal action event at sequence `N` followed by `game_completed` at sequence `N + 1`.
+Broadcast payloads reuse the existing safe result DTOs and exclude WebSocket IDs, connection metadata,
+lobby-only player metadata, auth data, and raw domain records.
 
 Current broadcast event types:
 
@@ -67,6 +69,12 @@ Current broadcast event types:
 - `bid_accepted` for accepted `place_bid`
 - `auction_finalized` for successful `finalize_auction`
 - `loan_taken` for accepted `take_loan`
+- `game_completed` after a terminal action leaves exactly one active non-bankrupt, non-eliminated player
+
+Completed games keep session status `in_game` so `get_snapshot` and `reconnect_session` remain available.
+Gameplay mutations (`roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
+`finalize_auction`, and `take_loan`) are rejected with `game_already_completed` once `gameStatus` is
+`completed`.
 
 ## Client request types
 
@@ -267,8 +275,10 @@ Accepted snapshots return one direct `snapshot_result` response:
     "snapshotVersion": 1,
     "sessionId": "session_123",
     "status": "in_game",
+    "gameStatus": "in_progress",
     "matchId": "session_123",
     "phase": "awaiting_roll",
+    "winnerPlayerId": null,
     "startedAtUtc": "2026-05-02T00:00:00Z",
     "endedAtUtc": null,
     "turn": {
@@ -334,7 +344,34 @@ Accepted snapshots return one direct `snapshot_result` response:
 }
 ```
 
-Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Active auction is `null` when no auction exists. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+
+### Game completed
+
+`game_completed` is emitted only when a persisted terminal action leaves exactly one active player. Active
+means not bankrupt and not eliminated. No winner is declared when multiple active players remain or when
+zero active players remain.
+
+```json
+{
+  "type": "game_completed",
+  "sequence": 43,
+  "sessionId": "session_123",
+  "matchId": "session_123",
+  "createdAtUtc": "2026-05-02T00:00:00Z",
+  "payload": {
+    "winnerPlayerId": "player_2",
+    "turnIndex": 12,
+    "endedAtUtc": "2026-05-02T00:00:00Z",
+    "activePlayerCount": 1,
+    "eliminatedPlayerIds": ["player_1"]
+  }
+}
+```
+
+The action event and completion event are committed in one session lock update. The completed `GameState`
+and final `lastEventSequence` become visible together; there is no separately visible partial terminal
+state.
 
 ### Reconnect session
 

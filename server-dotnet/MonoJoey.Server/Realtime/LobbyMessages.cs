@@ -34,6 +34,7 @@ public static class LobbyMessageTypes
     public const string BidAccepted = "bid_accepted";
     public const string AuctionFinalized = "auction_finalized";
     public const string LoanTaken = "loan_taken";
+    public const string GameCompleted = "game_completed";
     public const string Error = "error";
 }
 
@@ -65,6 +66,7 @@ public static class LobbyErrorCodes
     public const string CardDeckEmpty = "card_deck_empty";
     public const string InvalidCard = "invalid_card";
     public const string UnsupportedCardAction = "unsupported_card_action";
+    public const string GameAlreadyCompleted = "game_already_completed";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -79,17 +81,45 @@ public sealed record LobbyBroadcastEnvelope(
     DateTimeOffset CreatedAtUtc,
     object Payload);
 
-public sealed record LobbyMessageHandleResult(
-    LobbyServerEnvelope DirectResponse,
-    LobbyBroadcastEnvelope? Broadcast,
-    IReadOnlyList<string> BroadcastConnectionIds)
+public sealed record LobbyMessageHandleResult
 {
+    public LobbyMessageHandleResult(
+        LobbyServerEnvelope directResponse,
+        LobbyBroadcastEnvelope? broadcast,
+        IReadOnlyList<string> broadcastConnectionIds)
+        : this(
+            directResponse,
+            broadcast is null
+                ? Array.Empty<LobbyBroadcastEnvelope>()
+                : new[] { broadcast },
+            broadcastConnectionIds)
+    {
+    }
+
+    public LobbyMessageHandleResult(
+        LobbyServerEnvelope directResponse,
+        IReadOnlyList<LobbyBroadcastEnvelope> broadcasts,
+        IReadOnlyList<string> broadcastConnectionIds)
+    {
+        DirectResponse = directResponse;
+        Broadcasts = broadcasts;
+        BroadcastConnectionIds = broadcastConnectionIds;
+    }
+
+    public LobbyServerEnvelope DirectResponse { get; }
+
+    public LobbyBroadcastEnvelope? Broadcast => Broadcasts.Count == 0 ? null : Broadcasts[0];
+
+    public IReadOnlyList<LobbyBroadcastEnvelope> Broadcasts { get; }
+
+    public IReadOnlyList<string> BroadcastConnectionIds { get; }
+
     public static implicit operator LobbyMessageHandleResult(LobbyServerEnvelope directResponse)
     {
         return new LobbyMessageHandleResult(
             directResponse,
-            Broadcast: null,
-            BroadcastConnectionIds: Array.Empty<string>());
+            broadcast: null,
+            broadcastConnectionIds: Array.Empty<string>());
     }
 }
 
@@ -212,12 +242,21 @@ public sealed record LoanResultPayload(
     int NextTurnInterestDue,
     int LoanTier);
 
+public sealed record GameCompletedPayload(
+    string WinnerPlayerId,
+    int TurnIndex,
+    DateTimeOffset EndedAtUtc,
+    int ActivePlayerCount,
+    IReadOnlyList<string> EliminatedPlayerIds);
+
 public sealed record SnapshotPayload(
     int SnapshotVersion,
     string SessionId,
     string Status,
+    string GameStatus,
     string MatchId,
     string Phase,
+    string? WinnerPlayerId,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset? EndedAtUtc,
     SnapshotTurnPayload Turn,

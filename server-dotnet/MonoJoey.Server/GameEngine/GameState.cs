@@ -11,7 +11,9 @@ public sealed record GameState(
     PlayerId? CurrentTurnPlayerId,
     int TurnNumber,
     DateTimeOffset StartedAtUtc,
-    DateTimeOffset? EndedAtUtc)
+    DateTimeOffset? EndedAtUtc,
+    GameStatus Status = GameStatus.InProgress,
+    PlayerId? WinnerPlayerId = null)
 {
     public bool HasRolledThisTurn { get; init; }
 

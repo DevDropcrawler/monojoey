@@ -140,6 +140,7 @@ Server must validate uniqueness where required by ruleset.
 ```json
 {
   "matchId": "match_123",
+  "status": "InProgress",
   "phase": "AwaitingRoll",
   "rulesetId": "default_v1",
   "boardId": "default_board_v1",
@@ -147,10 +148,15 @@ Server must validate uniqueness where required by ruleset.
   "turnNumber": 12,
   "players": [],
   "auctionState": null,
+  "winnerPlayerId": null,
   "startedAtUtc": "2026-04-25T00:00:00Z",
   "endedAtUtc": null
 }
 ```
+
+`status` is distinct from `phase`: completed games keep session status `InGame` for snapshot/reconnect,
+while match state uses `status = Completed`, `phase = Completed`, `winnerPlayerId`, and `endedAtUtc`.
+Completion is server-derived when exactly one non-bankrupt, non-eliminated player remains.
 
 ## PlayerState draft
 

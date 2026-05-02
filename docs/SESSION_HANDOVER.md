@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.15 Reconnect / Resync Foundation
-- Completion status: Chunk 5.15 complete; `/ws` now supports direct-only in-memory `reconnect_session` for in-game players, rebinding the current socket and returning an authoritative snapshot plus advisory `lastEventSequence`.
+- Chunk: 5.16 End-Game / Win Conditions
+- Completion status: Chunk 5.16 complete; the server now deterministically completes matches when a persisted terminal action leaves exactly one active player, emits ordered `game_completed` broadcasts, and exposes completed state in snapshots/reconnect.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
@@ -15,18 +15,20 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.15 - Reconnect / Resync Foundation.
+Phase 5, Chunk 5.16 - End-Game / Win Conditions.
 
 Completed:
 
-- Added `reconnect_session` and direct-only `reconnect_result`.
-- Added `SessionManager.RebindInGamePlayerConnection(...)` for existing in-game players and metadata rows.
-- Reconnect replaces only the current `PlayerConnection.ConnectionId`, preserves metadata order/readiness, and does not mutate `GameState`, `GamePhase`, or `LastEventSequence`.
-- Reconnect returns the current authoritative snapshot plus advisory `lastEventSequence`.
-- Gameplay actions and `get_snapshot` now require the socket context to match the current session/player metadata connection ID, so stale sockets fail with `player_switch_rejected` after reconnect.
-- Broadcast targeting now uses current non-empty connection IDs for players present in `GameState.Players`, excluding stale/replaced connection IDs.
-- In-game disconnect cleanup clears only the matching current connection ID and does not remove engine players or erase a newer reconnect binding.
-- Added handler, session-manager, and transport coverage for reconnect success, idempotency, validation failures, stale socket rejection, broadcast retargeting, and cleanup ordering.
+- Added `GameStatus` and extended `GameState` with match `Status` and `WinnerPlayerId`.
+- Added `GameCompletionManager.CompleteIfWinner(...)` with deterministic one-active-player completion, zero/multiple-active no-op behavior, idempotency, and active-auction clearing.
+- Added an atomic terminal session commit path that allocates the normal action sequence and optional `game_completed` sequence under one session update.
+- Added `game_completed` broadcast payloads with winner, turn index, end time, active count, and eliminated player IDs.
+- Generalized realtime handler results and WebSocket broadcasting from one optional broadcast to ordered broadcasts while preserving existing single-broadcast behavior.
+- Integrated completion after terminal mutation paths: rent/card tile execution, auction finalization, and end-turn advancement including start-turn loan interest effects.
+- Rejected gameplay mutations after completion with `game_already_completed` without consuming sequence numbers.
+- Kept completed matches in `GameSessionStatus.InGame` so `get_snapshot` and `reconnect_session` remain direct-only and sequence-free.
+- Added completed `gameStatus`, `winnerPlayerId`, `phase`, and `endedAtUtc` snapshot/reconnect projection.
+- Added engine, session, realtime, and WebSocket tests for completion, ordered broadcasts, atomic sequence allocation, completed-action rejection, snapshots, and reconnect.
 
 Not included by explicit user scope:
 
@@ -48,13 +50,18 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
+- `shared/MonoJoey.Shared/Schemas/SchemaEnums.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameCompletionManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/GameStateEventPersistenceResult.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
+- `docs/DATA_SCHEMAS.md`
 - `docs/MULTIPLAYER_PROTOCOL.md`
+- `docs/RULES_ENGINE.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -105,6 +112,7 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/EliminationReason.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameCompletionManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
@@ -132,25 +140,16 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
-- `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
+- `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 372 tests passed.
+  - Output summary: 413 tests passed.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
-- `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
-  - Result: succeeded.
-  - Output summary: build succeeded, 2 warnings, 0 errors.
-  - Warnings: same `NU1900` vulnerability-data lookup warning.
-- `git diff --check`
-  - Result: succeeded.
-  - Output summary: no whitespace errors; Git reported expected LF-to-CRLF working-copy warnings.
 
 ## Known Issues
 
-- Plain `dotnet build .\server-dotnet\MonoJoey.sln` and plain `dotnet test .\server-dotnet\MonoJoey.sln` can fail in this Windows shell with no MSBuild errors once the server project participates in the solution graph.
-- Serialized validation with `-m:1` succeeds and should be used unless the build harness is revisited.
 - `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
-- No endpoint integration test was added because the existing test project does not include ASP.NET Core test host packages and this chunk avoided adding NuGet dependencies.
+- No UI, persistence, stats, timers, event replay, or reconnect catch-up was added.
 
 ## Placeholders Introduced Or Preserved
 
@@ -158,9 +157,9 @@ Not included by explicit user scope:
 - WebSocket connection IDs are generated as GUID `N` strings and are transport-local only.
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect secret.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
-- Successful state-changing gameplay requests then emit one best-effort broadcast event to connected in-game players in the same session, including the sender. The direct response is sent first.
+- Successful state-changing gameplay requests then emit one or more best-effort ordered broadcast events to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `game_completed`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -196,7 +195,7 @@ Not included by explicit user scope:
 - `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, and `turnIndex` from the advanced `GameState.TurnNumber`.
 - `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, locked current players before the completed-turn state through `player_locked`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
 - Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
-- If `execute_tile` eliminated the current player, `end_turn` returns `player_eliminated` and does not advance.
+- If `execute_tile` eliminated the current player and the match completed, later gameplay requests return `game_already_completed`; if the match did not complete, `end_turn` still returns `player_eliminated` and does not advance.
 - Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
 - `end_turn` does not emit snapshots, finalize auctions, add persistence, add client behavior, or special-case eliminated players into a forced advance. Successful end-turn actions emit `turn_ended`.
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
@@ -221,7 +220,8 @@ Not included by explicit user scope:
 - `loan_result` is the direct sender response and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player. Accepted loans emit `loan_taken`.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
 - `get_snapshot` requires a bound in-game session/player connection and returns `invalid_payload`, `invalid_session`, `player_switch_rejected`, `invalid_session_state`, or `player_not_found` before producing a snapshot.
-- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` status, phase, start/end timestamps, turn flags directly from `GameState`, players, board, nullable active auction, card decks, and loan shark config.
+- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` session status, `gameStatus`, phase, nullable winner, start/end timestamps, turn flags directly from `GameState`, players, board, nullable active auction, card decks, and loan shark config.
+- Completed snapshots have `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and no active auction.
 - Snapshot projection is built only from persisted `GameState` while holding the realtime handler `sessionLock`; it does not call mutating managers and does not call `SessionManager.UpdateGameState`.
 - Snapshot DTOs fully copy scalar values and arrays; domain records, `GameSession.Players`, WebSocket connection IDs, lobby connection metadata, transport IDs, auth tokens, and reconnect secrets are not exposed.
 - Snapshot ordering is deterministic: engine players preserve `GameState.Players` order; owned property IDs and held card IDs sort ascending; card decks sort by deck ID; board tiles sort by index then tile ID; auction bids and deck piles preserve persisted order.
@@ -231,6 +231,10 @@ Not included by explicit user scope:
 - Reconnect does not create players, duplicate engine players, restart turns, change phases, mutate `GameState`, replay broadcasts, allocate event sequences, or expose connection IDs in the snapshot.
 - Reconnect only works while this server process still has the session in memory. There is no auth, account, token, reconnect secret, persistence, or missed-event replay yet.
 - Clients must hydrate from the returned reconnect snapshot rather than applying local assumptions about missed events.
+- Match completion is based only on persisted action state: active player means not bankrupt and not eliminated.
+- A terminal action emits the normal action event at sequence `N` and `game_completed` at sequence `N + 1`; completed state and `LastEventSequence = N + 1` are committed atomically.
+- Completed games keep `GameSessionStatus.InGame`; only `GameState.Status` and `GameState.Phase` move to completed.
+- Completed gameplay mutations reject with `game_already_completed` before mutation and without sequence allocation.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
 - Duplicate lobby joins are idempotent by `PlayerId` for membership count; they refresh the stored connection ID while preserving the existing ready state.
 - Leaving with a player not present in the session is a safe no-op.
@@ -272,7 +276,7 @@ Not included by explicit user scope:
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not remove engine players and clears only the matching current connection ID, so stale sockets closing after reconnect cannot erase the newer binding.
 - Lobby messages are direct request/response only; lobby broadcasts are intentionally deferred.
-- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan` now keep direct request/response behavior and emit one sequenced broadcast after successful state changes. `get_snapshot` remains direct-only.
+- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan` now keep direct request/response behavior and emit sequenced broadcasts after successful state changes. `get_snapshot` remains direct-only.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
 - Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
 - Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
@@ -395,4 +399,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.14 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.16 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

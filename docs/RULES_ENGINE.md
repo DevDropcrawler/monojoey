@@ -14,6 +14,7 @@ It must be independent from Unity and testable as plain C#/.NET code.
 Owns current match truth:
 
 - `matchId`
+- `status`
 - `ruleset`
 - `board`
 - `players`
@@ -290,6 +291,25 @@ Bankruptcy can occur from:
 - Loan interest at start of turn.
 
 Loan interest bankruptcy occurs before rolling and eliminates the player before their movement.
+
+## Win condition
+
+The server completes a match deterministically when a persisted terminal action leaves exactly one active
+player. Active means the player is not bankrupt and not eliminated.
+
+Rules:
+
+- More than one active player: match remains in progress.
+- Exactly one active player: set `GameState.Status = Completed`, `GamePhase.Completed`, `WinnerPlayerId`,
+  and `EndedAtUtc`; clear any active auction state.
+- Zero active players: match remains unchanged and no winner is declared.
+- Already completed states are idempotent and do not emit duplicate completion.
+
+Completion is evaluated after mutation paths that can eliminate players: rent/card tile execution,
+auction finalization, and end-turn advancement including start-turn loan interest. A terminal action emits
+the normal action event at sequence `N` and `game_completed` at sequence `N + 1`, committed atomically with
+the completed `GameState`. Completed matches keep the session in `InGame` status for snapshot/reconnect,
+but further gameplay mutations are rejected.
 
 ## Stats hooks
 

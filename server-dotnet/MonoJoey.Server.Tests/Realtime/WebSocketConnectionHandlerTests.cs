@@ -222,6 +222,57 @@ public class WebSocketConnectionHandlerTests
     }
 
     [Fact]
+    public async Task TerminalExecuteTile_SendsDirectResponseThenOrderedBroadcasts()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var readyGameState = startedSession.GameState with
+        {
+            HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = false,
+            Players = startedSession.GameState.Players
+                .Select(player => player.PlayerId.Value switch
+                {
+                    "player_1" => player with
+                    {
+                        Money = new Money(1),
+                        CurrentTileId = new TileId("property_01"),
+                    },
+                    "player_2" => player with
+                    {
+                        OwnedPropertyIds = new HashSet<TileId> { new("property_01") },
+                    },
+                    _ => player,
+                })
+                .ToArray(),
+        };
+        _ = sessionManager.UpdateGameState(startedSession.SessionId, readyGameState);
+        var connectionManager = new TestConnectionManager("connection_reconnect");
+        var lobbyMessageHandler = new LobbyMessageHandler(sessionManager);
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(ReconnectMessage(startedSession.SessionId, "player_1")),
+            TextFrame(ExecuteTileMessage(startedSession.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        Assert.Equal(4, webSocket.SentTextMessages.Count);
+        using var reconnectResponse = JsonDocument.Parse(webSocket.SentTextMessages[0]);
+        Assert.Equal("reconnect_result", reconnectResponse.RootElement.GetProperty("type").GetString());
+        using var executeResponse = JsonDocument.Parse(webSocket.SentTextMessages[1]);
+        Assert.Equal("execute_tile_result", executeResponse.RootElement.GetProperty("type").GetString());
+        using var executeBroadcast = JsonDocument.Parse(webSocket.SentTextMessages[2]);
+        Assert.Equal("tile_executed", executeBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Equal(1, executeBroadcast.RootElement.GetProperty("sequence").GetInt64());
+        using var completionBroadcast = JsonDocument.Parse(webSocket.SentTextMessages[3]);
+        Assert.Equal("game_completed", completionBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Equal(2, completionBroadcast.RootElement.GetProperty("sequence").GetInt64());
+        Assert.Equal("player_2", completionBroadcast.RootElement.GetProperty("payload").GetProperty("winnerPlayerId").GetString());
+    }
+
+    [Fact]
     public async Task GetSnapshot_SendsOneResponseForSnapshotMessage()
     {
         var sessionManager = new SessionManager();

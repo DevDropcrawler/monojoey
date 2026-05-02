@@ -154,6 +154,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidAccepted or
                 LobbyMessageTypes.AuctionFinalized or
                 LobbyMessageTypes.LoanTaken or
+                LobbyMessageTypes.GameCompleted or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -206,6 +207,11 @@ public sealed class LobbyMessageHandler
                 return CreateError(
                     LobbyErrorCodes.InvalidSessionState,
                     "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
             }
 
             var player = session.GameState.Players.FirstOrDefault(
@@ -306,6 +312,11 @@ public sealed class LobbyMessageHandler
                     "Session is not in game.");
             }
 
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
             var player = session.GameState.Players.FirstOrDefault(
                 gamePlayer => gamePlayer.PlayerId.Value == playerId);
             if (player is null)
@@ -399,6 +410,11 @@ public sealed class LobbyMessageHandler
                 return CreateError(
                     LobbyErrorCodes.InvalidSessionState,
                     "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
             }
 
             var player = session.GameState.Players.FirstOrDefault(
@@ -508,6 +524,11 @@ public sealed class LobbyMessageHandler
                     "Session is not in game.");
             }
 
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
             var player = session.GameState.Players.FirstOrDefault(
                 gamePlayer => gamePlayer.PlayerId.Value == playerId);
             if (player is null)
@@ -574,13 +595,16 @@ public sealed class LobbyMessageHandler
             var previousPlayerId = player.PlayerId;
             var advancedGameState = TurnManager.AdvanceToNextTurn(session.GameState);
 
-            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, advancedGameState);
+            var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+                sessionId,
+                advancedGameState,
+                DateTimeOffset.UtcNow);
 
-            return CreateBroadcastResult(
+            return CreateTerminalBroadcastResult(
                 CreateEndTurnResult(previousPlayerId, persistence.Session.GameState),
                 LobbyMessageTypes.TurnEnded,
                 persistence.Session,
-                persistence.Sequence);
+                persistence);
         }
     }
 
@@ -617,6 +641,11 @@ public sealed class LobbyMessageHandler
                 return CreateError(
                     LobbyErrorCodes.InvalidSessionState,
                     "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
             }
 
             var player = session.GameState.Players.FirstOrDefault(
@@ -706,6 +735,11 @@ public sealed class LobbyMessageHandler
                     "Session is not in game.");
             }
 
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
             var player = session.GameState.Players.FirstOrDefault(
                 gamePlayer => gamePlayer.PlayerId.Value == playerId);
             if (player is null)
@@ -759,13 +793,16 @@ public sealed class LobbyMessageHandler
             {
                 ActiveAuctionState = null,
             };
-            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+            var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+                sessionId,
+                updatedGameState,
+                DateTimeOffset.UtcNow);
 
-            return CreateBroadcastResult(
+            return CreateTerminalBroadcastResult(
                 CreateAuctionResult(finalizationResult, persistence.Session.GameState),
                 LobbyMessageTypes.AuctionFinalized,
                 persistence.Session,
-                persistence.Sequence);
+                persistence);
         }
     }
 
@@ -815,6 +852,11 @@ public sealed class LobbyMessageHandler
                 return CreateError(
                     LobbyErrorCodes.InvalidSessionState,
                     "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
             }
 
             var gameState = session.GameState;
@@ -1311,9 +1353,12 @@ public sealed class LobbyMessageHandler
             HasExecutedTileThisTurn = true,
         };
 
-        var rentPersistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, rentGameState);
+        var rentPersistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+            sessionId,
+            rentGameState,
+            DateTimeOffset.UtcNow);
 
-        return CreateBroadcastResult(
+        return CreateTerminalBroadcastResult(
             CreateExecuteTileResult(
                 resolution,
                 GetRentExecutionKind(rent),
@@ -1323,7 +1368,7 @@ public sealed class LobbyMessageHandler
                 card: null),
             LobbyMessageTypes.TileExecuted,
             rentPersistence.Session,
-            rentPersistence.Sequence);
+            rentPersistence);
     }
 
     private LobbyMessageHandleResult ExecuteCardTile(
@@ -1384,12 +1429,15 @@ public sealed class LobbyMessageHandler
             HasExecutedTileThisTurn = true,
         };
 
-        var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, persistedGameState);
+        var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
+            sessionId,
+            persistedGameState,
+            DateTimeOffset.UtcNow);
         var persistedPlayer = persistence.Session.GameState.Players.First(
             updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
         var executionKind = GetCardExecutionKind(cardResolution.ActionKind, persistedPlayer);
 
-        return CreateBroadcastResult(
+        return CreateTerminalBroadcastResult(
             CreateExecuteTileResult(
                 tileResolution,
                 executionKind,
@@ -1399,7 +1447,7 @@ public sealed class LobbyMessageHandler
                 card: CreateCardPayload(deckId, card, cardResolution, executionKind, persistedPlayer)),
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
-            persistence.Sequence);
+            persistence);
     }
 
     private void RemovePreviousSessionBindingIfNeeded(
@@ -1622,8 +1670,10 @@ public sealed class LobbyMessageHandler
             SnapshotVersion: 1,
             SessionId: gameState.MatchId.Value,
             Status: "in_game",
+            GameStatus: FormatGameStatus(gameState.Status),
             MatchId: gameState.MatchId.Value,
             Phase: FormatGamePhase(gameState.Phase),
+            WinnerPlayerId: gameState.WinnerPlayerId?.Value,
             StartedAtUtc: gameState.StartedAtUtc,
             EndedAtUtc: gameState.EndedAtUtc,
             Turn: CreateSnapshotTurn(gameState),
@@ -1639,6 +1689,28 @@ public sealed class LobbyMessageHandler
                 .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
                 .ToArray(),
             LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled));
+    }
+
+    private static GameCompletedPayload CreateGameCompletedPayload(GameState gameState)
+    {
+        if (gameState.WinnerPlayerId is null || gameState.EndedAtUtc is null)
+        {
+            throw new InvalidOperationException("Completed games must have a winner and end timestamp.");
+        }
+
+        var activePlayerCount = gameState.Players.Count(player => !player.IsBankrupt && !player.IsEliminated);
+        var eliminatedPlayerIds = gameState.Players
+            .Where(player => player.IsEliminated)
+            .Select(player => player.PlayerId.Value)
+            .OrderBy(playerId => playerId, StringComparer.Ordinal)
+            .ToArray();
+
+        return new GameCompletedPayload(
+            gameState.WinnerPlayerId.Value.Value,
+            gameState.TurnNumber,
+            gameState.EndedAtUtc.Value,
+            activePlayerCount,
+            eliminatedPlayerIds);
     }
 
     private static SnapshotTurnPayload CreateSnapshotTurn(GameState gameState)
@@ -1756,6 +1828,42 @@ public sealed class LobbyMessageHandler
                 session.GameState.MatchId.Value,
                 DateTimeOffset.UtcNow,
                 directResponse.Payload),
+            CreateBroadcastTargetConnectionIds(session));
+    }
+
+    private static LobbyMessageHandleResult CreateTerminalBroadcastResult(
+        LobbyServerEnvelope directResponse,
+        string eventType,
+        GameSession session,
+        GameStateEventPersistenceResult persistence)
+    {
+        if (persistence.CompletionSequence is null)
+        {
+            return CreateBroadcastResult(directResponse, eventType, session, persistence.Sequence);
+        }
+
+        var createdAtUtc = DateTimeOffset.UtcNow;
+        var broadcasts = new[]
+        {
+            new LobbyBroadcastEnvelope(
+                eventType,
+                persistence.Sequence,
+                session.SessionId,
+                session.GameState.MatchId.Value,
+                createdAtUtc,
+                directResponse.Payload),
+            new LobbyBroadcastEnvelope(
+                LobbyMessageTypes.GameCompleted,
+                persistence.CompletionSequence.Value,
+                session.SessionId,
+                session.GameState.MatchId.Value,
+                createdAtUtc,
+                CreateGameCompletedPayload(session.GameState)),
+        };
+
+        return new LobbyMessageHandleResult(
+            directResponse,
+            broadcasts,
             CreateBroadcastTargetConnectionIds(session));
     }
 
@@ -1959,6 +2067,13 @@ public sealed class LobbyMessageHandler
                 LobbyErrorCodes.InvalidSessionState,
                 loanResult.Message),
         };
+    }
+
+    private static LobbyServerEnvelope CreateGameAlreadyCompletedError()
+    {
+        return CreateError(
+            LobbyErrorCodes.GameAlreadyCompleted,
+            "Game is already completed.");
     }
 
     private static ExecuteTileAuctionPayload CreateAuctionPayload(AuctionState auctionState)
@@ -2167,6 +2282,16 @@ public sealed class LobbyMessageHandler
             GamePhase.AwaitingEndTurn => "awaiting_end_turn",
             GamePhase.Completed => "completed",
             _ => phase.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatGameStatus(GameStatus status)
+    {
+        return status switch
+        {
+            GameStatus.InProgress => "in_progress",
+            GameStatus.Completed => "completed",
+            _ => status.ToString().ToLowerInvariant(),
         };
     }
 

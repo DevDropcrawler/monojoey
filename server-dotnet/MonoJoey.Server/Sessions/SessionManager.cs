@@ -287,6 +287,29 @@ public sealed class SessionManager
         return new GameStateEventPersistenceResult(updatedSession, sequence);
     }
 
+    public GameStateEventPersistenceResult UpdateTerminalGameStateAndAllocateEventSequences(
+        string sessionId,
+        GameState actionGameState,
+        DateTimeOffset endedAtUtc)
+    {
+        var session = FindSession(sessionId);
+        var actionSequence = session.LastEventSequence + 1;
+        var completedGameState = GameCompletionManager.CompleteIfWinner(actionGameState, endedAtUtc);
+        var completionSequence = actionGameState.Status != GameStatus.Completed &&
+            completedGameState.Status == GameStatus.Completed
+                ? actionSequence + 1
+                : (long?)null;
+        var updatedSession = session with
+        {
+            GameState = completedGameState,
+            LastEventSequence = completionSequence ?? actionSequence,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return new GameStateEventPersistenceResult(updatedSession, actionSequence, completionSequence);
+    }
+
     private GameSession FindSession(string sessionId)
     {
         if (sessions.TryGetValue(sessionId, out var session))

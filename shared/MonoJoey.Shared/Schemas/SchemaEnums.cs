@@ -10,6 +10,12 @@ public enum GamePhase
     Completed
 }
 
+public enum GameStatus
+{
+    InProgress,
+    Completed
+}
+
 public enum TileType
 {
     Start,
