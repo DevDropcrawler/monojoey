@@ -129,6 +129,8 @@ public static class GameRulesResolver
         {
             "startingMoney",
             "passStartReward",
+            "incomeTaxAmount",
+            "luxuryTaxAmount",
             "baseRentEnabled",
             "upgradesEnabled",
         });
@@ -137,6 +139,8 @@ public static class GameRulesResolver
         {
             StartingMoney = ReadOptionalNonNegativeInt(group, "startingMoney") ?? baseline.StartingMoney,
             PassStartReward = ReadOptionalNonNegativeInt(group, "passStartReward") ?? baseline.PassStartReward,
+            IncomeTaxAmount = ReadOptionalNonNegativeInt(group, "incomeTaxAmount") ?? baseline.IncomeTaxAmount,
+            LuxuryTaxAmount = ReadOptionalNonNegativeInt(group, "luxuryTaxAmount") ?? baseline.LuxuryTaxAmount,
             BaseRentEnabled = ReadOptionalBool(group, "baseRentEnabled") ?? baseline.BaseRentEnabled,
             UpgradesEnabled = ReadOptionalBool(group, "upgradesEnabled") ?? baseline.UpgradesEnabled,
         };
@@ -399,6 +403,8 @@ public static class GameRulesResolver
     {
         if (rules.Economy.StartingMoney < 0 ||
             rules.Economy.PassStartReward < 0 ||
+            rules.Economy.IncomeTaxAmount < 0 ||
+            rules.Economy.LuxuryTaxAmount < 0 ||
             rules.Auction.InitialTimerSeconds <= 0 ||
             rules.Auction.BidResetTimerSeconds <= 0 ||
             rules.Auction.MinimumBidIncrement <= 0 ||

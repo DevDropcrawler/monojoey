@@ -274,8 +274,9 @@ public sealed class LobbyMessageHandler
                 session.GameState,
                 player.PlayerId,
                 dice.Total);
+            var passStartReward = new Money(session.GameState.Rules.Economy.PassStartReward);
             var rewardedGameState = movementResult.PassedStart
-                ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, DefaultTurnRules.PassStartReward)
+                ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, passStartReward)
                 : movementResult.GameState;
             var updatedGameState = rewardedGameState with
             {
@@ -1732,7 +1733,8 @@ public sealed class LobbyMessageHandler
         GameState gameState,
         TileResolutionResult resolution)
     {
-        var taxedGameState = ChangePlayerMoney(gameState, resolution.PlayerId, new Money(-DefaultTurnRules.TaxAmount.Amount));
+        var taxAmount = gameState.Rules.Economy.IncomeTaxAmount;
+        var taxedGameState = ChangePlayerMoney(gameState, resolution.PlayerId, new Money(-taxAmount));
         var eliminatedGameState = BankruptcyManager.EliminateIfBankrupt(taxedGameState, resolution.PlayerId).GameState;
         var persistedGameState = eliminatedGameState with
         {
@@ -2488,7 +2490,7 @@ public sealed class LobbyMessageHandler
                     {
                         new MoneyDeltaPayload(
                             persistedPlayer.PlayerId.Value,
-                            DefaultTurnRules.PassStartReward.Amount,
+                            gameState.Rules.Economy.PassStartReward,
                             persistedPlayer.Money.Amount,
                             "pass_start"),
                     }

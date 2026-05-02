@@ -13,6 +13,8 @@ public static class GameRulesPresets
         Economy: new EconomyRules(
             StartingMoney: 1500,
             PassStartReward: 200,
+            IncomeTaxAmount: 100,
+            LuxuryTaxAmount: 100,
             BaseRentEnabled: true,
             UpgradesEnabled: false),
         Auction: new AuctionRules(

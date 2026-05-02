@@ -628,6 +628,33 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_UsesRulesPassStartReward()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 1));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""economy"":{""passStartReward"":125}");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { CurrentTileId = new TileId("go_to_lockup_01") });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal(125, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1625, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal(new Money(1625), sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].Money);
+    }
+
+    [Fact]
     public void RollDice_ResetsResolvedAndExecutedFlags()
     {
         var sessionManager = new SessionManager();
@@ -1164,6 +1191,32 @@ public class LobbyMessageHandlerTests
             started.FirstContext,
             EndTurnMessage(started.Session.SessionId, "player_1"));
         AssertResponseType(endTurnResponse, "end_turn_result");
+    }
+
+    [Fact]
+    public void ExecuteTile_TaxUsesRulesIncomeTaxAmount()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""economy"":{""incomeTaxAmount"":75,""luxuryTaxAmount"":25}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "tax_01");
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("tax_paid", executePayload.GetProperty("executionKind").GetString());
+        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal(-75, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1425, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal(new Money(1425), afterExecute.Players[0].Money);
+        Assert.Equal(25, afterExecute.Rules.Economy.LuxuryTaxAmount);
     }
 
     [Fact]
@@ -4262,13 +4315,19 @@ public class LobbyMessageHandlerTests
 
     private static StartedRealtimeGame StartReadyGame(
         SessionManager sessionManager,
-        LobbyMessageHandler handler)
+        LobbyMessageHandler handler,
+        string? rulesJson = null)
     {
         var session = sessionManager.CreateSession();
         var firstContext = new LobbyConnectionContext("connection_1");
         var secondContext = new LobbyConnectionContext("connection_2");
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        if (rulesJson is not null)
+        {
+            _ = handler.HandleTextMessage(SetRulesMessage(session.SessionId, "player_1", rulesJson), firstContext);
+        }
+
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
         _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
@@ -4414,6 +4473,11 @@ public class LobbyMessageHandlerTests
     private static string SetProfileMessage(string username, string tokenId, string colorId)
     {
         return $@"{{""type"":""set_profile"",""payload"":{{""username"":""{username}"",""tokenId"":""{tokenId}"",""colorId"":""{colorId}""}}}}";
+    }
+
+    private static string SetRulesMessage(string sessionId, string playerId, string rulesJson)
+    {
+        return $@"{{""type"":""set_rules"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""rules"":{{{rulesJson}}}}}}}";
     }
 
     private static string StartGameMessage(string sessionId, string playerId)

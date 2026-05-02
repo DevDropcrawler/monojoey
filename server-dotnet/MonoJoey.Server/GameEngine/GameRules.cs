@@ -35,6 +35,8 @@ public sealed record GameRules(
 public sealed record EconomyRules(
     int StartingMoney,
     int PassStartReward,
+    int IncomeTaxAmount,
+    int LuxuryTaxAmount,
     bool BaseRentEnabled,
     bool UpgradesEnabled)
 {
@@ -43,6 +45,8 @@ public sealed record EconomyRules(
         return new EconomyRules(
             StartingMoney,
             PassStartReward,
+            IncomeTaxAmount,
+            LuxuryTaxAmount,
             BaseRentEnabled,
             UpgradesEnabled);
     }

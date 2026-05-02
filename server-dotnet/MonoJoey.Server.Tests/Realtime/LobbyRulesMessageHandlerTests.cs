@@ -20,6 +20,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal("monojoey_default", rules.GetProperty("presetId").GetString());
         Assert.Equal("MonoJoey default", rules.GetProperty("presetName").GetString());
         Assert.False(rules.GetProperty("isCustom").GetBoolean());
+        Assert.Equal(100, rules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
+        Assert.Equal(100, rules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(9, rules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal(new[] { "chance", "table" }, rules.GetProperty("cards").GetProperty("decksEnabled").EnumerateArray().Select(deck => deck.GetString()).ToArray());
     }
@@ -81,6 +83,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(12, rules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal(3, rules.GetProperty("auction").GetProperty("bidResetTimerSeconds").GetInt32());
         Assert.Equal(1500, rules.GetProperty("economy").GetProperty("startingMoney").GetInt32());
+        Assert.Equal(100, rules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
+        Assert.Equal(100, rules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
     }
 
     [Theory]
@@ -88,6 +92,8 @@ public class LobbyRulesMessageHandlerTests
     [InlineData(@"""unknown"":{}")]
     [InlineData(@"""auction"":{""unknown"":1}")]
     [InlineData(@"""auction"":{""initialTimerSeconds"":0}")]
+    [InlineData(@"""economy"":{""incomeTaxAmount"":-1}")]
+    [InlineData(@"""economy"":{""luxuryTaxAmount"":-1}")]
     [InlineData(@"""loans"":{""baseInterestRate"":-0.1}")]
     [InlineData(@"""cards"":{""decksEnabled"":[""unknown""]}")]
     public void SetRules_InvalidRulesReturnsInvalidRules(string rulesJson)
@@ -170,7 +176,7 @@ public class LobbyRulesMessageHandlerTests
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
         _ = handler.HandleTextMessage(
-            SetRulesMessage(session.SessionId, "player_1", @"""presetName"":""House rules"",""auction"":{""initialTimerSeconds"":12}"),
+            SetRulesMessage(session.SessionId, "player_1", @"""presetName"":""House rules"",""economy"":{""incomeTaxAmount"":75,""luxuryTaxAmount"":25},""auction"":{""initialTimerSeconds"":12}"),
             firstContext);
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
@@ -186,9 +192,13 @@ public class LobbyRulesMessageHandlerTests
 
         Assert.Equal("custom", snapshotRules.GetProperty("presetId").GetString());
         Assert.Equal("House rules", snapshotRules.GetProperty("presetName").GetString());
+        Assert.Equal(75, snapshotRules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
+        Assert.Equal(25, snapshotRules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(12, snapshotRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal("custom", reconnectRules.GetProperty("presetId").GetString());
         Assert.Equal("House rules", reconnectRules.GetProperty("presetName").GetString());
+        Assert.Equal(75, reconnectRules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
+        Assert.Equal(25, reconnectRules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(12, reconnectRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
     }
 

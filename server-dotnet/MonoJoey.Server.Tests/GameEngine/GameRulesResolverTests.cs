@@ -18,6 +18,8 @@ public class GameRulesResolverTests
         Assert.False(rules.IsCustom);
         Assert.Equal(1500, rules.Economy.StartingMoney);
         Assert.Equal(200, rules.Economy.PassStartReward);
+        Assert.Equal(100, rules.Economy.IncomeTaxAmount);
+        Assert.Equal(100, rules.Economy.LuxuryTaxAmount);
         Assert.True(rules.Economy.BaseRentEnabled);
         Assert.False(rules.Economy.UpgradesEnabled);
         Assert.True(rules.Auction.MandatoryAuctionsEnabled);
@@ -50,6 +52,11 @@ public class GameRulesResolverTests
         using var document = JsonDocument.Parse(
             @"{
                 ""presetName"": ""House rules"",
+                ""economy"": {
+                    ""passStartReward"": 125,
+                    ""incomeTaxAmount"": 75,
+                    ""luxuryTaxAmount"": 25
+                },
                 ""auction"": {
                     ""initialTimerSeconds"": 12,
                     ""minimumBidIncrement"": 5
@@ -69,6 +76,9 @@ public class GameRulesResolverTests
         Assert.Equal(5, rules.Auction.MinimumBidIncrement);
         Assert.False(rules.Loans.LoanSharkEnabled);
         Assert.Equal(1500, rules.Economy.StartingMoney);
+        Assert.Equal(125, rules.Economy.PassStartReward);
+        Assert.Equal(75, rules.Economy.IncomeTaxAmount);
+        Assert.Equal(25, rules.Economy.LuxuryTaxAmount);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
     }
 
@@ -90,6 +100,8 @@ public class GameRulesResolverTests
     [InlineData(@"{""auction"":{""unknownField"":1}}")]
     [InlineData(@"{""auction"":{""initialTimerSeconds"":0}}")]
     [InlineData(@"{""auction"":{""minimumBidIncrement"":""5""}}")]
+    [InlineData(@"{""economy"":{""incomeTaxAmount"":-1}}")]
+    [InlineData(@"{""economy"":{""luxuryTaxAmount"":-1}}")]
     [InlineData(@"{""dice"":{""diceCount"":0}}")]
     [InlineData(@"{""dice"":{""sidesPerDie"":1}}")]
     [InlineData(@"{""loans"":{""baseInterestRate"":1.5}}")]
