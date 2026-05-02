@@ -26,20 +26,47 @@ Suggested common envelope:
 }
 ```
 
-Server event envelope:
+Current server direct response envelope:
 
 ```json
 {
-  "eventId": "evt_123",
+  "type": "roll_result",
+  "payload": {}
+}
+```
+
+Current gameplay broadcast event envelope:
+
+```json
+{
+  "type": "bid_accepted",
   "sequence": 42,
+  "sessionId": "session_123",
   "matchId": "match_123",
-  "type": "BidAccepted",
   "createdAtUtc": "2026-04-25T00:00:00Z",
   "payload": {}
 }
 ```
 
-Every match event should have a monotonic `sequence` so reconnects can request missing events later.
+Every successful state-changing gameplay broadcast has a per-session monotonic `sequence`.
+The first event in a session is `1`. Rejected requests, malformed payloads, unsupported actions,
+`get_snapshot`, lobby actions, and accepted operations that do not mutate `GameState` do not allocate
+or consume sequence numbers.
+
+For gameplay actions that broadcast, `/ws` sends exactly one direct response to the sender first, then
+best-effort broadcasts exactly one event to all connected in-game players in the same session, including
+the sender. Broadcast payloads reuse the existing safe result DTOs and exclude WebSocket IDs, connection
+metadata, lobby-only player metadata, auth data, and raw domain records.
+
+Current broadcast event types:
+
+- `dice_rolled` for successful `roll_dice`
+- `tile_resolved` for successful `resolve_tile`
+- `tile_executed` for successful `execute_tile`
+- `turn_ended` for successful `end_turn`
+- `bid_accepted` for accepted `place_bid`
+- `auction_finalized` for successful `finalize_auction`
+- `loan_taken` for accepted `take_loan`
 
 ## Client request types
 
@@ -189,7 +216,7 @@ Server validates:
 - During an active auction, only `auction_bid` loans are allowed; any bound, non-eliminated game player may take one.
 - Outside an active auction, `auction_bid` returns `auction_not_active`; other supported reasons require the current turn player.
 
-Accepted loans return one sender-only `loan_result` and do not place bids automatically:
+Accepted loans return one direct sender `loan_result`, emit one `loan_taken` broadcast, and do not place bids automatically:
 
 ```json
 {
@@ -322,7 +349,7 @@ Card deck tiles reuse the existing server-authoritative `execute_tile` request. 
 }
 ```
 
-When the current tile is a chance/table deck placeholder, the server maps the tile type to the fixed deck ID (`chance` or `table`), draws the next persisted card from `GameState.CardDeckStates`, resolves it, executes supported effects atomically, and returns a single sender-only `execute_tile_result`:
+When the current tile is a chance/table deck placeholder, the server maps the tile type to the fixed deck ID (`chance` or `table`), draws the next persisted card from `GameState.CardDeckStates`, resolves it, executes supported effects atomically, returns a direct sender `execute_tile_result`, and emits one `tile_executed` broadcast:
 
 ```json
 {
@@ -425,7 +452,8 @@ Card-specific error codes are `card_deck_not_found`, `card_deck_empty`, `invalid
 
 ## Reconnect policy
 
-V1 should support basic reconnect.
+V1 should support basic reconnect later. Current broadcast sequencing is compatible with future replay,
+but this chunk does not store events or replay missed events.
 
 Minimum:
 

@@ -31,7 +31,8 @@ public sealed class SessionManager
             sessionId,
             Array.Empty<PlayerConnection>(),
             gameState,
-            GameSessionStatus.Lobby);
+            GameSessionStatus.Lobby,
+            LastEventSequence: 0);
 
         sessions.Add(sessionId, session);
 
@@ -49,7 +50,19 @@ public sealed class SessionManager
 
         if (session.Players.Any(existingPlayer => existingPlayer.PlayerId == player.PlayerId))
         {
-            return session;
+            var refreshedPlayers = session.Players
+                .Select(existingPlayer => existingPlayer.PlayerId == player.PlayerId
+                    ? existingPlayer with { ConnectionId = player.ConnectionId }
+                    : existingPlayer)
+                .ToArray();
+            var refreshedSession = session with
+            {
+                Players = refreshedPlayers,
+            };
+
+            sessions[sessionId] = refreshedSession;
+
+            return refreshedSession;
         }
 
         var updatedSession = session with
@@ -184,6 +197,23 @@ public sealed class SessionManager
         sessions[sessionId] = updatedSession;
 
         return updatedSession;
+    }
+
+    public GameStateEventPersistenceResult UpdateGameStateAndAllocateEventSequence(
+        string sessionId,
+        GameState gameState)
+    {
+        var session = FindSession(sessionId);
+        var sequence = session.LastEventSequence + 1;
+        var updatedSession = session with
+        {
+            GameState = gameState,
+            LastEventSequence = sequence,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return new GameStateEventPersistenceResult(updatedSession, sequence);
     }
 
     private GameSession FindSession(string sessionId)

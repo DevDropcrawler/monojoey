@@ -41,7 +41,7 @@ public sealed class WebSocketConnectionHandler
                 {
                     await DrainMessageIfNeeded(webSocket, buffer, result, cancellationToken);
                     await SendTextAsync(
-                        webSocket,
+                        connection,
                         lobbyMessageHandler.CreateErrorMessage(
                             LobbyErrorCodes.InvalidMessage,
                             "Binary messages are not supported."),
@@ -55,8 +55,10 @@ public sealed class WebSocketConnectionHandler
                     break;
                 }
 
-                var response = lobbyMessageHandler.HandleTextMessage(message, lobbyConnectionContext);
-                await SendTextAsync(webSocket, response, cancellationToken);
+                var handleResult = lobbyMessageHandler.HandleTextMessageResult(message, lobbyConnectionContext);
+                var directResponse = SerializeDirectResponse(handleResult.DirectResponse);
+                await SendTextAsync(connection, directResponse, cancellationToken);
+                await BroadcastIfNeededAsync(handleResult, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -124,17 +126,61 @@ public sealed class WebSocketConnectionHandler
     }
 
     private static async Task SendTextAsync(
-        WebSocket webSocket,
+        WebSocketConnection connection,
         string message,
         CancellationToken cancellationToken)
     {
         var bytes = Encoding.UTF8.GetBytes(message);
 
-        await webSocket.SendAsync(
-            new ArraySegment<byte>(bytes),
-            WebSocketMessageType.Text,
-            endOfMessage: true,
-            cancellationToken);
+        await connection.SendGate.WaitAsync(cancellationToken);
+        try
+        {
+            await connection.WebSocket.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                endOfMessage: true,
+                cancellationToken);
+        }
+        finally
+        {
+            connection.SendGate.Release();
+        }
+    }
+
+    private static string SerializeDirectResponse(LobbyServerEnvelope response)
+    {
+        return System.Text.Json.JsonSerializer.Serialize(
+            response,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+
+    private async Task BroadcastIfNeededAsync(
+        LobbyMessageHandleResult result,
+        CancellationToken cancellationToken)
+    {
+        if (result.Broadcast is null || result.BroadcastConnectionIds.Count == 0)
+        {
+            return;
+        }
+
+        var message = lobbyMessageHandler.SerializeBroadcastMessage(result.Broadcast);
+        foreach (var connectionId in result.BroadcastConnectionIds)
+        {
+            var connection = connectionManager.Get(connectionId);
+            if (connection is null || connection.WebSocket.State != WebSocketState.Open)
+            {
+                continue;
+            }
+
+            try
+            {
+                await SendTextAsync(connection, message, cancellationToken);
+            }
+            catch (Exception exception) when (
+                exception is WebSocketException or ObjectDisposedException or InvalidOperationException)
+            {
+            }
+        }
     }
 
     private static async Task CloseIfPossible(WebSocket webSocket)

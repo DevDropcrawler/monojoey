@@ -73,7 +73,7 @@ public class SessionManagerTests
     }
 
     [Fact]
-    public void JoinSession_DuplicatePlayerJoinDoesNotAddDuplicate()
+    public void JoinSession_DuplicatePlayerJoinRefreshesConnectionWithoutAddingDuplicate()
     {
         var sessionManager = new SessionManager();
         var session = sessionManager.CreateSession();
@@ -88,7 +88,9 @@ public class SessionManagerTests
         var updatedSession = sessionManager.JoinSession(session.SessionId, duplicatePlayer);
 
         Assert.Single(updatedSession.Players);
-        Assert.Equal(player, updatedSession.Players[0]);
+        Assert.Equal(player.PlayerId, updatedSession.Players[0].PlayerId);
+        Assert.Equal("connection_rejoin", updatedSession.Players[0].ConnectionId);
+        Assert.False(updatedSession.Players[0].IsReady);
     }
 
     [Fact]

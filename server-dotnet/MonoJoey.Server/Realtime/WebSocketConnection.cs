@@ -5,4 +5,7 @@ using System.Net.WebSockets;
 public sealed record WebSocketConnection(
     string ConnectionId,
     WebSocket WebSocket,
-    DateTimeOffset ConnectedAtUtc);
+    DateTimeOffset ConnectedAtUtc)
+{
+    public SemaphoreSlim SendGate { get; } = new(1, 1);
+}

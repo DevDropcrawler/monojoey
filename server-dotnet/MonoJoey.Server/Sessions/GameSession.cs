@@ -6,4 +6,5 @@ public sealed record GameSession(
     string SessionId,
     IReadOnlyList<PlayerConnection> Players,
     GameState GameState,
-    GameSessionStatus Status);
+    GameSessionStatus Status,
+    long LastEventSequence);

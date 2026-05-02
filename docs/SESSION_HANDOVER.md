@@ -5,26 +5,28 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.13 Full Game Snapshot / State Sync
-- Completion status: Chunk 5.13 complete; `/ws` now supports sender-only `get_snapshot` / `snapshot_result` for deterministic full gameplay state projection from persisted `GameState`.
+- Chunk: 5.14 Broadcast/Event Foundation
+- Completion status: Chunk 5.14 complete; successful state-changing `/ws` gameplay actions now keep the direct sender response and emit one sequenced broadcast event to connected in-game players in the same session.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `phase-5-6: add resolve tile websocket action`
 - Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
 - Last commit after this chunk: `phase-5-7: add execute tile websocket action`
-- Date/time: 2026-05-02 09:30 +12:00
+- Date/time: 2026-05-02 10:00 +12:00
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.13 - Full Game Snapshot / State Sync.
+Phase 5, Chunk 5.14 - Broadcast/Event Foundation.
 
 Completed:
 
-- Added client request type `get_snapshot` and server response type `snapshot_result`.
-- Added explicit snapshot DTO records instead of serializing domain records directly.
-- Built snapshots only from `session.GameState` while holding the realtime handler `sessionLock`; no managers are called and `GameState` is not mutated.
-- Included `snapshotVersion`, session/match/phase/timestamps, turn flags, players, board tiles with owner IDs, nullable active auction, card deck IDs, and loan shark config.
-- Enforced deterministic snapshot ordering: players preserve persisted order; owned property IDs and held card IDs sort ascending; card decks sort by deck ID; board tiles sort by index then tile ID.
-- Added handler and WebSocket transport coverage for validation, no-mutation behavior, active-auction nulls, post-action state reflection, and sender-only one-response behavior.
+- Added broadcast event constants and a broadcast envelope with `type`, `sequence`, `sessionId`, `matchId`, `createdAtUtc`, and `payload`.
+- Added a handler result wrapper carrying one direct response plus zero or one broadcast event and broadcast target connection IDs.
+- Added `GameSession.LastEventSequence` and `SessionManager.UpdateGameStateAndAllocateEventSequence(...)`; sequence allocation happens only for successful broadcasted gameplay state changes after the new `GameState` is persisted.
+- Broadcasted successful `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan`.
+- Preserved sender direct response behavior and ordering: sender receives the direct response first, then the broadcast event.
+- Targeted broadcasts only to `PlayerConnection.ConnectionId` values for players present in the same in-game session `GameState.Players`, including the sender.
+- Made broadcast sends best-effort: missing/closed/failed target sockets do not roll back state, affect the direct response, or block other broadcast sends.
+- Added handler and transport coverage for envelope fields, contiguous sequence behavior, no sequence consumption on rejection/snapshot, direct-before-broadcast ordering, same-session targeting, unrelated-session exclusion, and failed broadcast targets.
 
 Not included by explicit user scope:
 
@@ -34,7 +36,8 @@ Not included by explicit user scope:
 - Unsupported tile effects beyond unowned property auction start, owned property rent, and no-action completion.
 - Automatic auction expiry or retry handling.
 - Scaling.
-- Broadcasts.
+- Event replay storage and reconnect catch-up.
+- Lobby broadcasts.
 - Reconnect identity.
 - Authentication.
 - Unity client.
@@ -43,6 +46,11 @@ Not included by explicit user scope:
 
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/WebSocketConnectionHandler.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameStateEventPersistenceResult.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/MULTIPLAYER_PROTOCOL.md`
@@ -62,6 +70,7 @@ Not included by explicit user scope:
 
 - `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/GameSessionStatus.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameStateEventPersistenceResult.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/PlayerConnection.cs`
 - `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
 
@@ -124,7 +133,7 @@ Not included by explicit user scope:
 
 - `dotnet test .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
-  - Output summary: 367 tests passed.
+  - Output summary: 372 tests passed.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 - `dotnet build .\server-dotnet\MonoJoey.sln -m:1`
   - Result: succeeded.
@@ -148,13 +157,14 @@ Not included by explicit user scope:
 - WebSocket connection IDs are generated as GUID `N` strings and are transport-local only.
 - WebSocket connections are stored in memory only; there is no persistence, distributed socket registry, heartbeat, authentication, or reconnect binding.
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
+- Successful state-changing gameplay requests then emit one best-effort broadcast event to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
 - On WebSocket disconnect, the bound player is removed from the known session only while the session is still in lobby status; after game start, cleanup clears only the socket binding.
-- Lobby responses are sender-only; no other connected clients receive state updates in this chunk.
+- Lobby responses are still direct request/response only; no lobby broadcasts were added in this chunk.
 - `/health` returns a minimal plain-text `healthy` response.
 - `PlayerConnection.ConnectionId` is now populated from the WebSocket transport connection ID for lobby joins, but there is still no reconnect protocol or authenticated identity.
 - `PlayerConnection.IsReady` is lobby metadata only; `start_game` requires every lobby player to be ready.
@@ -164,15 +174,15 @@ Not included by explicit user scope:
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
 - `roll_dice` rolls dice and moves the current player only.
 - `roll_result` contains the rolling `playerId`, two dice values, landing tile ID as `newPosition`, `passedStart`, and `hasRolledThisTurn`.
-- `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, broadcast state, or change `GamePhase`.
+- `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, or change `GamePhase`; successful rolls emit `dice_rolled`.
 - A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
 - `resolve_tile` passively classifies the current player's current tile only after `HasRolledThisTurn` is true.
 - `resolve_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, deterministic `requiresAction`, and string `actionKind`.
-- `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, broadcast, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats.
+- `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats. Successful resolves emit `tile_resolved`.
 - A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `execute_tile` requires a successful roll and resolve in the same turn before execution.
 - `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, and nullable `auction`, `rent`, and `card` metadata.
-- `execute_tile` starts mandatory auctions for unowned auctionable property placeholders and stores the resulting `AuctionState` in `GameState.ActiveAuctionState`; it does not place bids, finalize auctions, transfer auction ownership, start timers, broadcast, or change `GamePhase`.
+- `execute_tile` starts mandatory auctions for unowned auctionable property placeholders and stores the resulting `AuctionState` in `GameState.ActiveAuctionState`; it does not place bids, finalize auctions, transfer auction ownership, start timers, or change `GamePhase`. Successful executions emit `tile_executed`.
 - `execute_tile` pays base rent for property placeholders owned by another player through `PropertyManager.PayRentForCurrentTile`; insufficient rent uses the existing hard-elimination bankruptcy behavior.
 - `execute_tile` reports `rent_not_charged` for self-owned properties and leaves balances unchanged.
 - `execute_tile` treats start/free/no-action tiles as no-op execution and only marks `GameState.HasExecutedTileThisTurn = true`.
@@ -187,16 +197,16 @@ Not included by explicit user scope:
 - Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
 - If `execute_tile` eliminated the current player, `end_turn` returns `player_eliminated` and does not advance.
 - Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
-- `end_turn` does not broadcast, emit snapshots, finalize auctions, add reconnect behavior, add persistence, add client behavior, or special-case eliminated players into a forced advance.
+- `end_turn` does not emit snapshots, finalize auctions, add reconnect behavior, add persistence, add client behavior, or special-case eliminated players into a forced advance. Successful end-turn actions emit `turn_ended`.
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
 - `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
 - Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, turn flags, or phase values are changed.
-- `bid_result` is sender-only and contains `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId` from the persisted updated active auction state.
+- `bid_result` is the direct sender response and contains `bidderPlayerId`, `amount`, `currentHighestBid`, and `highestBidderId` from the persisted updated active auction state. Accepted bids emit `bid_accepted`.
 - Rejected `place_bid` calls return `error` and do not update `GameState`.
 - Bid affordability is still not checked in the WebSocket layer; this preserves existing `AuctionManager.PlaceBid` behavior and leaves loan/affordability policy to a later chunk.
 - `finalize_auction` requires a bound in-game session/player connection, the current turn player, a non-eliminated caller, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`; locked current players may finalize active auctions.
 - Successful `finalize_auction` calls clear `GameState.ActiveAuctionState` and preserve `GamePhase`; turn advancement remains an explicit later `end_turn` request.
-- `auction_result` is sender-only and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, and `tileId`.
+- `auction_result` is the direct sender response and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, and `tileId`. Successful finalization emits `auction_finalized`, including no-sale outcomes.
 - `won` responses reflect the persisted owner after payment and property transfer; `no_sale` responses use `winnerPlayerId = null` and `amount = 0`; `failed_payment` responses identify the failed winner and attempted winning amount while leaving the property unowned.
 - Rejected `finalize_auction` calls return `error` and do not update `GameState`.
 - `take_loan` requires a positive integer `amount`, a strict snake_case `reason`, a bound in-game session/player connection, a non-eliminated engine player, and enabled `GameState.LoanSharkConfig`.
@@ -207,7 +217,7 @@ Not included by explicit user scope:
 - During active auctions, non-auction borrow reasons return `invalid_session_state`.
 - Outside active auctions, `auction_bid` returns `auction_not_active`; supported non-auction borrow reasons require the current turn player and reject a locked current player through `player_locked`.
 - Accepted `take_loan` calls persist the full `GameState` returned by `LoanManager.TakeLoan`; the handler does not patch money or loan fields.
-- `loan_result` is sender-only and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player.
+- `loan_result` is the direct sender response and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player. Accepted loans emit `loan_taken`.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
 - `get_snapshot` requires a bound in-game session/player connection and returns `invalid_payload`, `invalid_session`, `player_switch_rejected`, `invalid_session_state`, or `player_not_found` before producing a snapshot.
 - `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` status, phase, start/end timestamps, turn flags directly from `GameState`, players, board, nullable active auction, card decks, and loan shark config.
@@ -216,7 +226,7 @@ Not included by explicit user scope:
 - Snapshot ordering is deterministic: engine players preserve `GameState.Players` order; owned property IDs and held card IDs sort ascending; card decks sort by deck ID; board tiles sort by index then tile ID; auction bids and deck piles preserve persisted order.
 - Snapshot `activeAuction` is `null` when `GameState.ActiveAuctionState` is null.
 - `SessionManager` is an in-memory manager only; it has no persistence, distributed storage, cleanup, scaling, networking, or async behavior.
-- Duplicate joins are idempotent by `PlayerId`; they do not replace the existing connection ID or ready state yet.
+- Duplicate lobby joins are idempotent by `PlayerId` for membership count; they refresh the stored connection ID while preserving the existing ready state.
 - Leaving with a player not present in the session is a safe no-op.
 - Leaving after game start can remove lobby connection metadata, but it does not remove any player from `GameState.Players`.
 - `AuctionConfig.InitialPreBidSeconds` defaults to `9`; still no real countdown loop exists.
@@ -255,8 +265,8 @@ Not included by explicit user scope:
 - Game start is deterministic: engine players are created in lobby order and `TurnManager.StartFirstTurn` selects the first eligible lobby-order player.
 - A session that has transitioned to `InGame` rejects further `JoinSession` and `SetReady` calls.
 - Disconnect cleanup after game start does not mutate match membership or remove engine players.
-- Lobby messages are direct request/response only; broadcasts are intentionally deferred.
-- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, and `get_snapshot` messages are also direct request/response only; broadcasts remain intentionally deferred.
+- Lobby messages are direct request/response only; lobby broadcasts are intentionally deferred.
+- Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan` now keep direct request/response behavior and emit one sequenced broadcast after successful state changes. `get_snapshot` remains direct-only.
 - Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
 - Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
 - Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
@@ -353,7 +363,8 @@ Do not implement before its assigned chunk:
 
 - Real wall-clock timers.
 - Async countdown loop.
-- Broadcasts.
+- Event replay storage and reconnect catch-up.
+- Lobby broadcasts.
 - Non-lobby WebSocket message handling.
 - WebSocket authentication or reconnect tokens.
 - Broader turn execution over network beyond the explicit roll, resolve, execute, and end-turn slices already implemented.
@@ -378,4 +389,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.13 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.14 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

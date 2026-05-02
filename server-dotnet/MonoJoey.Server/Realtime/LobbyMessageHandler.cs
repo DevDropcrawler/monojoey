@@ -31,14 +31,31 @@ public sealed class LobbyMessageHandler
         ArgumentNullException.ThrowIfNull(messageJson);
         ArgumentNullException.ThrowIfNull(connectionContext);
 
-        var envelope = HandleParsedMessage(messageJson, connectionContext);
+        var result = HandleTextMessageResult(messageJson, connectionContext);
 
-        return JsonSerializer.Serialize(envelope, JsonOptions);
+        return JsonSerializer.Serialize(result.DirectResponse, JsonOptions);
+    }
+
+    public LobbyMessageHandleResult HandleTextMessageResult(
+        string messageJson,
+        LobbyConnectionContext connectionContext)
+    {
+        ArgumentNullException.ThrowIfNull(messageJson);
+        ArgumentNullException.ThrowIfNull(connectionContext);
+
+        return HandleParsedMessage(messageJson, connectionContext);
     }
 
     public string CreateErrorMessage(string code, string message)
     {
         return JsonSerializer.Serialize(CreateError(code, message), JsonOptions);
+    }
+
+    public string SerializeBroadcastMessage(LobbyBroadcastEnvelope broadcast)
+    {
+        ArgumentNullException.ThrowIfNull(broadcast);
+
+        return JsonSerializer.Serialize(broadcast, JsonOptions);
     }
 
     public void CleanupConnection(LobbyConnectionContext connectionContext)
@@ -75,7 +92,7 @@ public sealed class LobbyMessageHandler
         }
     }
 
-    private LobbyServerEnvelope HandleParsedMessage(
+    private LobbyMessageHandleResult HandleParsedMessage(
         string messageJson,
         LobbyConnectionContext connectionContext)
     {
@@ -121,6 +138,13 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.LoanResult or
                 LobbyMessageTypes.SnapshotResult or
+                LobbyMessageTypes.DiceRolled or
+                LobbyMessageTypes.TileResolved or
+                LobbyMessageTypes.TileExecuted or
+                LobbyMessageTypes.TurnEnded or
+                LobbyMessageTypes.BidAccepted or
+                LobbyMessageTypes.AuctionFinalized or
+                LobbyMessageTypes.LoanTaken or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
                 "This message type is not supported from clients."),
@@ -140,7 +164,7 @@ public sealed class LobbyMessageHandler
         }
     }
 
-    private LobbyServerEnvelope HandleRollDice(
+    private LobbyMessageHandleResult HandleRollDice(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -224,13 +248,21 @@ public sealed class LobbyMessageHandler
                 HasExecutedTileThisTurn = false,
             };
 
-            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
 
-            return CreateRollResult(dice, movementResult, updatedGameState.HasRolledThisTurn);
+            return CreateBroadcastResult(
+                CreateRollResult(
+                    dice,
+                    movementResult.PlayerId,
+                    movementResult.PassedStart,
+                    persistence.Session.GameState),
+                LobbyMessageTypes.DiceRolled,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
-    private LobbyServerEnvelope HandleResolveTile(
+    private LobbyMessageHandleResult HandleResolveTile(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -315,13 +347,17 @@ public sealed class LobbyMessageHandler
                 HasResolvedTileThisTurn = true,
             };
 
-            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
 
-            return CreateResolveTileResult(resolution);
+            return CreateBroadcastResult(
+                CreateResolveTileResult(resolution),
+                LobbyMessageTypes.TileResolved,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
-    private LobbyServerEnvelope HandleExecuteTile(
+    private LobbyMessageHandleResult HandleExecuteTile(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -428,7 +464,7 @@ public sealed class LobbyMessageHandler
         }
     }
 
-    private LobbyServerEnvelope HandleEndTurn(
+    private LobbyMessageHandleResult HandleEndTurn(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -529,13 +565,17 @@ public sealed class LobbyMessageHandler
             var previousPlayerId = player.PlayerId;
             var advancedGameState = TurnManager.AdvanceToNextTurn(session.GameState);
 
-            _ = sessionManager.UpdateGameState(sessionId, advancedGameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, advancedGameState);
 
-            return CreateEndTurnResult(previousPlayerId, advancedGameState);
+            return CreateBroadcastResult(
+                CreateEndTurnResult(previousPlayerId, persistence.Session.GameState),
+                LobbyMessageTypes.TurnEnded,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
-    private LobbyServerEnvelope HandlePlaceBid(
+    private LobbyMessageHandleResult HandlePlaceBid(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -610,15 +650,19 @@ public sealed class LobbyMessageHandler
             {
                 ActiveAuctionState = bidResult.AuctionState,
             };
-            var updatedSession = sessionManager.UpdateGameState(sessionId, updatedGameState);
-            var persistedAuctionState = updatedSession.GameState.ActiveAuctionState
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+            var persistedAuctionState = persistence.Session.GameState.ActiveAuctionState
                 ?? throw new InvalidOperationException("Accepted auction bids must persist active auction state.");
 
-            return CreateBidResult(player.PlayerId, amount, persistedAuctionState);
+            return CreateBroadcastResult(
+                CreateBidResult(player.PlayerId, amount, persistedAuctionState),
+                LobbyMessageTypes.BidAccepted,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
-    private LobbyServerEnvelope HandleFinalizeAuction(
+    private LobbyMessageHandleResult HandleFinalizeAuction(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -706,13 +750,17 @@ public sealed class LobbyMessageHandler
             {
                 ActiveAuctionState = null,
             };
-            var updatedSession = sessionManager.UpdateGameState(sessionId, updatedGameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
 
-            return CreateAuctionResult(finalizationResult, updatedSession.GameState);
+            return CreateBroadcastResult(
+                CreateAuctionResult(finalizationResult, persistence.Session.GameState),
+                LobbyMessageTypes.AuctionFinalized,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
-    private LobbyServerEnvelope HandleTakeLoan(
+    private LobbyMessageHandleResult HandleTakeLoan(
         JsonElement root,
         LobbyConnectionContext connectionContext)
     {
@@ -847,12 +895,16 @@ public sealed class LobbyMessageHandler
                 return CreateLoanRejectedError(loanResult);
             }
 
-            var updatedSession = sessionManager.UpdateGameState(sessionId, loanResult.GameState);
-            var persistedPlayer = updatedSession.GameState.Players.FirstOrDefault(
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, loanResult.GameState);
+            var persistedPlayer = persistence.Session.GameState.Players.FirstOrDefault(
                 gamePlayer => gamePlayer.PlayerId == player.PlayerId)
                 ?? throw new InvalidOperationException("Accepted loans must persist the borrowing player.");
 
-            return CreateLoanResult(persistedPlayer, amount, purpose);
+            return CreateBroadcastResult(
+                CreateLoanResult(persistedPlayer, amount, purpose),
+                LobbyMessageTypes.LoanTaken,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
@@ -1120,7 +1172,7 @@ public sealed class LobbyMessageHandler
         }
     }
 
-    private LobbyServerEnvelope ExecuteNoActionTile(
+    private LobbyMessageHandleResult ExecuteNoActionTile(
         string sessionId,
         GameState gameState,
         TileResolutionResult resolution)
@@ -1130,18 +1182,22 @@ public sealed class LobbyMessageHandler
             HasExecutedTileThisTurn = true,
         };
 
-        _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+        var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
 
-        return CreateExecuteTileResult(
-            resolution,
-            "no_action",
-            updatedGameState,
-            auction: null,
-            rent: null,
-            card: null);
+        return CreateBroadcastResult(
+            CreateExecuteTileResult(
+                resolution,
+                "no_action",
+                persistence.Session.GameState,
+                auction: null,
+                rent: null,
+                card: null),
+            LobbyMessageTypes.TileExecuted,
+            persistence.Session,
+            persistence.Sequence);
     }
 
-    private LobbyServerEnvelope ExecutePropertyTile(
+    private LobbyMessageHandleResult ExecutePropertyTile(
         string sessionId,
         GameState gameState,
         TileResolutionResult resolution)
@@ -1159,15 +1215,21 @@ public sealed class LobbyMessageHandler
                 ActiveAuctionState = auctionStart.AuctionState,
             };
 
-            _ = sessionManager.UpdateGameState(sessionId, updatedGameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+            var persistedAuctionState = persistence.Session.GameState.ActiveAuctionState
+                ?? throw new InvalidOperationException("Started auctions must persist active auction state.");
 
-            return CreateExecuteTileResult(
-                resolution,
-                "auction_started",
-                updatedGameState,
-                CreateAuctionPayload(auctionStart.AuctionState!),
-                rent: null,
-                card: null);
+            return CreateBroadcastResult(
+                CreateExecuteTileResult(
+                    resolution,
+                    "auction_started",
+                    persistence.Session.GameState,
+                    CreateAuctionPayload(persistedAuctionState),
+                    rent: null,
+                    card: null),
+                LobbyMessageTypes.TileExecuted,
+                persistence.Session,
+                persistence.Sequence);
         }
 
         if (auctionStart.ResultKind != AuctionStartResultKind.PropertyAlreadyOwned)
@@ -1183,18 +1245,22 @@ public sealed class LobbyMessageHandler
             HasExecutedTileThisTurn = true,
         };
 
-        _ = sessionManager.UpdateGameState(sessionId, rentGameState);
+        var rentPersistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, rentGameState);
 
-        return CreateExecuteTileResult(
-            resolution,
-            GetRentExecutionKind(rent),
-            rentGameState,
-            auction: null,
-            rent: CreateRentPayload(rent, rentGameState),
-            card: null);
+        return CreateBroadcastResult(
+            CreateExecuteTileResult(
+                resolution,
+                GetRentExecutionKind(rent),
+                rentPersistence.Session.GameState,
+                auction: null,
+                rent: CreateRentPayload(rent, rentPersistence.Session.GameState),
+                card: null),
+            LobbyMessageTypes.TileExecuted,
+            rentPersistence.Session,
+            rentPersistence.Sequence);
     }
 
-    private LobbyServerEnvelope ExecuteCardTile(
+    private LobbyMessageHandleResult ExecuteCardTile(
         string sessionId,
         GameState gameState,
         TileResolutionResult tileResolution,
@@ -1239,7 +1305,6 @@ public sealed class LobbyMessageHandler
         }
 
         var executedGameState = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
-        var executedPlayer = executedGameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
         var finalDeckState = ShouldDiscardCard(cardResolution.ActionKind)
             ? CardDeckManager.Discard(drawResult.DeckState, card)
             : drawResult.DeckState;
@@ -1253,17 +1318,22 @@ public sealed class LobbyMessageHandler
             HasExecutedTileThisTurn = true,
         };
 
-        _ = sessionManager.UpdateGameState(sessionId, persistedGameState);
+        var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, persistedGameState);
+        var persistedPlayer = persistence.Session.GameState.Players.First(
+            updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
+        var executionKind = GetCardExecutionKind(cardResolution.ActionKind, persistedPlayer);
 
-        var executionKind = GetCardExecutionKind(cardResolution.ActionKind, executedPlayer);
-
-        return CreateExecuteTileResult(
-            tileResolution,
-            executionKind,
-            persistedGameState,
-            auction: null,
-            rent: null,
-            card: CreateCardPayload(deckId, card, cardResolution, executionKind, executedPlayer));
+        return CreateBroadcastResult(
+            CreateExecuteTileResult(
+                tileResolution,
+                executionKind,
+                persistence.Session.GameState,
+                auction: null,
+                rent: null,
+                card: CreateCardPayload(deckId, card, cardResolution, executionKind, persistedPlayer)),
+            LobbyMessageTypes.TileExecuted,
+            persistence.Session,
+            persistence.Sequence);
     }
 
     private void RemovePreviousSessionBindingIfNeeded(
@@ -1589,19 +1659,58 @@ public sealed class LobbyMessageHandler
             deckState.DiscardPile.Select(card => card.CardId.Value).ToArray());
     }
 
+    private static LobbyMessageHandleResult CreateBroadcastResult(
+        LobbyServerEnvelope directResponse,
+        string eventType,
+        GameSession session,
+        long sequence)
+    {
+        return new LobbyMessageHandleResult(
+            directResponse,
+            new LobbyBroadcastEnvelope(
+                eventType,
+                sequence,
+                session.SessionId,
+                session.GameState.MatchId.Value,
+                DateTimeOffset.UtcNow,
+                directResponse.Payload),
+            CreateBroadcastTargetConnectionIds(session));
+    }
+
+    private static IReadOnlyList<string> CreateBroadcastTargetConnectionIds(GameSession session)
+    {
+        if (session.Status != GameSessionStatus.InGame)
+        {
+            return Array.Empty<string>();
+        }
+
+        var gamePlayerIds = session.GameState.Players
+            .Select(player => player.PlayerId.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return session.Players
+            .Where(player => gamePlayerIds.Contains(player.PlayerId.Value))
+            .Select(player => player.ConnectionId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static LobbyServerEnvelope CreateRollResult(
         DiceRoll dice,
-        MovementResult movementResult,
-        bool hasRolledThisTurn)
+        PlayerId playerId,
+        bool passedStart,
+        GameState gameState)
     {
+        var persistedPlayer = gameState.Players.First(player => player.PlayerId == playerId);
+
         return new LobbyServerEnvelope(
             LobbyMessageTypes.RollResult,
             new RollResultPayload(
-                movementResult.PlayerId.Value,
+                persistedPlayer.PlayerId.Value,
                 new[] { dice.FirstDie, dice.SecondDie },
-                movementResult.LandingTileId.Value,
-                movementResult.PassedStart,
-                hasRolledThisTurn));
+                persistedPlayer.CurrentTileId.Value,
+                passedStart,
+                gameState.HasRolledThisTurn));
     }
 
     private static LobbyServerEnvelope CreateResolveTileResult(TileResolutionResult resolution)

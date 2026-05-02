@@ -25,6 +25,13 @@ public static class LobbyMessageTypes
     public const string AuctionResult = "auction_result";
     public const string LoanResult = "loan_result";
     public const string SnapshotResult = "snapshot_result";
+    public const string DiceRolled = "dice_rolled";
+    public const string TileResolved = "tile_resolved";
+    public const string TileExecuted = "tile_executed";
+    public const string TurnEnded = "turn_ended";
+    public const string BidAccepted = "bid_accepted";
+    public const string AuctionFinalized = "auction_finalized";
+    public const string LoanTaken = "loan_taken";
     public const string Error = "error";
 }
 
@@ -61,6 +68,28 @@ public static class LobbyErrorCodes
 public sealed record LobbyServerEnvelope(
     string Type,
     object Payload);
+
+public sealed record LobbyBroadcastEnvelope(
+    string Type,
+    long Sequence,
+    string SessionId,
+    string MatchId,
+    DateTimeOffset CreatedAtUtc,
+    object Payload);
+
+public sealed record LobbyMessageHandleResult(
+    LobbyServerEnvelope DirectResponse,
+    LobbyBroadcastEnvelope? Broadcast,
+    IReadOnlyList<string> BroadcastConnectionIds)
+{
+    public static implicit operator LobbyMessageHandleResult(LobbyServerEnvelope directResponse)
+    {
+        return new LobbyMessageHandleResult(
+            directResponse,
+            Broadcast: null,
+            BroadcastConnectionIds: Array.Empty<string>());
+    }
+}
 
 public sealed record LobbyErrorPayload(
     string Code,

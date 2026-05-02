@@ -226,6 +226,58 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_ReturnsDirectResponseAndBroadcastEnvelopeFromPersistedState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 5));
+        var started = StartReadyGame(sessionManager, handler);
+
+        var result = handler.HandleTextMessageResult(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        Assert.Equal("roll_result", result.DirectResponse.Type);
+        Assert.NotNull(result.Broadcast);
+        Assert.Equal("dice_rolled", result.Broadcast.Type);
+        Assert.Equal(1, result.Broadcast.Sequence);
+        Assert.Equal(started.Session.SessionId, result.Broadcast.SessionId);
+        Assert.Equal(started.Session.SessionId, result.Broadcast.MatchId);
+        Assert.NotEqual(default, result.Broadcast.CreatedAtUtc);
+        Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
+        var payload = Assert.IsType<RollResultPayload>(result.Broadcast.Payload);
+        Assert.Equal("table_01", payload.NewPosition);
+        Assert.True(payload.HasRolledThisTurn);
+        Assert.Equal(1, sessionManager.GetSession(started.Session.SessionId)?.LastEventSequence);
+    }
+
+    [Fact]
+    public void SuccessfulBroadcastsIncrementSequenceAndRejectedRequestsDoNotConsumeSequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 5));
+        var started = StartReadyGame(sessionManager, handler);
+
+        var rollResult = handler.HandleTextMessageResult(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var rejectedRoll = handler.HandleTextMessageResult(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var snapshotResult = handler.HandleTextMessageResult(
+            GetSnapshotMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var resolveResult = handler.HandleTextMessageResult(
+            ResolveTileMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        Assert.Equal(1, rollResult.Broadcast?.Sequence);
+        Assert.Null(rejectedRoll.Broadcast);
+        Assert.Null(snapshotResult.Broadcast);
+        Assert.Equal(2, resolveResult.Broadcast?.Sequence);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.LastEventSequence);
+    }
+
+    [Fact]
     public void RollDice_ReturnsPassedStartFromMovement()
     {
         var sessionManager = new SessionManager();
