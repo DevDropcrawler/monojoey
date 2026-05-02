@@ -7,10 +7,17 @@ public sealed record AuctionConfig(
     Money MinimumBidIncrement,
     Money StartingBid)
 {
-    public static AuctionConfig Default { get; } = new(
-        MandatoryAuctionsEnabled: true,
-        InitialPreBidSeconds: 9,
-        BidResetSeconds: 3,
-        MinimumBidIncrement: new Money(1),
-        StartingBid: Money.Zero);
+    public static AuctionConfig Default { get; } = FromRules(GameRulesPresets.MonoJoeyDefault.Auction);
+
+    public static AuctionConfig FromRules(AuctionRules rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+
+        return new AuctionConfig(
+            rules.MandatoryAuctionsEnabled,
+            rules.InitialTimerSeconds,
+            rules.BidResetTimerSeconds,
+            new Money(rules.MinimumBidIncrement),
+            new Money(rules.StartingBid));
+    }
 }

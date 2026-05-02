@@ -1663,10 +1663,12 @@ public sealed class LobbyMessageHandler
         TileResolutionResult resolution)
     {
         var auctionStartedAtUtc = DateTimeOffset.UtcNow;
+        var config = AuctionConfig.FromRules(gameState.Rules.Auction);
         var auctionStart = AuctionManager.StartMandatoryAuction(
             gameState,
             resolution.PlayerId,
             resolution.TileId,
+            config,
             startedAtUtc: auctionStartedAtUtc);
 
         if (auctionStart.AuctionStarted)

@@ -949,6 +949,39 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ExecuteTile_UnownedPropertyStartsAuctionFromStartedGameRules()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""auction"":{""initialTimerSeconds"":12,""bidResetTimerSeconds"":7,""minimumBidIncrement"":4,""startingBid"":5}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var auction = payload.GetProperty("auction");
+        var activeAuction = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
+
+        Assert.Equal("auction_started", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(5, auction.GetProperty("startingBid").GetInt32());
+        Assert.Equal(4, auction.GetProperty("minimumBidIncrement").GetInt32());
+        Assert.Equal(12, auction.GetProperty("initialPreBidSeconds").GetInt32());
+        Assert.Equal(7, auction.GetProperty("bidResetSeconds").GetInt32());
+        Assert.Equal(12, auction.GetProperty("countdownDurationSeconds").GetInt32());
+        Assert.NotNull(activeAuction);
+        Assert.Equal(new Money(5), activeAuction.StartingBid);
+        Assert.Equal(new Money(4), activeAuction.MinimumBidIncrement);
+        Assert.Equal(12, activeAuction.InitialPreBidSeconds);
+        Assert.Equal(7, activeAuction.BidResetSeconds);
+        Assert.Equal(12, activeAuction.CountdownDurationSeconds);
+    }
+
+    [Fact]
     public void ExecuteTile_UnownedPropertySchedulesAuctionTimer()
     {
         using var timerService = new AuctionTimerService();
@@ -1727,7 +1760,8 @@ public class LobbyMessageHandlerTests
         var auction = AuctionManager.StartMandatoryAuction(
             readySession.GameState,
             new PlayerId("player_1"),
-            new TileId("property_01")).AuctionState;
+            new TileId("property_01"),
+            AuctionConfig.FromRules(readySession.GameState.Rules.Auction)).AuctionState;
         _ = UpdateGameState(
             sessionManager,
             readySession.SessionId,
@@ -2074,6 +2108,34 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void PlaceBid_CustomRulesAuctionUsesRulesDerivedBidResetAndMinimumNextBid()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""auction"":{""initialTimerSeconds"":12,""bidResetTimerSeconds"":7,""minimumBidIncrement"":4,""startingBid"":5}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 20));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal(24, payload.GetProperty("minimumNextBid").GetInt32());
+        Assert.Equal(7, payload.GetProperty("countdownDurationSeconds").GetInt32());
+        Assert.Equal(7, afterBid.ActiveAuctionState?.CountdownDurationSeconds);
+        Assert.Equal(7, afterBid.ActiveAuctionState?.BidResetSeconds);
+        Assert.Equal(new Money(4), afterBid.ActiveAuctionState?.MinimumBidIncrement);
+        Assert.Equal(new Money(20), afterBid.ActiveAuctionState?.HighestBid);
+        Assert.Equal(JsonValueKind.String, payload.GetProperty("timerEndsAtUtc").ValueKind);
+    }
+
+    [Fact]
     public void PlaceBid_ValidBidReplacesAuctionTimer()
     {
         using var timerService = new AuctionTimerService();
@@ -2135,7 +2197,7 @@ public class LobbyMessageHandlerTests
         _ = StartActiveAuction(
             sessionManager,
             started.Session.SessionId,
-            AuctionConfig.Default with { MinimumBidIncrement = new Money(5) });
+            DefaultAuctionConfig() with { MinimumBidIncrement = new Money(5) });
         _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_1", 10), started.FirstContext);
         var beforeRejectedBid = sessionManager.GetSession(started.Session.SessionId)!.GameState.ActiveAuctionState;
 
@@ -4448,10 +4510,15 @@ public class LobbyMessageHandlerTests
                     gameState,
                     new PlayerId("player_1"),
                     new TileId("property_01"),
-                    config);
+                    config ?? AuctionConfig.FromRules(gameState.Rules.Auction));
 
                 return gameState with { ActiveAuctionState = auctionStart.AuctionState };
             });
+    }
+
+    private static AuctionConfig DefaultAuctionConfig()
+    {
+        return AuctionConfig.FromRules(GameRulesPresets.MonoJoeyDefault.Auction);
     }
 
     private static string JoinMessage(string sessionId, string playerId)

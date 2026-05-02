@@ -10,9 +10,9 @@ public class AuctionManagerTests
     private static readonly DateTimeOffset SecondBidTime = DateTimeOffset.Parse("2026-04-26T01:01:00+00:00");
 
     [Fact]
-    public void DefaultConfig_UsesMandatoryAuctionTimerPlaceholders()
+    public void FromRules_DefaultRulesUseMandatoryAuctionTimerPlaceholders()
     {
-        var config = AuctionConfig.Default;
+        var config = AuctionConfig.FromRules(GameRulesPresets.MonoJoeyDefault.Auction);
 
         Assert.True(config.MandatoryAuctionsEnabled);
         Assert.Equal(9, config.InitialPreBidSeconds);
@@ -33,6 +33,7 @@ public class AuctionManagerTests
             gameState,
             playerId,
             propertyTileId,
+            DefaultAuctionConfig(),
             startedAtUtc: startedAtUtc);
 
         Assert.True(result.AuctionStarted);
@@ -53,9 +54,41 @@ public class AuctionManagerTests
     }
 
     [Fact]
+    public void StartMandatoryAuction_CopiesRulesDerivedConfigValuesIntoAuctionState()
+    {
+        var playerId = new PlayerId("player_1");
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
+        var startedAtUtc = DateTimeOffset.Parse("2026-04-26T00:30:00+00:00");
+        var config = AuctionConfig.FromRules(GameRulesPresets.MonoJoeyDefault.Auction with
+        {
+            InitialTimerSeconds = 12,
+            BidResetTimerSeconds = 8,
+            MinimumBidIncrement = 4,
+            StartingBid = 7,
+        });
+
+        var result = AuctionManager.StartMandatoryAuction(
+            gameState,
+            playerId,
+            propertyTileId,
+            config,
+            startedAtUtc);
+
+        Assert.True(result.AuctionStarted);
+        Assert.NotNull(result.AuctionState);
+        Assert.Equal(new Money(7), result.AuctionState.StartingBid);
+        Assert.Equal(new Money(4), result.AuctionState.MinimumBidIncrement);
+        Assert.Equal(12, result.AuctionState.InitialPreBidSeconds);
+        Assert.Equal(8, result.AuctionState.BidResetSeconds);
+        Assert.Equal(12, result.AuctionState.CountdownDurationSeconds);
+        Assert.Equal(startedAtUtc.AddSeconds(12), result.AuctionState.TimerEndsAtUtc);
+    }
+
+    [Fact]
     public void StartMandatoryAuction_DoesNotStartWhenMandatoryAuctionsDisabled()
     {
-        var config = AuctionConfig.Default with { MandatoryAuctionsEnabled = false };
+        var config = DefaultAuctionConfig() with { MandatoryAuctionsEnabled = false };
         var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
 
         var result = AuctionManager.StartMandatoryAuction(
@@ -80,7 +113,8 @@ public class AuctionManagerTests
         var result = AuctionManager.StartMandatoryAuction(
             gameState,
             new PlayerId("player_1"),
-            new TileId("property_01"));
+            new TileId("property_01"),
+            DefaultAuctionConfig());
 
         Assert.False(result.AuctionStarted);
         Assert.Equal(AuctionStartResultKind.PropertyAlreadyOwned, result.ResultKind);
@@ -96,7 +130,8 @@ public class AuctionManagerTests
         var result = AuctionManager.StartMandatoryAuction(
             gameState,
             new PlayerId("player_1"),
-            new TileId("free_space_01"));
+            new TileId("free_space_01"),
+            DefaultAuctionConfig());
 
         Assert.False(result.AuctionStarted);
         Assert.Equal(AuctionStartResultKind.TileNotAuctionable, result.ResultKind);
@@ -113,7 +148,8 @@ public class AuctionManagerTests
             () => AuctionManager.StartMandatoryAuction(
                 gameState,
                 new PlayerId("missing_player"),
-                new TileId("property_01")));
+                new TileId("property_01"),
+                DefaultAuctionConfig()));
 
         Assert.Equal("Auction triggering player must exist in the game player list.", exception.Message);
     }
@@ -127,7 +163,8 @@ public class AuctionManagerTests
             () => AuctionManager.StartMandatoryAuction(
                 gameState,
                 new PlayerId("player_1"),
-                new TileId("missing_property")));
+                new TileId("missing_property"),
+                DefaultAuctionConfig()));
 
         Assert.Equal("Auction tile must exist on the board.", exception.Message);
     }
@@ -136,7 +173,7 @@ public class AuctionManagerTests
     public void PlaceBid_AcceptsFirstValidBid()
     {
         var bidderId = new PlayerId("player_2");
-        var config = AuctionConfig.Default with { StartingBid = new Money(100) };
+        var config = DefaultAuctionConfig() with { StartingBid = new Money(100) };
         var gameState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
             CreatePlayer("player_2", "start"));
@@ -160,7 +197,7 @@ public class AuctionManagerTests
     [Fact]
     public void PlaceBid_RejectsFirstBidBelowStartingBid()
     {
-        var config = AuctionConfig.Default with { StartingBid = new Money(100) };
+        var config = DefaultAuctionConfig() with { StartingBid = new Money(100) };
         var gameState = CreateGameState(CreatePlayer("player_1", "property_01"));
         var auctionState = StartAuction(gameState, config);
 
@@ -180,7 +217,7 @@ public class AuctionManagerTests
     [Fact]
     public void PlaceBid_RejectsLaterBidBelowMinimumIncrement()
     {
-        var config = AuctionConfig.Default with { MinimumBidIncrement = new Money(5) };
+        var config = DefaultAuctionConfig() with { MinimumBidIncrement = new Money(5) };
         var gameState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
             CreatePlayer("player_2", "start"));
@@ -602,10 +639,15 @@ public class AuctionManagerTests
             gameState,
             new PlayerId("player_1"),
             new TileId("property_01"),
-            config);
+            config ?? DefaultAuctionConfig());
 
         Assert.True(result.AuctionStarted);
         Assert.NotNull(result.AuctionState);
         return result.AuctionState;
+    }
+
+    private static AuctionConfig DefaultAuctionConfig()
+    {
+        return AuctionConfig.FromRules(GameRulesPresets.MonoJoeyDefault.Auction);
     }
 }
