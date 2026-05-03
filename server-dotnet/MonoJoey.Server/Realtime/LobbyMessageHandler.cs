@@ -2235,6 +2235,7 @@ public sealed class LobbyMessageHandler
                 .ToArray(),
             Board: CreateSnapshotBoard(gameState),
             PropertyStates: gameState.PropertyStates
+                .Where(propertyState => propertyState.Value.Data.DamagePercent > 0)
                 .OrderBy(propertyState => propertyState.Value.TileId.Value, StringComparer.Ordinal)
                 .Select(propertyState => CreateSnapshotPropertyState(propertyState.Value))
                 .ToArray(),
@@ -2362,7 +2363,8 @@ public sealed class LobbyMessageHandler
     {
         return new SnapshotPropertyStatePayload(
             propertyState.TileId.Value,
-            new SnapshotPropertyStateDataPayload());
+            new SnapshotPropertyStateDataPayload(
+                propertyState.Data.DamagePercent));
     }
 
     private static SnapshotAuctionPayload CreateSnapshotAuction(AuctionState auctionState)

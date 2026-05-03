@@ -398,7 +398,8 @@ public sealed record SnapshotPropertyStatePayload(
     string TileId,
     SnapshotPropertyStateDataPayload Data);
 
-public sealed record SnapshotPropertyStateDataPayload;
+public sealed record SnapshotPropertyStateDataPayload(
+    int DamagePercent);
 
 public sealed record SnapshotAuctionPayload(
     string PropertyTileId,

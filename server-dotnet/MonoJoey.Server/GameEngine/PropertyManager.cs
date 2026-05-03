@@ -70,7 +70,7 @@ public static class PropertyManager
             return NoRent(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
         }
 
-        var rent = CalculateRent(tile);
+        var rent = CalculateRent(tile, gameState);
         if (landingPlayer.Money.Amount < rent.Amount)
         {
             var eliminationResult = BankruptcyManager.EliminateForFailedPayment(gameState, landingPlayerId, rent);
@@ -108,9 +108,27 @@ public static class PropertyManager
         return new RentPaymentResult(gameState, landingPlayerId, tileId, ownerId, Money.Zero, Money.Zero);
     }
 
-    private static Money CalculateRent(Tile tile)
+    private static Money CalculateRent(Tile tile, GameState gameState)
     {
-        return tile.RentTable.Count > 0 ? tile.RentTable[0] : PlaceholderRent;
+        var baseRent = tile.RentTable.Count > 0 ? tile.RentTable[0] : PlaceholderRent;
+        var damagePercent = gameState.PropertyStates.TryGetValue(tile.TileId, out var propertyState)
+            ? propertyState.Data.DamagePercent
+            : 0;
+
+        if (damagePercent <= 0)
+        {
+            return baseRent;
+        }
+
+        if (damagePercent >= 100)
+        {
+            return Money.Zero;
+        }
+
+        var multiplier = (100 - damagePercent) / 100m;
+        var reduced = (int)Math.Floor(baseRent.Amount * multiplier);
+
+        return new Money(Math.Max(1, reduced));
     }
 
     private static Player AddOwnedProperty(Player player, TileId propertyTileId)

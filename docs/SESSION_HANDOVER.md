@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.24C Slimer Status Effect
-- Completion status: Chunk 5.24C complete; Slimer is now a deterministic player status effect that makes affected players move using only the first physical die, clears after a first die of 6, and remains visible through existing snapshot/reconnect status projection. Dice contracts and roll payload shapes were not changed.
+- Chunk: 5.24D Earthquake Property Damage System
+- Completion status: Chunk 5.24D complete; property damage now lives in `GameState.PropertyStates`, deterministic earthquake application can damage owned properties without RNG, rent is reduced by persisted damage using decimal floor math and the requested rent floor behavior, and snapshot/reconnect projection emits only damaged property states with `data.damagePercent`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `ed1b1d0`
 - Last commit before this chunk: `ed1b1d0`
@@ -19,21 +19,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.24C - Slimer Status Effect.
+Phase 5, Chunk 5.24D - Earthquake Property Damage System.
 
 Completed:
 
-- Added `PlayerStatusEffectKind.Slimer` and explicit `"slimer"` snapshot/reconnect projection.
-- Added `PlayerStatusEffectManager` with deterministic Slimer apply/remove helpers:
-  `DefinitionId = "slimer"`, `InstanceId = "slimer:{playerId}"`, `StackCount = 1`, and nullable `RemainingTurns`.
-- Kept Slimer application idempotent and non-stacking.
-- Kept Slimer removal scoped to Slimer entries only while preserving other status effects in order.
-- Updated `roll_dice` so slimed players still roll two physical dice through the existing `DiceService`, but movement uses `FirstDie` instead of `Total`.
-- Kept pass-start reward behavior unchanged after Slimer movement.
-- Removed Slimer only after movement/reward succeeds and only when `FirstDie == 6`.
-- Preserved existing `roll_result` / `dice_rolled` payload shape: `dice`, `total`, and `isDouble` still report the two physical dice.
-- Added game-engine status manager tests and realtime roll/snapshot/reconnect coverage for Slimer movement, removal, doubles, non-stacking status behavior, and the existing one-roll-per-turn guard.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 563 passed, 0 failed, 0 skipped. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Extended `PropertyStateData` with validated `DamagePercent` (`0..100`), where missing state and `0` mean undamaged.
+- Added `PropertyStateManager.ApplyEarthquake(GameState, IEnumerable<string>, int)` as a deterministic server-side damage hook with caller-supplied tile IDs, ordinal de-duplication/order, owned purchasable properties only, max(existing, incoming) merge, immutable `GameState.PropertyStates` replacement, and no repair behavior.
+- Updated `PropertyManager.PayRentForCurrentTile` so rent reads persisted property damage after ownership checks.
+- Rent now uses decimal floor math: `(100 - damagePercent) / 100m`, `Math.Floor`, full destruction rent `0`, and non-destroyed damaged rent floor `1`.
+- Preserved base rent tables and ownership/auction behavior.
+- Updated snapshot/reconnect projection to emit only damaged property states and include `propertyStates[].data.damagePercent` through the existing property-state payload shape.
+- Added engine and realtime coverage for earthquake application, damage merge/no-repair behavior, rent reduction/floor/destruction behavior, bankruptcy checks using reduced rent, and snapshot/reconnect damage projection.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 574 passed, 0 failed, 0 skipped. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -52,14 +49,17 @@ Not included by explicit user scope:
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
 - Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
-- Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, property damage, Earthquake, or broad engine refactors.
+- Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, card-triggered Earthquake, repair, or broad engine refactors.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlayerStatusEffectManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyStateManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -141,7 +141,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 563 passed, 0 failed, 0 skipped.
+  - Output summary: 574 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -267,7 +267,9 @@ Not included by explicit user scope:
 - `JailRules.FineAmount` and `JailRules.MaxTurns` are serialized configuration only; gameplay does not read them yet.
 - Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
-- Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
+- Property rent uses the first rent table value, or a placeholder `10` for purchasable tiles without a rent table, then reduces it by persisted `PropertyStateData.DamagePercent`.
+- Damaged rent uses decimal floor math; fully damaged properties charge `0`, while damaged-but-not-destroyed properties charge at least `1`.
+- `PropertyStateManager.ApplyEarthquake` is an engine/manual-test hook only; no card trigger, client request, repair action, randomness, or UI has been added.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
 - Default loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%; these runtime rates live in `LoanSharkConfig` defaults for now, not in `GameRules.Loans` rate fields.
@@ -413,4 +415,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.24C is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.24D is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

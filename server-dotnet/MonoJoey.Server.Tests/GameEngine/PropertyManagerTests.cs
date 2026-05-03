@@ -73,12 +73,12 @@ public class PropertyManagerTests
     }
 
     [Fact]
-    public void PayRentForCurrentTile_IgnoresAndPreservesPropertyState()
+    public void PayRentForCurrentTile_ReducesRentForDamagedPropertyAndPreservesPropertyState()
     {
         var propertyTileId = new TileId("property_01");
         var propertyStates = new Dictionary<TileId, PropertyState>
         {
-            [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+            [propertyTileId] = new(propertyTileId, new PropertyStateData(50)),
         };
         var gameState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
@@ -90,10 +90,78 @@ public class PropertyManagerTests
         var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
 
         Assert.True(result.RentCharged);
+        Assert.Equal(new Money(1), result.RentDue);
+        Assert.Equal(new Money(1499), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1501), result.GameState.Players[1].Money);
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_UsesMinimumRentForDamagedButNotDestroyedProperty()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(75)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(1), result.RentDue);
+        Assert.Equal(new Money(1499), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1501), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_DoesNotChargeRentForFullyDamagedProperty()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(100)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.False(result.RentCharged);
+        Assert.Equal(new PlayerId("player_2"), result.OwnerId);
+        Assert.Equal(new Money(0), result.RentDue);
+        Assert.Equal(new Money(0), result.RentPaid);
+        Assert.Equal(new Money(1500), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1500), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_ZeroDamageKeepsFullRent()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
         Assert.Equal(new Money(2), result.RentDue);
         Assert.Equal(new Money(1498), result.GameState.Players[0].Money);
         Assert.Equal(new Money(1502), result.GameState.Players[1].Money);
-        Assert.Same(propertyStates, result.GameState.PropertyStates);
     }
 
     [Fact]
@@ -224,6 +292,29 @@ public class PropertyManagerTests
         Assert.Equal(new Money(1), result.GameState.Players[0].Money);
         Assert.Equal(new Money(1500), result.GameState.Players[1].Money);
         Assert.Equal(EliminationReason.CannotFulfillPayment, result.EliminationResult?.Reason);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_UsesReducedRentForBankruptcyCheck()
+    {
+        var propertyTileId = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_03", money: 3),
+            CreatePlayer("player_2", "start", 1500, "property_03")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(50)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
+        Assert.False(result.PlayerEliminated);
+        Assert.Equal(new Money(3), result.RentDue);
+        Assert.Equal(new Money(0), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1503), result.GameState.Players[1].Money);
     }
 
     private static GameState CreateGameState(params Player[] players)
