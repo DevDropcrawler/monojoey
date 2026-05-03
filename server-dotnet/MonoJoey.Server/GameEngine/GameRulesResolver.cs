@@ -184,6 +184,8 @@ public static class GameRulesResolver
         {
             "diceCount",
             "sidesPerDie",
+            "doublesExtraTurnEnabled",
+            "maxConsecutiveDoublesBeforeLockup",
             "resolveLandingAfterCardMove",
         });
 
@@ -191,6 +193,11 @@ public static class GameRulesResolver
         {
             DiceCount = ReadOptionalPositiveInt(group, "diceCount") ?? baseline.DiceCount,
             SidesPerDie = ReadOptionalAtLeastInt(group, "sidesPerDie", 2) ?? baseline.SidesPerDie,
+            DoublesExtraTurnEnabled = ReadOptionalBool(group, "doublesExtraTurnEnabled") ??
+                baseline.DoublesExtraTurnEnabled,
+            MaxConsecutiveDoublesBeforeLockup = ReadOptionalPositiveInt(
+                group,
+                "maxConsecutiveDoublesBeforeLockup") ?? baseline.MaxConsecutiveDoublesBeforeLockup,
             ResolveLandingAfterCardMove = ReadOptionalBool(group, "resolveLandingAfterCardMove") ??
                 baseline.ResolveLandingAfterCardMove,
         };
@@ -411,6 +418,7 @@ public static class GameRulesResolver
             rules.Auction.StartingBid < 0 ||
             rules.Dice.DiceCount <= 0 ||
             rules.Dice.SidesPerDie < 2 ||
+            rules.Dice.MaxConsecutiveDoublesBeforeLockup < 1 ||
             rules.Loans.BaseInterestRate < 0m ||
             rules.Loans.BaseInterestRate > 1m ||
             rules.Loans.InterestRateIncreasePerLoan < 0m ||

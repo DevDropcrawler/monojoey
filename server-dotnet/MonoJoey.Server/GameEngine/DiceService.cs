@@ -9,8 +9,8 @@ public sealed class DiceService
         this.diceRoller = diceRoller;
     }
 
-    public DiceRoll RollDice()
+    public DiceRoll RollDice(int sidesPerDie)
     {
-        return diceRoller.Roll();
+        return diceRoller.Roll(sidesPerDie);
     }
 }

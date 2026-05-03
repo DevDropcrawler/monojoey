@@ -767,7 +767,7 @@ public class WebSocketConnectionHandlerTests
             this.diceRoll = diceRoll;
         }
 
-        public DiceRoll Roll()
+        public DiceRoll Roll(int sidesPerDie)
         {
             return diceRoll;
         }

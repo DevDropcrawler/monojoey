@@ -269,7 +269,7 @@ public sealed class LobbyMessageHandler
                     "Player has already rolled this turn.");
             }
 
-            var dice = diceService.RollDice();
+            var dice = diceService.RollDice(session.GameState.Rules.Dice.SidesPerDie);
             var movementResult = MovementManager.MovePlayer(
                 session.GameState,
                 player.PlayerId,

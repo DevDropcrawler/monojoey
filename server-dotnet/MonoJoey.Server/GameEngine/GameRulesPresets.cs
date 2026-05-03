@@ -29,6 +29,8 @@ public static class GameRulesPresets
         Dice: new DiceRules(
             DiceCount: 2,
             SidesPerDie: 6,
+            DoublesExtraTurnEnabled: false,
+            MaxConsecutiveDoublesBeforeLockup: 3,
             ResolveLandingAfterCardMove: false),
         Cards: new CardRules(
             new[] { CardDeckIds.Chance, CardDeckIds.Table },

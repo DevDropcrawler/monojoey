@@ -85,6 +85,8 @@ public sealed record JailRules(
 public sealed record DiceRules(
     int DiceCount,
     int SidesPerDie,
+    bool DoublesExtraTurnEnabled,
+    int MaxConsecutiveDoublesBeforeLockup,
     bool ResolveLandingAfterCardMove)
 {
     public DiceRules DeepCopy()
@@ -92,6 +94,8 @@ public sealed record DiceRules(
         return new DiceRules(
             DiceCount,
             SidesPerDie,
+            DoublesExtraTurnEnabled,
+            MaxConsecutiveDoublesBeforeLockup,
             ResolveLandingAfterCardMove);
     }
 }

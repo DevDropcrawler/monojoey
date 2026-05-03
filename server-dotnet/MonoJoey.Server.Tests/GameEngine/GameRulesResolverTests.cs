@@ -31,6 +31,8 @@ public class GameRulesResolverTests
         Assert.True(rules.Jail.EscapeCardsEnabled);
         Assert.Equal(2, rules.Dice.DiceCount);
         Assert.Equal(6, rules.Dice.SidesPerDie);
+        Assert.False(rules.Dice.DoublesExtraTurnEnabled);
+        Assert.Equal(3, rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.False(rules.Dice.ResolveLandingAfterCardMove);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
         Assert.True(rules.Cards.CustomCardsEnabled);
@@ -83,6 +85,26 @@ public class GameRulesResolverTests
     }
 
     [Fact]
+    public void DicePayload_ResolvesCustomDoubleSettings()
+    {
+        using var document = JsonDocument.Parse(
+            @"{
+                ""dice"": {
+                    ""sidesPerDie"": 8,
+                    ""doublesExtraTurnEnabled"": true,
+                    ""maxConsecutiveDoublesBeforeLockup"": 2
+                }
+            }");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Equal("custom", rules.PresetId);
+        Assert.Equal(8, rules.Dice.SidesPerDie);
+        Assert.True(rules.Dice.DoublesExtraTurnEnabled);
+        Assert.Equal(2, rules.Dice.MaxConsecutiveDoublesBeforeLockup);
+    }
+
+    [Fact]
     public void TrustedMetadata_IsDerivedByServer()
     {
         using var document = JsonDocument.Parse(@"{""presetId"":""custom"",""isCustom"":true}");
@@ -104,6 +126,9 @@ public class GameRulesResolverTests
     [InlineData(@"{""economy"":{""luxuryTaxAmount"":-1}}")]
     [InlineData(@"{""dice"":{""diceCount"":0}}")]
     [InlineData(@"{""dice"":{""sidesPerDie"":1}}")]
+    [InlineData(@"{""dice"":{""doublesExtraTurnEnabled"":""yes""}}")]
+    [InlineData(@"{""dice"":{""maxConsecutiveDoublesBeforeLockup"":0}}")]
+    [InlineData(@"{""dice"":{""maxConsecutiveDoublesBeforeLockup"":""3""}}")]
     [InlineData(@"{""loans"":{""baseInterestRate"":1.5}}")]
     [InlineData(@"{""cards"":{""decksEnabled"":[""chance"",""missing""]}}")]
     [InlineData(@"{""win"":{""conditionType"":""score""}}")]

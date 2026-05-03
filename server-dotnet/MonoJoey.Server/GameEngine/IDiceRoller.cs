@@ -2,5 +2,5 @@ namespace MonoJoey.Server.GameEngine;
 
 public interface IDiceRoller
 {
-    DiceRoll Roll();
+    DiceRoll Roll(int sidesPerDie);
 }

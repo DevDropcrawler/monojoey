@@ -17,6 +17,8 @@ public class SessionRulesTests
         Assert.Equal("monojoey_default", session.DraftRules.PresetId);
         Assert.False(session.DraftRules.IsCustom);
         Assert.Equal(9, session.DraftRules.Auction.InitialTimerSeconds);
+        Assert.False(session.DraftRules.Dice.DoublesExtraTurnEnabled);
+        Assert.Equal(3, session.DraftRules.Dice.MaxConsecutiveDoublesBeforeLockup);
     }
 
     [Fact]
@@ -32,6 +34,11 @@ public class SessionRulesTests
             Auction = GameRulesPresets.MonoJoeyDefault.Auction with
             {
                 InitialTimerSeconds = 12,
+            },
+            Dice = GameRulesPresets.MonoJoeyDefault.Dice with
+            {
+                DoublesExtraTurnEnabled = true,
+                MaxConsecutiveDoublesBeforeLockup = 2,
             },
         };
         _ = sessionManager.SetDraftRules(session.SessionId, new PlayerId("player_1"), draftRules);
@@ -50,6 +57,8 @@ public class SessionRulesTests
         Assert.NotSame(startedSession.DraftRules.Win, startedSession.GameState.Rules.Win);
         Assert.NotSame(startedSession.DraftRules.Future, startedSession.GameState.Rules.Future);
         Assert.Equal(12, startedSession.GameState.Rules.Auction.InitialTimerSeconds);
+        Assert.True(startedSession.GameState.Rules.Dice.DoublesExtraTurnEnabled);
+        Assert.Equal(2, startedSession.GameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
     }
 
     [Fact]

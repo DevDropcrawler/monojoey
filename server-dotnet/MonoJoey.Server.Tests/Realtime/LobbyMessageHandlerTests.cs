@@ -443,6 +443,30 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_UsesStartedGameDiceSides()
+    {
+        var sessionManager = new SessionManager();
+        var diceRoller = new TrackingDiceRoller(new DiceRoll(7, 8, 8));
+        var handler = CreateHandler(sessionManager, diceRoller);
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""sidesPerDie"":8}");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var dice = payload.GetProperty("dice").EnumerateArray().Select(value => value.GetInt32()).ToArray();
+
+        Assert.Equal(8, diceRoller.LastSidesPerDie);
+        Assert.Equal(new[] { 7, 8 }, dice);
+        Assert.Equal(15, payload.GetProperty("total").GetInt32());
+        Assert.False(payload.GetProperty("isDouble").GetBoolean());
+    }
+
+    [Fact]
     public void RollDice_ReturnsDirectResponseAndBroadcastEnvelopeFromPersistedState()
     {
         var sessionManager = new SessionManager();
@@ -3924,6 +3948,25 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_CustomSidesDoNotAllowSecondRollInSameTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""sidesPerDie"":8}");
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Fact]
     public void RollDice_NonCurrentPlayerReturnsNotYourTurn()
     {
         var sessionManager = new SessionManager();
@@ -4364,6 +4407,11 @@ public class LobbyMessageHandlerTests
         return new LobbyMessageHandler(sessionManager, new DiceService(new FixedDiceRoller(diceRoll)));
     }
 
+    private static LobbyMessageHandler CreateHandler(SessionManager sessionManager, IDiceRoller diceRoller)
+    {
+        return new LobbyMessageHandler(sessionManager, new DiceService(diceRoller));
+    }
+
     private static LobbyMessageHandler CreateHandler(
         SessionManager sessionManager,
         DiceRoll diceRoll,
@@ -4627,8 +4675,27 @@ public class LobbyMessageHandlerTests
             this.diceRoll = diceRoll;
         }
 
-        public DiceRoll Roll()
+        public DiceRoll Roll(int sidesPerDie)
         {
+            return diceRoll;
+        }
+    }
+
+    private sealed class TrackingDiceRoller : IDiceRoller
+    {
+        private readonly DiceRoll diceRoll;
+
+        public TrackingDiceRoller(DiceRoll diceRoll)
+        {
+            this.diceRoll = diceRoll;
+        }
+
+        public int LastSidesPerDie { get; private set; }
+
+        public DiceRoll Roll(int sidesPerDie)
+        {
+            LastSidesPerDie = sidesPerDie;
+
             return diceRoll;
         }
     }

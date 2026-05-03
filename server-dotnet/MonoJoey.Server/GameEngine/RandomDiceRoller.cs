@@ -14,13 +14,13 @@ public sealed class RandomDiceRoller : IDiceRoller
         this.random = random;
     }
 
-    public DiceRoll Roll()
+    public DiceRoll Roll(int sidesPerDie)
     {
-        return new DiceRoll(RollDie(), RollDie());
+        return new DiceRoll(RollDie(sidesPerDie), RollDie(sidesPerDie), sidesPerDie);
     }
 
-    private int RollDie()
+    private int RollDie(int sidesPerDie)
     {
-        return random.Next(DiceRoll.MinFaceValue, DiceRoll.MaxFaceValue + 1);
+        return random.Next(DiceRoll.MinFaceValue, sidesPerDie + 1);
     }
 }

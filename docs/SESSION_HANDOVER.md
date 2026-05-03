@@ -5,12 +5,12 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.21 Unity-Ready Protocol Payloads
-- Completion status: Chunk 5.21 complete; sequenced gameplay broadcasts and matching direct results now include additive Unity animation/sync helpers for movement, money deltas, ownership changes, and eliminations while snapshots/reconnect remain the authoritative recovery path.
+- Chunk: 5.22C.3 Hook Dice Sides Into Gameplay
+- Completion status: Chunk 5.22C.3 complete; gameplay still rolls exactly two dice, but the roll range now comes from `GameState.Rules.Dice.SidesPerDie`. Doubles rule knobs are present in rules/schema/snapshots only and are not wired into turn flow.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `phase-5-6: add resolve tile websocket action`
-- Last commit before this chunk: `phase-5-6: add resolve tile websocket action`
-- Last commit after this chunk: `phase-5-7: add execute tile websocket action`
+- Previous commit: `de4761b feat(server): hook auction rules into gameplay`
+- Last commit before this chunk: `de4761b feat(server): hook auction rules into gameplay`
+- Last commit after this chunk: not committed yet
 - Date/time: 2026-05-03
 
 ## Docs Planning Note
@@ -19,23 +19,19 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.21 - Unity-Ready Protocol Payloads.
+Phase 5, Chunk 5.22C.3 - Hook Dice Sides Into Gameplay.
 
 Completed:
 
-- Extended `MovementResult` with source/destination tile IDs, entered tile path IDs, signed step count, movement kind, and pass-start metadata.
-- Updated `MovementManager` to calculate forward, wrapping, and backward movement paths as the movement source of truth.
-- Preserved the existing `CardEffectExecutor.ExecuteCardEffect()` API and added a richer execution result path so card movement metadata is available to realtime payloads.
-- Added additive helper records in `LobbyMessages`: `movement`, `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`.
-- Added `total` and `isDouble` to roll result payloads.
-- Added movement helpers to dice rolls, card movement, and direct lockup moves.
-- Added money delta helpers for pass-start rewards, rent, tax, card money effects, auction payments, loans, and start-turn loan interest during `end_turn`.
-- Added auction ownership change helpers for successful auction wins and elimination helpers for failed rent, failed auction payment, tax/card bankruptcy, and loan-interest bankruptcy diffs.
-- Expanded `bid_result` / `bid_accepted` with active auction metadata: `propertyTileId`, `status`, `minimumNextBid`, `bidCount`, `countdownDurationSeconds`, and `timerEndsAtUtc`.
-- Kept helper arrays nullable/omitted when irrelevant; no existing event type or existing field was removed or renamed.
-- Preserved direct-first response behavior, broadcast sequencing, terminal `game_completed` ordering, reconnect behavior, and snapshot version/shape.
-- Updated protocol docs with helper payload shapes and examples.
-- Added focused MovementManager and realtime tests covering movement paths, dice metadata, rent/tax/card/loan/auction money deltas, auction ownership changes, helper omission, and end-turn loan-interest deltas.
+- Added `DiceRules.DoublesExtraTurnEnabled` default `false` and `DiceRules.MaxConsecutiveDoublesBeforeLockup` default `3`.
+- Updated rules resolution/validation to accept `doublesExtraTurnEnabled` and `maxConsecutiveDoublesBeforeLockup`; invalid types and thresholds below 1 are rejected.
+- Preserved `DiceRules.DiceCount` as schema state only for this chunk; gameplay still rolls exactly two dice.
+- Changed `IDiceRoller.Roll`, `RandomDiceRoller.Roll`, and `DiceService.RollDice` to accept `sidesPerDie`.
+- Kept the existing two-argument `DiceRoll` constructor d6-compatible and added a custom-sides constructor path.
+- Updated `LobbyMessageHandler.HandleRollDice` to pass `session.GameState.Rules.Dice.SidesPerDie` into `DiceService`.
+- Preserved `RollResultPayload` shape: dice remains `[firstDie, secondDie]`, with `total` and `isDouble` unchanged.
+- Added focused engine, rules, session, realtime, and WebSocket test updates.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 515 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -51,18 +47,26 @@ Not included by explicit user scope:
 - Reconnect identity.
 - Authentication.
 - Unity client.
-- New game rules, Unity client code, status effects, property damage, Slimer, Earthquake, or broad engine refactors.
+- Extra turns on doubles.
+- Consecutive-doubles lockup behavior.
+- Slimer, status effects, Unity client code, property damage, Earthquake, or broad engine refactors.
 
 ## Files Changed In This Chunk
 
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MovementManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MovementResult.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/MovementManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/DiceServiceTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionRulesTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyRulesMessageHandlerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `docs/MULTIPLAYER_PROTOCOL.md`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -408,4 +412,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.21 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.22C.3 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

@@ -23,6 +23,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(100, rules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
         Assert.Equal(100, rules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(9, rules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
+        Assert.False(rules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
+        Assert.Equal(3, rules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
         Assert.Equal(new[] { "chance", "table" }, rules.GetProperty("cards").GetProperty("decksEnabled").EnumerateArray().Select(deck => deck.GetString()).ToArray());
     }
 
@@ -41,7 +43,7 @@ public class LobbyRulesMessageHandlerTests
             SetRulesMessage(
                 session.SessionId,
                 "player_1",
-                @"""presetName"":""House rules"",""auction"":{""initialTimerSeconds"":12,""minimumBidIncrement"":5},""loans"":{""loanSharkEnabled"":false}"),
+                @"""presetName"":""House rules"",""auction"":{""initialTimerSeconds"":12,""minimumBidIncrement"":5},""dice"":{""doublesExtraTurnEnabled"":true,""maxConsecutiveDoublesBeforeLockup"":2},""loans"":{""loanSharkEnabled"":false}"),
             firstContext);
 
         Assert.Equal("rules_updated", result.DirectResponse.Type);
@@ -58,6 +60,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.True(payload.Rules.IsCustom);
         Assert.Equal(12, payload.Rules.Auction.InitialTimerSeconds);
         Assert.Equal(5, payload.Rules.Auction.MinimumBidIncrement);
+        Assert.True(payload.Rules.Dice.DoublesExtraTurnEnabled);
+        Assert.Equal(2, payload.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.False(payload.Rules.Loans.LoanSharkEnabled);
     }
 
@@ -94,6 +98,8 @@ public class LobbyRulesMessageHandlerTests
     [InlineData(@"""auction"":{""initialTimerSeconds"":0}")]
     [InlineData(@"""economy"":{""incomeTaxAmount"":-1}")]
     [InlineData(@"""economy"":{""luxuryTaxAmount"":-1}")]
+    [InlineData(@"""dice"":{""maxConsecutiveDoublesBeforeLockup"":0}")]
+    [InlineData(@"""dice"":{""doublesExtraTurnEnabled"":""yes""}")]
     [InlineData(@"""loans"":{""baseInterestRate"":-0.1}")]
     [InlineData(@"""cards"":{""decksEnabled"":[""unknown""]}")]
     public void SetRules_InvalidRulesReturnsInvalidRules(string rulesJson)
@@ -176,7 +182,7 @@ public class LobbyRulesMessageHandlerTests
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
         _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
         _ = handler.HandleTextMessage(
-            SetRulesMessage(session.SessionId, "player_1", @"""presetName"":""House rules"",""economy"":{""incomeTaxAmount"":75,""luxuryTaxAmount"":25},""auction"":{""initialTimerSeconds"":12}"),
+            SetRulesMessage(session.SessionId, "player_1", @"""presetName"":""House rules"",""economy"":{""incomeTaxAmount"":75,""luxuryTaxAmount"":25},""auction"":{""initialTimerSeconds"":12},""dice"":{""doublesExtraTurnEnabled"":true,""maxConsecutiveDoublesBeforeLockup"":2}"),
             firstContext);
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
         _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
@@ -195,11 +201,15 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(75, snapshotRules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
         Assert.Equal(25, snapshotRules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(12, snapshotRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
+        Assert.True(snapshotRules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
+        Assert.Equal(2, snapshotRules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
         Assert.Equal("custom", reconnectRules.GetProperty("presetId").GetString());
         Assert.Equal("House rules", reconnectRules.GetProperty("presetName").GetString());
         Assert.Equal(75, reconnectRules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
         Assert.Equal(25, reconnectRules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
         Assert.Equal(12, reconnectRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
+        Assert.True(reconnectRules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
+        Assert.Equal(2, reconnectRules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
     }
 
     [Fact]
