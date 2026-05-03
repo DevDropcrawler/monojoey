@@ -25,6 +25,7 @@ public class SessionManagerTests
         Assert.False(session.GameState.HasExecutedTileThisTurn);
         Assert.Null(session.GameState.ActiveAuctionState);
         AssertInitializedCardDeckStates(session.GameState);
+        Assert.Empty(session.GameState.PropertyStates);
         Assert.Same(session, sessionManager.GetSession(session.SessionId));
     }
 
@@ -282,6 +283,7 @@ public class SessionManagerTests
         Assert.Null(startedSession.GameState.ActiveAuctionState);
         Assert.Same(session.GameState.Board, startedSession.GameState.Board);
         AssertInitializedCardDeckStates(startedSession.GameState);
+        Assert.Empty(startedSession.GameState.PropertyStates);
 
         Assert.Collection(
             startedSession.GameState.Players,
@@ -320,10 +322,15 @@ public class SessionManagerTests
         {
             [CardDeckIds.Chance] = updatedChanceState,
         };
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData()),
+        };
         var heldCardId = new CardId("held_escape_01");
         var readyToAdvance = startedSession.GameState with
         {
             CardDeckStates = deckStates,
+            PropertyStates = propertyStates,
             Players = startedSession.GameState.Players
                 .Select(player => player.PlayerId.Value == "player_1"
                     ? player with { HeldCardIds = new HashSet<CardId> { heldCardId } }
@@ -337,6 +344,7 @@ public class SessionManagerTests
         var advanced = TurnManager.AdvanceToNextTurn(readyToAdvance);
 
         Assert.Same(deckStates, advanced.CardDeckStates);
+        Assert.Same(propertyStates, advanced.PropertyStates);
         Assert.Equal(15, advanced.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
         Assert.Single(advanced.CardDeckStates[CardDeckIds.Chance].DiscardPile);
         Assert.Contains(heldCardId, advanced.Players[0].HeldCardIds);

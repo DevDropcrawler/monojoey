@@ -2229,6 +2229,10 @@ public sealed class LobbyMessageHandler
                 .Select(CreateSnapshotPlayer)
                 .ToArray(),
             Board: CreateSnapshotBoard(gameState),
+            PropertyStates: gameState.PropertyStates
+                .OrderBy(propertyState => propertyState.Value.TileId.Value, StringComparer.Ordinal)
+                .Select(propertyState => CreateSnapshotPropertyState(propertyState.Value))
+                .ToArray(),
             ActiveAuction: gameState.ActiveAuctionState is null
                 ? null
                 : CreateSnapshotAuction(gameState.ActiveAuctionState),
@@ -2347,6 +2351,13 @@ public sealed class LobbyMessageHandler
             tile.IsPurchasable,
             tile.IsAuctionable,
             FindPropertyOwnerId(gameState, tile.TileId));
+    }
+
+    private static SnapshotPropertyStatePayload CreateSnapshotPropertyState(PropertyState propertyState)
+    {
+        return new SnapshotPropertyStatePayload(
+            propertyState.TileId.Value,
+            new SnapshotPropertyStateDataPayload());
     }
 
     private static SnapshotAuctionPayload CreateSnapshotAuction(AuctionState auctionState)

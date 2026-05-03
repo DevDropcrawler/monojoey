@@ -54,6 +54,30 @@ public class AuctionManagerTests
     }
 
     [Fact]
+    public void StartMandatoryAuction_IgnoresPropertyStateForEligibility()
+    {
+        var playerId = new PlayerId("player_1");
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(CreatePlayer("player_1", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+            },
+        };
+
+        var result = AuctionManager.StartMandatoryAuction(
+            gameState,
+            playerId,
+            propertyTileId,
+            DefaultAuctionConfig(),
+            startedAtUtc: FirstBidTime);
+
+        Assert.True(result.AuctionStarted);
+        Assert.Equal(propertyTileId, result.AuctionState?.PropertyTileId);
+    }
+
+    [Fact]
     public void StartMandatoryAuction_CopiesRulesDerivedConfigValuesIntoAuctionState()
     {
         var playerId = new PlayerId("player_1");
@@ -478,6 +502,35 @@ public class AuctionManagerTests
 
         Assert.Contains(propertyTileId, result.GameState.Players[1].OwnedPropertyIds);
         Assert.Empty(result.GameState.Players[0].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_IgnoresAndPreservesPropertyState()
+    {
+        var propertyTileId = new TileId("property_01");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start")) with
+        {
+            PropertyStates = propertyStates,
+        };
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(100),
+            FirstBidTime).AuctionState;
+
+        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+
+        Assert.True(result.FinalizedWithWinner);
+        Assert.Contains(propertyTileId, result.GameState.Players[1].OwnedPropertyIds);
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
     }
 
     [Fact]

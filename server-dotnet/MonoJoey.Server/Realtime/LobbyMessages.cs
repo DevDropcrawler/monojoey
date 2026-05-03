@@ -320,6 +320,7 @@ public sealed record SnapshotPayload(
     SnapshotTurnPayload Turn,
     IReadOnlyList<SnapshotPlayerPayload> Players,
     SnapshotBoardPayload Board,
+    IReadOnlyList<SnapshotPropertyStatePayload> PropertyStates,
     SnapshotAuctionPayload? ActiveAuction,
     IReadOnlyList<SnapshotCardDeckPayload> CardDecks,
     SnapshotLoanSharkPayload LoanShark,
@@ -392,6 +393,12 @@ public sealed record SnapshotBoardTilePayload(
     bool IsPurchasable,
     bool IsAuctionable,
     string? OwnerPlayerId);
+
+public sealed record SnapshotPropertyStatePayload(
+    string TileId,
+    SnapshotPropertyStateDataPayload Data);
+
+public sealed record SnapshotPropertyStateDataPayload;
 
 public sealed record SnapshotAuctionPayload(
     string PropertyTileId,

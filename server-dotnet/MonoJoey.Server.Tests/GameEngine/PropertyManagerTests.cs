@@ -20,6 +20,26 @@ public class PropertyManagerTests
     }
 
     [Fact]
+    public void AssignOwner_IgnoresAndPreservesPropertyState()
+    {
+        var ownerId = new PlayerId("player_1");
+        var propertyTileId = new TileId("property_01");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+        };
+        var gameState = CreateGameState(CreatePlayer("player_1", "start")) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = PropertyManager.AssignOwner(gameState, propertyTileId, ownerId);
+
+        Assert.Contains(propertyTileId, result.Players[0].OwnedPropertyIds);
+        Assert.Same(propertyStates, result.PropertyStates);
+    }
+
+    [Fact]
     public void BuyProperty_AssignsUnownedPropertyToBuyerAndPaysPrice()
     {
         var buyerId = new PlayerId("player_1");
@@ -50,6 +70,30 @@ public class PropertyManagerTests
         Assert.Equal(new Money(2), result.RentDue);
         Assert.Equal(new Money(2), result.RentPaid);
         Assert.Equal(new Money(1498), result.GameState.Players[0].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_IgnoresAndPreservesPropertyState()
+    {
+        var propertyTileId = new TileId("property_01");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [propertyTileId] = new(propertyTileId, new PropertyStateData()),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(2), result.RentDue);
+        Assert.Equal(new Money(1498), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1502), result.GameState.Players[1].Money);
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
     }
 
     [Fact]

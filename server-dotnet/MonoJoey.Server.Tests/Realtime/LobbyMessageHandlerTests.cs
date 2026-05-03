@@ -3078,6 +3078,11 @@ public class LobbyMessageHandlerTests
                         CountdownDurationSeconds: 3,
                         TimerEndsAtUtc: placedAtUtc.AddSeconds(3)),
                     CardDeckStates = deckStates,
+                    PropertyStates = new Dictionary<TileId, PropertyState>
+                    {
+                        [new TileId("property_02")] = new(new TileId("property_02"), new PropertyStateData()),
+                        [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData()),
+                    },
                 };
             });
 
@@ -3099,6 +3104,7 @@ public class LobbyMessageHandlerTests
         var auction = payload.GetProperty("activeAuction");
         var bid = Assert.Single(auction.GetProperty("bids").EnumerateArray());
         var decks = payload.GetProperty("cardDecks").EnumerateArray().ToArray();
+        var propertyStates = payload.GetProperty("propertyStates").EnumerateArray().ToArray();
 
         Assert.Equal(1, payload.GetProperty("snapshotVersion").GetInt32());
         Assert.Equal(started.Session.SessionId, payload.GetProperty("sessionId").GetString());
@@ -3136,9 +3142,29 @@ public class LobbyMessageHandlerTests
         Assert.Equal(placedAtUtc.AddSeconds(3), auction.GetProperty("timerEndsAtUtc").GetDateTimeOffset());
         Assert.Equal("player_2", bid.GetProperty("bidderPlayerId").GetString());
         Assert.Equal(20, bid.GetProperty("amount").GetInt32());
+        Assert.Equal(new[] { "property_01", "property_02" }, propertyStates.Select(state => state.GetProperty("tileId").GetString()).ToArray());
+        Assert.Empty(propertyStates[0].GetProperty("data").EnumerateObject());
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
         Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
         Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void GetSnapshot_ProjectsEmptyPropertyStatesAsArray()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+
+        Assert.Equal(JsonValueKind.Array, payload.GetProperty("propertyStates").ValueKind);
+        Assert.Empty(payload.GetProperty("propertyStates").EnumerateArray());
+        Assert.Empty(sessionManager.GetSession(started.Session.SessionId)!.GameState.PropertyStates);
     }
 
     [Fact]
@@ -3158,6 +3184,37 @@ public class LobbyMessageHandlerTests
         Assert.Equal(JsonValueKind.Array, players[0].GetProperty("statusEffects").ValueKind);
         Assert.Empty(players[0].GetProperty("statusEffects").EnumerateArray());
         Assert.Empty(sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].StatusEffects);
+    }
+
+    [Fact]
+    public void ReconnectSession_ReturnsPersistedPropertyStatesInSnapshot()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_02")] = new(new TileId("property_02"), new PropertyStateData()),
+                    [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData()),
+                },
+            });
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+        var propertyStates = payload
+            .GetProperty("snapshot")
+            .GetProperty("propertyStates")
+            .EnumerateArray()
+            .ToArray();
+
+        Assert.Equal(new[] { "property_01", "property_02" }, propertyStates.Select(state => state.GetProperty("tileId").GetString()).ToArray());
+        Assert.Empty(propertyStates[0].GetProperty("data").EnumerateObject());
     }
 
     [Fact]
@@ -3202,6 +3259,23 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1, statusData.GetProperty("stackCount").GetInt32());
         Assert.Equal(JsonValueKind.Null, statusData.GetProperty("remainingTurns").ValueKind);
         Assert.Equal("source_card_1", statusData.GetProperty("sourceId").GetString());
+    }
+
+    [Fact]
+    public void PropertyStatePayload_JsonRoundTripPreservesPrimitiveFields()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var propertyState = new SnapshotPropertyStatePayload(
+            "property_01",
+            new SnapshotPropertyStateDataPayload());
+
+        var json = JsonSerializer.Serialize(propertyState, jsonOptions);
+        var roundTrip = JsonSerializer.Deserialize<SnapshotPropertyStatePayload>(json, jsonOptions);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(propertyState.TileId, roundTrip.TileId);
+        Assert.NotNull(roundTrip.Data);
+        Assert.Equal("{}", JsonSerializer.Serialize(roundTrip.Data, jsonOptions));
     }
 
     [Fact]

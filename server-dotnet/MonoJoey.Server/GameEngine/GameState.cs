@@ -28,5 +28,8 @@ public sealed record GameState(
     public IReadOnlyDictionary<string, CardDeckState> CardDeckStates { get; init; } =
         new Dictionary<string, CardDeckState>();
 
+    public IReadOnlyDictionary<TileId, PropertyState> PropertyStates { get; init; } =
+        new Dictionary<TileId, PropertyState>();
+
     public GameRules Rules { get; init; } = GameRulesPresets.MonoJoeyDefault;
 }
