@@ -103,6 +103,37 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void StartFirstTurn_IgnoresSchemaRateFieldsWhenDerivingLoanConfig()
+    {
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Loans = GameRulesPresets.MonoJoeyDefault.Loans with
+                {
+                    BaseInterestRate = 0.99m,
+                    InterestRateIncreasePerLoan = 0.99m,
+                    InterestRateIncreasePerDebtTier = 0.99m,
+                    MinimumInterestPayment = 999,
+                },
+            },
+            Players = new[]
+            {
+                CreatePlayer(
+                    "player_1",
+                    new TileId("start"),
+                    loanState: new PlayerLoanState(new Money(200), 30, Money.Zero, LoanTier: 2)),
+                CreatePlayer("player_2", new TileId("start")),
+            },
+        };
+
+        var started = TurnManager.StartFirstTurn(gameState);
+
+        Assert.Equal(new Money(1440), started.Players[0].Money);
+        Assert.Equal(new Money(60), started.Players[0].LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
     public void StartFirstTurn_EliminatesPlayerWhoCannotPayLoanInterestBeforeRoll()
     {
         var gameState = CreateGameState("player_1", "player_2") with

@@ -971,7 +971,8 @@ public sealed class LobbyMessageHandler
                     "Eliminated players cannot take loans.");
             }
 
-            if (!gameState.LoanSharkConfig.Enabled)
+            var loanConfig = LoanSharkConfig.FromRules(gameState.Rules.Loans);
+            if (!loanConfig.Enabled)
             {
                 return CreateError(
                     LobbyErrorCodes.LoanModeDisabled,
@@ -985,13 +986,14 @@ public sealed class LobbyMessageHandler
                     "Loan amount must be positive and within safe bounds.");
             }
 
-            if (IsLoanPaymentBorrowPurpose(purpose))
+            if (IsLoanPaymentBorrowPurpose(purpose) && !loanConfig.CanBorrowForLoanPayments)
             {
                 var rejectedLoanResult = LoanManager.TakeLoan(
                     gameState,
                     player.PlayerId,
                     new Money(amount),
-                    purpose);
+                    purpose,
+                    loanConfig);
 
                 return CreateLoanRejectedError(rejectedLoanResult);
             }
@@ -1034,7 +1036,8 @@ public sealed class LobbyMessageHandler
                 gameState,
                 player.PlayerId,
                 new Money(amount),
-                purpose);
+                purpose,
+                loanConfig);
 
             if (!loanResult.LoanTaken)
             {
@@ -2211,7 +2214,8 @@ public sealed class LobbyMessageHandler
                 .OrderBy(deckState => deckState.Value.DeckId, StringComparer.Ordinal)
                 .Select(deckState => CreateSnapshotCardDeck(deckState.Value))
                 .ToArray(),
-            LoanShark: new SnapshotLoanSharkPayload(gameState.LoanSharkConfig.Enabled),
+            LoanShark: new SnapshotLoanSharkPayload(
+                LoanSharkConfig.FromRules(gameState.Rules.Loans).Enabled),
             Rules: gameState.Rules);
     }
 

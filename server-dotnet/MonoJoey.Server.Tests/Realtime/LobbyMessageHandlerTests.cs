@@ -2545,7 +2545,13 @@ public class LobbyMessageHandlerTests
         _ = UpdateGameState(
             sessionManager,
             started.Session.SessionId,
-            gameState => gameState with { LoanSharkConfig = new LoanSharkConfig { Enabled = false } });
+            gameState => gameState with
+            {
+                Rules = gameState.Rules with
+                {
+                    Loans = gameState.Rules.Loans with { LoanSharkEnabled = false },
+                },
+            });
         var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
         using var response = Handle(
@@ -2558,6 +2564,29 @@ public class LobbyMessageHandlerTests
         Assert.Same(beforeLoan, afterLoan);
         Assert.Equal(new Money(1500), afterLoan.Players[0].Money);
         Assert.Null(afterLoan.Players[0].LoanState);
+    }
+
+    [Fact]
+    public void TakeLoan_LegacyDisabledLoanConfigDoesNotDisableRulesEnabledLoans()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with { LoanSharkConfig = new LoanSharkConfig { Enabled = false } });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"));
+        var payload = AssertResponseType(response, "loan_result");
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(new Money(1700), afterLoan.Players[0].Money);
+        Assert.Equal(new Money(200), afterLoan.Players[0].LoanState?.TotalBorrowed);
     }
 
     [Theory]
@@ -2580,6 +2609,39 @@ public class LobbyMessageHandlerTests
         AssertError(response, "loan_reason_blocked");
         Assert.Same(beforeLoan, afterLoan);
         Assert.Null(afterLoan.Players[0].LoanState);
+    }
+
+    [Theory]
+    [InlineData("loan_interest")]
+    [InlineData("loan_principal_repayment")]
+    [InlineData("existing_loan_debt")]
+    public void TakeLoan_WhenRulesAllowLoanPaymentBorrowingReturnsLoanResult(string reason)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Rules = gameState.Rules with
+                {
+                    Loans = gameState.Rules.Loans with { CanBorrowForLoanPayments = true },
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, reason));
+        var payload = AssertResponseType(response, "loan_result");
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
+        Assert.Equal(reason, payload.GetProperty("reason").GetString());
+        Assert.Equal(1700, payload.GetProperty("money").GetInt32());
+        Assert.Equal(new Money(200), afterLoan.Players[0].LoanState?.TotalBorrowed);
     }
 
     [Theory]
@@ -2978,6 +3040,33 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
         Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
         Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void GetSnapshot_ProjectsLoanSharkEnabledFromRules()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                LoanSharkConfig = new LoanSharkConfig { Enabled = true },
+                Rules = gameState.Rules with
+                {
+                    Loans = gameState.Rules.Loans with { LoanSharkEnabled = false },
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+
+        Assert.False(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
     }
 
     [Fact]

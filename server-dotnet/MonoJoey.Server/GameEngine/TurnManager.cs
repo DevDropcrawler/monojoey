@@ -29,7 +29,10 @@ public static class TurnManager
             ActiveAuctionState = null,
         };
 
-        return LoanManager.StartTurnInterestCheck(startedGameState, firstActivePlayer.PlayerId);
+        return LoanManager.StartTurnInterestCheck(
+            startedGameState,
+            firstActivePlayer.PlayerId,
+            LoanSharkConfig.FromRules(startedGameState.Rules.Loans));
     }
 
     public static Player GetCurrentPlayer(GameState gameState)
@@ -75,7 +78,10 @@ public static class TurnManager
             ActiveAuctionState = null,
         };
 
-        return LoanManager.StartTurnInterestCheck(nextGameState, nextPlayerId);
+        return LoanManager.StartTurnInterestCheck(
+            nextGameState,
+            nextPlayerId,
+            LoanSharkConfig.FromRules(nextGameState.Rules.Loans));
     }
 
     private static int FindCurrentPlayerIndex(IReadOnlyList<Player> players, PlayerId currentTurnPlayerId)

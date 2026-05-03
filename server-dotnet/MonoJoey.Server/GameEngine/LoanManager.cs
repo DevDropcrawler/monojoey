@@ -4,14 +4,12 @@ using MonoJoey.Shared.Protocol;
 
 public static class LoanManager
 {
-    private const int FirstBorrowInterestRatePercent = 20;
-    private const int SecondBorrowInterestRatePercent = 30;
-    private const int ThirdBorrowInterestRatePercent = 50;
-    private const int AdditionalBorrowInterestRateStepPercent = 10;
     private const int MaximumInterestRatePercent = 100;
 
-    public static GameState StartTurnInterestCheck(GameState gameState, PlayerId playerId)
+    public static GameState StartTurnInterestCheck(GameState gameState, PlayerId playerId, LoanSharkConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
+
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         var player = gameState.Players[playerIndex];
         var loanState = player.LoanState;
@@ -35,8 +33,15 @@ public static class LoanManager
         return BankruptcyManager.EliminateIfBankrupt(paidGameState, playerId).GameState;
     }
 
-    public static LoanTakeResult TakeLoan(GameState gameState, PlayerId playerId, Money amount, BorrowPurpose purpose)
+    public static LoanTakeResult TakeLoan(
+        GameState gameState,
+        PlayerId playerId,
+        Money amount,
+        BorrowPurpose purpose,
+        LoanSharkConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
+
         var playerIndex = FindPlayerIndexOrNull(gameState.Players, playerId);
         if (playerIndex is null)
         {
@@ -75,7 +80,7 @@ public static class LoanManager
                 "Loan amount must be positive.");
         }
 
-        if (!IsBorrowPurposeAllowed(purpose))
+        if (!IsBorrowPurposeAllowed(purpose, config))
         {
             return LoanRejected(
                 LoanTakeResultKind.DisallowedBorrowPurpose,
@@ -90,7 +95,7 @@ public static class LoanManager
         var previousLoanState = player.LoanState;
         var nextLoanTier = (previousLoanState?.LoanTier ?? 0) + 1;
         var totalBorrowed = new Money((previousLoanState?.TotalBorrowed.Amount ?? 0) + amount.Amount);
-        var interestRatePercent = CalculateInterestRatePercent(nextLoanTier);
+        var interestRatePercent = CalculateInterestRatePercent(nextLoanTier, config);
         var loanState = new PlayerLoanState(
             totalBorrowed,
             interestRatePercent,
@@ -126,7 +131,7 @@ public static class LoanManager
         return new LoanTakeResult(resultKind, gameState, playerId, amount, purpose, loanState, message);
     }
 
-    private static bool IsBorrowPurposeAllowed(BorrowPurpose purpose)
+    private static bool IsBorrowPurposeAllowed(BorrowPurpose purpose, LoanSharkConfig config)
     {
         return purpose switch
         {
@@ -137,21 +142,22 @@ public static class LoanManager
                 or BorrowPurpose.Fine => true,
             BorrowPurpose.LoanInterest
                 or BorrowPurpose.LoanPrincipalRepayment
-                or BorrowPurpose.ExistingLoanDebt => false,
+                or BorrowPurpose.ExistingLoanDebt => config.CanBorrowForLoanPayments,
             _ => false,
         };
     }
 
-    private static int CalculateInterestRatePercent(int loanTier)
+    private static int CalculateInterestRatePercent(int loanTier, LoanSharkConfig config)
     {
         return loanTier switch
         {
-            <= 1 => FirstBorrowInterestRatePercent,
-            2 => SecondBorrowInterestRatePercent,
-            3 => ThirdBorrowInterestRatePercent,
+            <= 1 => config.FirstBorrowInterestRatePercent,
+            2 => config.SecondBorrowInterestRatePercent,
+            3 => config.ThirdBorrowInterestRatePercent,
             _ => Math.Min(
                 MaximumInterestRatePercent,
-                ThirdBorrowInterestRatePercent + ((loanTier - 3) * AdditionalBorrowInterestRateStepPercent)),
+                config.ThirdBorrowInterestRatePercent +
+                    ((loanTier - 3) * config.AdditionalBorrowInterestRateStepPercent)),
         };
     }
 

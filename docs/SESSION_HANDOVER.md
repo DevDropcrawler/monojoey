@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.22C.4 Add Jail / The Joey Hole Rule Fields
-- Completion status: Chunk 5.22C.4 complete; `Rules.Jail` / `JailRules` / JSON `jail` now include schema/config fields for `fineAmount` and `maxTurns` alongside the existing booleans. The player-facing name is documented as "The Joey Hole". No jail/lockup gameplay behavior was changed.
+- Chunk: 5.22C.5 Hook Loan Rules Into Gameplay
+- Completion status: Chunk 5.22C.5 complete; loan gameplay now derives runtime loan config from `GameState.Rules.Loans` for realtime loan enablement, the loan-payment borrowing toggle, snapshots, and turn-start interest handoff. Existing default loan rate behavior remains 20/30/50/+10 capped at 100%. `GameRulesPresets` defaults were not changed.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `3b4b5ea`
 - Last commit before this chunk: `3b4b5ea`
@@ -19,17 +19,19 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.22C.4 - Add Jail / The Joey Hole Rule Fields.
+Phase 5, Chunk 5.22C.5 - Hook Loan Rules Into Gameplay.
 
 Completed:
 
-- Extended `JailRules` with `FineAmount` and `MaxTurns`, preserving backend naming as `Rules.Jail`, `JailRules`, and JSON `jail`.
-- Set MonoJoey defaults to `jail.enabled = true`, `jail.escapeCardsEnabled = true`, `jail.fineAmount = 50`, and `jail.maxTurns = 3`.
-- Updated `GameRulesResolver` to accept and validate `jail.enabled`, `jail.escapeCardsEnabled`, `jail.fineAmount >= 0`, and `jail.maxTurns >= 1`.
-- Confirmed the existing rules payload shape serializes the new fields through lobby state, `rules_updated`, snapshots, and reconnect snapshots.
-- Updated `docs/GAME_RULES_SPEC.md` to record "The Joey Hole" as the player-facing category/name while backend fields remain `jail` for now.
-- Added focused resolver, session, and realtime tests for the new jail fields and invalid payloads.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 524 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Expanded `LoanSharkConfig` into an explicit runtime config with current default rate behavior: first borrow 20%, second 30%, third 50%, later tiers +10 percentage points capped by `LoanManager` at 100%.
+- Added `LoanSharkConfig.FromRules(LoanRules)` and intentionally mapped only `LoanSharkEnabled` and `CanBorrowForLoanPayments`; `BaseInterestRate`, rate-increase fields, and `MinimumInterestPayment` remain schema/snapshot data only.
+- Updated `LoanManager.TakeLoan` and `LoanManager.StartTurnInterestCheck` to require an explicit `LoanSharkConfig`.
+- Wired `TurnManager` to derive loan config from `gameState.Rules.Loans` before start-turn interest checks.
+- Wired realtime `take_loan` enablement and loan-payment-purpose behavior to `gameState.Rules.Loans` through the derived config.
+- Updated snapshot `loanShark.enabled` projection to come from rules-derived config instead of legacy `GameState.LoanSharkConfig`.
+- Left `GameState.LoanSharkConfig` in place as legacy state, but it no longer controls realtime loan taking or snapshot enabled projection.
+- Added focused tests for default-rate preservation, custom runtime config tier math, the loan-payment borrowing toggle, ignored schema rate fields, rules-owned realtime disablement, legacy config non-control, and snapshot projection.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 535 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -52,13 +54,13 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionRulesTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyRulesMessageHandlerTests.cs`
-- `docs/GAME_RULES_SPEC.md`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -139,13 +141,14 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 524 passed, 0 failed, 0 skipped.
+  - Output summary: 535 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
 
 - `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
+- `GameRules.Loans` rate-field defaults still do not match current runtime loan manager behavior. This chunk deliberately preserved runtime 20/30/50/+10/100 behavior and left schema/default correction for a separate phase.
 - No UI, persistence, stats, event replay, or reconnect catch-up was added.
 
 ## Placeholders Introduced Or Preserved
@@ -213,7 +216,7 @@ Not included by explicit user scope:
 - `auction_result` is the direct sender response and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, `tileId`, and optional helper `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`. Successful finalization emits `auction_finalized`, including no-sale outcomes.
 - `won` responses reflect the persisted owner after payment and property transfer; `no_sale` responses use `winnerPlayerId = null` and `amount = 0`; `failed_payment` responses identify the failed winner and attempted winning amount while leaving the property unowned.
 - Rejected `finalize_auction` calls return `error` and do not update `GameState`.
-- `take_loan` requires a positive integer `amount`, a strict snake_case `reason`, a bound in-game session/player connection, a non-eliminated engine player, and enabled `GameState.LoanSharkConfig`.
+- `take_loan` requires a positive integer `amount`, a strict snake_case `reason`, a bound in-game session/player connection, a non-eliminated engine player, and enabled `GameState.Rules.Loans.LoanSharkEnabled`.
 - `take_loan` accepts only these wire reasons: `auction_bid`, `rent_payment`, `tax_payment`, `card_penalty`, `fine`, `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt`; unknown casing, numeric values, and missing/non-string reasons return `invalid_payload`.
 - `take_loan` returns `invalid_loan_amount` for non-positive integer amounts or amounts outside the safe server bound.
 - `loan_interest`, `loan_principal_repayment`, and `existing_loan_debt` return `loan_reason_blocked` and do not mutate `GameState`.
@@ -265,7 +268,7 @@ Not included by explicit user scope:
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
-- Loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%.
+- Default loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%; these runtime rates live in `LoanSharkConfig` defaults for now, not in `GameRules.Loans` rate fields.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
 ## Important Decisions Preserved
@@ -321,13 +324,13 @@ Not included by explicit user scope:
 - Dice are server-owned through a service and injectable roller abstraction.
 - Movement is deterministic and consumes an already-known step count; it does not roll dice or apply landing effects.
 - Loan state lives on `Player.LoanState` and is optional until a player first borrows.
-- `LoanManager.TakeLoan` requires an explicit `BorrowPurpose` and mutates only the borrowing player's money and loan state through a returned `GameState` when the purpose is allowed.
+- `LoanManager.TakeLoan` requires an explicit `BorrowPurpose` and `LoanSharkConfig`, and mutates only the borrowing player's money and loan state through a returned `GameState` when the purpose is allowed.
 - Loan rejection results return the unchanged `GameState`.
-- Borrowing to pay `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt` is rejected through `LoanTakeResultKind.DisallowedBorrowPurpose`.
+- Borrowing to pay `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt` is rejected through `LoanTakeResultKind.DisallowedBorrowPurpose` unless the runtime config has `CanBorrowForLoanPayments = true`.
 - Borrowing remains allowed for `AuctionBid`, `RentPayment`, `TaxPayment`, `CardPenalty`, and `Fine`.
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
 - Start-of-turn loan interest also uses total borrowed and the stored current interest rate using the same integer money arithmetic.
-- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` derive `LoanSharkConfig` from `GameState.Rules.Loans` and call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` skip players whose `IsLockedUp` flag is true.
 - `TurnManager.GetCurrentPlayer` rejects a locked current player with `Locked up players cannot take normal turns.`
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
@@ -363,6 +366,7 @@ Phase 5 follow-up - choose the next narrow networking/session slice only if expl
 
 Possible next scopes:
 
+- Resolve the `GameRules.Loans` rate-field/default mismatch in a separate schema-correction phase if that becomes the assigned chunk.
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add broader lobby broadcasts for join/leave/ready if/when a wider client synchronization chunk is assigned.
 - Add auction retry handling, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.
@@ -405,4 +409,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.22C.4 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.22C.5 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

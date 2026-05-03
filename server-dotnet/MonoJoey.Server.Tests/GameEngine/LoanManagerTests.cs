@@ -6,13 +6,20 @@ using MonoJoey.Shared.Schemas;
 
 public class LoanManagerTests
 {
+    private static LoanSharkConfig DefaultLoanConfig => LoanSharkConfig.FromRules(GameRulesPresets.MonoJoeyDefault.Loans);
+
     [Fact]
     public void TakeLoan_IncreasesPlayerMoney()
     {
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(200), BorrowPurpose.RentPayment);
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(200),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.True(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.Accepted, result.ResultKind);
@@ -27,7 +34,12 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.NotNull(result.LoanState);
         Assert.Equal(new Money(100), result.LoanState.TotalBorrowed);
@@ -44,8 +56,18 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var firstResult = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
+        var secondResult = LoanManager.TakeLoan(
+            firstResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.NotNull(firstResult.LoanState);
         Assert.NotNull(secondResult.LoanState);
@@ -58,10 +80,30 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
-        var thirdResult = LoanManager.TakeLoan(secondResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
-        var fourthResult = LoanManager.TakeLoan(thirdResult.GameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var firstResult = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
+        var secondResult = LoanManager.TakeLoan(
+            firstResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
+        var thirdResult = LoanManager.TakeLoan(
+            secondResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
+        var fourthResult = LoanManager.TakeLoan(
+            thirdResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.Equal(20, firstResult.LoanState?.CurrentInterestRatePercent);
         Assert.Equal(30, secondResult.LoanState?.CurrentInterestRatePercent);
@@ -71,13 +113,95 @@ public class LoanManagerTests
     }
 
     [Fact]
+    public void TakeLoan_CustomRuntimeConfigUsesSameTierFormula()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
+        var config = new LoanSharkConfig
+        {
+            FirstBorrowInterestRatePercent = 11,
+            SecondBorrowInterestRatePercent = 22,
+            ThirdBorrowInterestRatePercent = 33,
+            AdditionalBorrowInterestRateStepPercent = 7,
+        };
+
+        var firstResult = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+        var secondResult = LoanManager.TakeLoan(
+            firstResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+        var thirdResult = LoanManager.TakeLoan(
+            secondResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+        var fourthResult = LoanManager.TakeLoan(
+            thirdResult.GameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+
+        Assert.Equal(11, firstResult.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(22, secondResult.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(33, thirdResult.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(40, fourthResult.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(new Money(160), fourthResult.LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
+    public void TakeLoan_CustomRuntimeConfigStillCapsTierFormulaAtMaximumInterestRate()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(100),
+            CurrentInterestRatePercent: 95,
+            NextTurnInterestDue: new Money(95),
+            LoanTier: 3);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+        var config = new LoanSharkConfig
+        {
+            ThirdBorrowInterestRatePercent = 95,
+            AdditionalBorrowInterestRateStepPercent = 10,
+        };
+
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+
+        Assert.Equal(100, result.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(new Money(200), result.LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
     public void TakeLoan_PersistsLoanStateAcrossMultipleCalls()
     {
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var firstResult = LoanManager.TakeLoan(gameState, playerId, new Money(125), BorrowPurpose.RentPayment);
-        var secondResult = LoanManager.TakeLoan(firstResult.GameState, playerId, new Money(75), BorrowPurpose.RentPayment);
+        var firstResult = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(125),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
+        var secondResult = LoanManager.TakeLoan(
+            firstResult.GameState,
+            playerId,
+            new Money(75),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.Equal(new Money(200), secondResult.GameState.Players[0].LoanState?.TotalBorrowed);
         Assert.Equal(2, secondResult.GameState.Players[0].LoanState?.LoanTier);
@@ -93,7 +217,12 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(amount), BorrowPurpose.RentPayment);
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(amount),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.False(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.InvalidAmount, result.ResultKind);
@@ -108,7 +237,12 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, isEliminated: true));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), BorrowPurpose.RentPayment);
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            DefaultLoanConfig);
 
         Assert.False(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.PlayerEliminated, result.ResultKind);
@@ -128,7 +262,7 @@ public class LoanManagerTests
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose);
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose, DefaultLoanConfig);
 
         Assert.True(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.Accepted, result.ResultKind);
@@ -141,7 +275,7 @@ public class LoanManagerTests
     [InlineData(BorrowPurpose.LoanInterest)]
     [InlineData(BorrowPurpose.LoanPrincipalRepayment)]
     [InlineData(BorrowPurpose.ExistingLoanDebt)]
-    public void TakeLoan_BlocksLoanPaymentBorrowPurposes(BorrowPurpose purpose)
+    public void TakeLoan_BlocksLoanPaymentBorrowPurposesWhenConfigDisallowsThem(BorrowPurpose purpose)
     {
         var playerId = new PlayerId("player_1");
         var loanState = new PlayerLoanState(
@@ -151,7 +285,7 @@ public class LoanManagerTests
             LoanTier: 2);
         var gameState = CreateGameState(CreatePlayer("player_1", money: 50, loanState: loanState));
 
-        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose);
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose, DefaultLoanConfig);
 
         Assert.False(result.LoanTaken);
         Assert.Equal(LoanTakeResultKind.DisallowedBorrowPurpose, result.ResultKind);
@@ -161,13 +295,39 @@ public class LoanManagerTests
         Assert.Same(loanState, result.GameState.Players[0].LoanState);
     }
 
+    [Theory]
+    [InlineData(BorrowPurpose.LoanInterest)]
+    [InlineData(BorrowPurpose.LoanPrincipalRepayment)]
+    [InlineData(BorrowPurpose.ExistingLoanDebt)]
+    public void TakeLoan_AllowsLoanPaymentBorrowPurposesWhenConfigAllowsThem(BorrowPurpose purpose)
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: new Money(60),
+            LoanTier: 2);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 50, loanState: loanState));
+        var config = DefaultLoanConfig with { CanBorrowForLoanPayments = true };
+
+        var result = LoanManager.TakeLoan(gameState, playerId, new Money(100), purpose, config);
+
+        Assert.True(result.LoanTaken);
+        Assert.Equal(LoanTakeResultKind.Accepted, result.ResultKind);
+        Assert.Equal(purpose, result.Purpose);
+        Assert.Equal(new Money(150), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(300), result.GameState.Players[0].LoanState?.TotalBorrowed);
+        Assert.Equal(50, result.GameState.Players[0].LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(3, result.GameState.Players[0].LoanState?.LoanTier);
+    }
+
     [Fact]
     public void StartTurnInterestCheck_WhenPlayerHasNoLoanDoesNotMutateState()
     {
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
 
-        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, DefaultLoanConfig);
 
         Assert.Same(gameState, result);
         Assert.Equal(new Money(1500), result.Players[0].Money);
@@ -185,7 +345,7 @@ public class LoanManagerTests
             LoanTier: 2);
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
 
-        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, DefaultLoanConfig);
 
         Assert.Equal(new Money(1440), result.Players[0].Money);
         Assert.Equal(new Money(60), result.Players[0].LoanState?.NextTurnInterestDue);
@@ -204,7 +364,7 @@ public class LoanManagerTests
             LoanTier: 1);
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
 
-        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, DefaultLoanConfig);
 
         Assert.Equal(new Money(1480), result.Players[0].Money);
         Assert.Equal(new Money(20), result.Players[0].LoanState?.NextTurnInterestDue);
@@ -221,7 +381,7 @@ public class LoanManagerTests
             LoanTier: 1);
         var gameState = CreateGameState(CreatePlayer("player_1", money: 5, loanState: loanState));
 
-        var result = LoanManager.StartTurnInterestCheck(gameState, playerId);
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, DefaultLoanConfig);
 
         Assert.Equal(new Money(-15), result.Players[0].Money);
         Assert.True(result.Players[0].IsBankrupt);
