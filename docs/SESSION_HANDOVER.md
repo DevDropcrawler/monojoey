@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.22C.6 Card System Hooks
-- Completion status: Chunk 5.22C.6 complete; card tile execution now gates draws/effects per deck using `GameState.Rules.Cards.DecksEnabled`. Default rules still enable `chance` and `table`, so default card behavior is unchanged. Disabled deck tiles execute as existing `no_action` results and mark the tile executed without deck lookup, draw, effect execution, discard, or player/deck mutation.
+- Chunk: 5.22C.7 Win Condition Rules Hook
+- Completion status: Chunk 5.22C.7 complete; match completion now routes through `GameState.Rules.Win.ConditionType` and executes the existing active-player completion logic only for `lastPlayerStanding`. Default behavior is unchanged: exactly one active player completes the game, zero or multiple active players do not, completed states remain idempotent, and active auctions are cleared only when completion occurs.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `3b4b5ea`
 - Last commit before this chunk: `3b4b5ea`
@@ -19,17 +19,17 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.22C.6 - Card System Hooks.
+Phase 5, Chunk 5.22C.7 - Win Condition Rules Hook.
 
 Completed:
 
-- Added `CardRules.IsDeckEnabled(string deckId)` as the only card-rules helper for deck enablement.
-- Wired `LobbyMessageHandler.ExecuteCardTile` to skip disabled decks immediately after tile-type deck ID resolution and before runtime deck-state lookup.
-- Disabled deck execution persists only `HasExecutedTileThisTurn = true`, returns the existing `execute_tile_result` shape with `executionKind = "no_action"`, and keeps `card`, `auction`, and `rent` null.
-- Preserved default behavior for enabled `chance` and `table` decks, including existing missing-deck, empty-deck, invalid-card, and unsupported-card-action error paths.
-- Added realtime tests for chance-disabled, table-disabled, empty-deck-list, disabled-missing-state, end-turn allowance, and no player/deck mutation on disabled deck tiles.
-- Added rules resolver tests for empty `decksEnabled`, default enabled deck IDs, and exact `IsDeckEnabled` matching.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 542 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Added `WinRules.LastPlayerStandingConditionType` as the shared literal for the currently executable win condition.
+- Updated `GameCompletionManager.CompleteIfWinner` to read `persistedGameState.Rules.Win.ConditionType` before evaluating active-player completion.
+- Preserved the exact existing `lastPlayerStanding` behavior: active means not bankrupt and not eliminated; exactly one active player completes with `GameStatus.Completed`, `GamePhase.Completed`, `WinnerPlayerId`, `EndedAtUtc`, and `ActiveAuctionState = null`.
+- Preserved no-op behavior for zero active players, multiple active players, and already completed states.
+- Unsupported/future win condition values do not complete a game, matching the current resolver posture where only `lastPlayerStanding` is accepted into normal game rules.
+- Added/renamed completion-manager tests for `lastPlayerStanding`, unsupported future conditions, idempotence, zero/multiple active player no-ops, winner assignment, and active auction preservation/clearing.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 544 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -53,9 +53,8 @@ Not included by explicit user scope:
 ## Files Changed In This Chunk
 
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameCompletionManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -136,7 +135,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 542 passed, 0 failed, 0 skipped.
+  - Output summary: 544 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -233,7 +232,9 @@ Not included by explicit user scope:
 - Reconnect does not create players, duplicate engine players, restart turns, change phases, mutate `GameState`, replay broadcasts, allocate event sequences, or expose connection IDs in the snapshot.
 - Reconnect only works while this server process still has the session in memory. There is no auth, account, token, reconnect secret, persistence, or missed-event replay yet.
 - Clients must hydrate from the returned reconnect snapshot rather than applying local assumptions about missed events.
-- Match completion is based only on persisted action state: active player means not bankrupt and not eliminated.
+- Match completion reads `GameState.Rules.Win.ConditionType`; only `lastPlayerStanding` currently executes completion behavior.
+- For `lastPlayerStanding`, match completion is based only on persisted action state: active player means not bankrupt and not eliminated.
+- Unsupported/future win condition values remain schema-only and do not complete a game through `GameCompletionManager`.
 - A terminal action emits the normal action event at sequence `N` and `game_completed` at sequence `N + 1`; completed state and `LastEventSequence = N + 1` are committed atomically.
 - Completed games keep `GameSessionStatus.InGame`; only `GameState.Status` and `GameState.Phase` move to completed.
 - Completed gameplay mutations reject with `game_already_completed` before mutation and without sequence allocation.
@@ -406,4 +407,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.22C.6 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.22C.7 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

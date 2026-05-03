@@ -161,6 +161,8 @@ public sealed record LoanRules(
 public sealed record WinRules(
     string ConditionType)
 {
+    public const string LastPlayerStandingConditionType = "lastPlayerStanding";
+
     public WinRules DeepCopy()
     {
         return new WinRules(ConditionType);

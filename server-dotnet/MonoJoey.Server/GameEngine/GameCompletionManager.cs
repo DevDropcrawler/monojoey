@@ -11,6 +11,11 @@ public static class GameCompletionManager
             return persistedGameState;
         }
 
+        if (persistedGameState.Rules.Win.ConditionType != WinRules.LastPlayerStandingConditionType)
+        {
+            return persistedGameState;
+        }
+
         var activePlayers = persistedGameState.Players
             .Where(player => !player.IsBankrupt && !player.IsEliminated)
             .ToArray();
