@@ -16,5 +16,7 @@ public sealed record Player(
 {
     public PlayerLoanState? LoanState { get; init; }
 
+    public IReadOnlyList<PlayerStatusEffect> StatusEffects { get; init; } = Array.Empty<PlayerStatusEffect>();
+
     public bool IsLockedUp { get; init; }
 }

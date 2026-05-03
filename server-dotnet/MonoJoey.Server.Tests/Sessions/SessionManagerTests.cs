@@ -618,6 +618,7 @@ public class SessionManagerTests
         Assert.Equal(new Money(1500), player.Money);
         Assert.Empty(player.OwnedPropertyIds);
         Assert.Empty(player.HeldCardIds);
+        Assert.Empty(player.StatusEffects);
         Assert.False(player.IsBankrupt);
         Assert.False(player.IsEliminated);
     }

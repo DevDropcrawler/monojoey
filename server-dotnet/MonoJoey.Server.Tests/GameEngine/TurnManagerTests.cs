@@ -263,6 +263,37 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void AdvanceToNextTurn_IgnoresNoOpStatusEffectsForEligibility()
+    {
+        var gameState = CreateGameState("player_1", "player_2", "player_3") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("start")),
+                CreatePlayer("player_2", new TileId("start")) with
+                {
+                    StatusEffects = new[]
+                    {
+                        new PlayerStatusEffect(
+                            "status_instance_1",
+                            PlayerStatusEffectKind.NoOp,
+                            new PlayerStatusEffectData("status_noop_foundation")),
+                    },
+                },
+                CreatePlayer("player_3", new TileId("lockup_01"), isLockedUp: true),
+            },
+        };
+
+        var next = TurnManager.AdvanceToNextTurn(gameState);
+
+        Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
+        Assert.Single(next.Players[1].StatusEffects);
+        Assert.True(next.Players[2].IsLockedUp);
+    }
+
+    [Fact]
     public void AdvanceToNextTurn_WhenAllActivePlayersAreLockedSelectsLockedActivePlayerWithoutUnlocking()
     {
         var gameState = CreateGameState("player_1", "player_2", "player_3") with

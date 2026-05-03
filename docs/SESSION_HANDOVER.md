@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.22C.7 Win Condition Rules Hook
-- Completion status: Chunk 5.22C.7 complete; match completion now routes through `GameState.Rules.Win.ConditionType` and executes the existing active-player completion logic only for `lastPlayerStanding`. Default behavior is unchanged: exactly one active player completes the game, zero or multiple active players do not, completed states remain idempotent, and active auctions are cleared only when completion occurs.
+- Chunk: 5.23A Status Effect Foundation
+- Completion status: Chunk 5.23A complete; player status effects now have inert server model/storage support and are included in authoritative snapshot/reconnect player payloads. No dice, movement, card, turn, auction, loan, lockup, Slimer, or win-condition behavior was changed.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `3b4b5ea`
 - Last commit before this chunk: `3b4b5ea`
@@ -19,17 +19,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.22C.7 - Win Condition Rules Hook.
+Phase 5, Chunk 5.23A - Status Effect Foundation.
 
 Completed:
 
-- Added `WinRules.LastPlayerStandingConditionType` as the shared literal for the currently executable win condition.
-- Updated `GameCompletionManager.CompleteIfWinner` to read `persistedGameState.Rules.Win.ConditionType` before evaluating active-player completion.
-- Preserved the exact existing `lastPlayerStanding` behavior: active means not bankrupt and not eliminated; exactly one active player completes with `GameStatus.Completed`, `GamePhase.Completed`, `WinnerPlayerId`, `EndedAtUtc`, and `ActiveAuctionState = null`.
-- Preserved no-op behavior for zero active players, multiple active players, and already completed states.
-- Unsupported/future win condition values do not complete a game, matching the current resolver posture where only `lastPlayerStanding` is accepted into normal game rules.
-- Added/renamed completion-manager tests for `lastPlayerStanding`, unsupported future conditions, idempotence, zero/multiple active player no-ops, winner assignment, and active auction preservation/clearing.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 544 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Added inert status model records under `GameEngine`: `PlayerStatusEffectKind`, `PlayerStatusEffect`, and `PlayerStatusEffectData`.
+- Added `Player.StatusEffects` as an empty-by-default read-only list property.
+- Added `statusEffects` to `snapshot_result` player payloads and therefore to `reconnect_result.snapshot.players`.
+- Preserved empty status collections as `[]`, not `null`.
+- Preserved stored status list order during snapshot projection.
+- Added snapshot DTOs for status effects using primitive wire fields only: nullable `instanceId`, string `kind`, and data fields `definitionId`, `stackCount`, nullable `remainingTurns`, and nullable `sourceId`.
+- Added tests for started-player defaults, empty snapshot arrays, manually stored no-op status projection, reconnect hydration, status JSON round-trip, turn eligibility guard behavior, and completion-manager no-op behavior.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 548 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -48,13 +49,21 @@ Not included by explicit user scope:
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
 - Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
-- Slimer, status effects, Unity client code, property damage, Earthquake, or broad engine refactors.
+- Slimer behavior, status application, status aging/removal, stacking semantics, status mutation events, Unity client code, property damage, Earthquake, or broad engine refactors.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameCompletionManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffect.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectData.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectKind.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
+- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -135,7 +144,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 544 passed, 0 failed, 0 skipped.
+  - Output summary: 548 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -221,7 +230,7 @@ Not included by explicit user scope:
 - `loan_result` is the direct sender response and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player. Accepted loans emit `loan_taken`.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
 - `get_snapshot` requires a bound in-game session/player connection and returns `invalid_payload`, `invalid_session`, `player_switch_rejected`, `invalid_session_state`, or `player_not_found` before producing a snapshot.
-- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` session status, `gameStatus`, phase, nullable winner, start/end timestamps, turn flags directly from `GameState`, players, board, nullable active auction, card decks, and loan shark config.
+- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` session status, `gameStatus`, phase, nullable winner, start/end timestamps, turn flags directly from `GameState`, players including inert `statusEffects`, board, nullable active auction, card decks, and loan shark config.
 - Completed snapshots have `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and no active auction.
 - Snapshot projection is built only from persisted `GameState` while holding the realtime handler `sessionLock`; it does not call mutating managers and does not call `SessionManager.UpdateGameState`.
 - Snapshot DTOs fully copy scalar values and arrays; domain records, `GameSession.Players`, WebSocket connection IDs, lobby connection metadata, transport IDs, auth tokens, and reconnect secrets are not exposed.

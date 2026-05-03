@@ -351,10 +351,22 @@ public sealed record SnapshotPlayerPayload(
     string CurrentTileId,
     IReadOnlyList<string> OwnedPropertyIds,
     IReadOnlyList<string> HeldCardIds,
+    IReadOnlyList<SnapshotPlayerStatusEffectPayload> StatusEffects,
     SnapshotPlayerLoanPayload Loan,
     bool IsBankrupt,
     bool IsEliminated,
     bool IsLockedUp);
+
+public sealed record SnapshotPlayerStatusEffectPayload(
+    string? InstanceId,
+    string Kind,
+    SnapshotPlayerStatusEffectDataPayload Data);
+
+public sealed record SnapshotPlayerStatusEffectDataPayload(
+    string DefinitionId,
+    int StackCount,
+    int? RemainingTurns,
+    string? SourceId);
 
 public sealed record SnapshotPlayerLoanPayload(
     int TotalBorrowed,

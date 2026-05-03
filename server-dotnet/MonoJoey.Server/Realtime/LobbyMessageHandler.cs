@@ -2290,10 +2290,25 @@ public sealed class LobbyMessageHandler
                 .Select(cardId => cardId.Value)
                 .OrderBy(cardId => cardId, StringComparer.Ordinal)
                 .ToArray(),
+            player.StatusEffects
+                .Select(CreateSnapshotStatusEffect)
+                .ToArray(),
             CreateSnapshotLoan(player.LoanState),
             player.IsBankrupt,
             player.IsEliminated,
             player.IsLockedUp);
+    }
+
+    private static SnapshotPlayerStatusEffectPayload CreateSnapshotStatusEffect(PlayerStatusEffect statusEffect)
+    {
+        return new SnapshotPlayerStatusEffectPayload(
+            statusEffect.InstanceId,
+            FormatPlayerStatusEffectKind(statusEffect.Kind),
+            new SnapshotPlayerStatusEffectDataPayload(
+                statusEffect.Data.DefinitionId,
+                statusEffect.Data.StackCount,
+                statusEffect.Data.RemainingTurns,
+                statusEffect.Data.SourceId));
     }
 
     private static SnapshotPlayerLoanPayload CreateSnapshotLoan(PlayerLoanState? loanState)
@@ -3257,6 +3272,15 @@ public sealed class LobbyMessageHandler
             CardResolutionActionKind.GoToLockup => "go_to_lockup",
             CardResolutionActionKind.GetOutOfLockup => "get_out_of_lockup",
             _ => actionKind.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatPlayerStatusEffectKind(PlayerStatusEffectKind kind)
+    {
+        return kind switch
+        {
+            PlayerStatusEffectKind.NoOp => "no_op",
+            _ => kind.ToString().ToLowerInvariant(),
         };
     }
 

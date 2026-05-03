@@ -13,7 +13,7 @@ public class GameCompletionManagerTests
     public void CompleteIfWinner_LastPlayerStandingWithMultipleActivePlayersDoesNotComplete()
     {
         var gameState = CreateGameState(
-            CreatePlayer("player_1"),
+            CreatePlayer("player_1", hasStatusEffect: true),
             CreatePlayer("player_2"));
 
         var result = GameCompletionManager.CompleteIfWinner(gameState, EndedAtUtc);
@@ -182,9 +182,10 @@ public class GameCompletionManagerTests
     private static Player CreatePlayer(
         string playerId,
         bool isBankrupt = false,
-        bool isEliminated = false)
+        bool isEliminated = false,
+        bool hasStatusEffect = false)
     {
-        return new Player(
+        var player = new Player(
             new PlayerId(playerId),
             playerId,
             $"token_{playerId}",
@@ -195,5 +196,18 @@ public class GameCompletionManagerTests
             new HashSet<CardId>(),
             isBankrupt,
             isEliminated);
+
+        return hasStatusEffect
+            ? player with
+            {
+                StatusEffects = new[]
+                {
+                    new PlayerStatusEffect(
+                        "status_instance_1",
+                        PlayerStatusEffectKind.NoOp,
+                        new PlayerStatusEffectData("status_noop_foundation")),
+                },
+            }
+            : player;
     }
 }

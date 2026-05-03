@@ -372,6 +372,7 @@ Accepted snapshots return one direct `snapshot_result` response:
         "currentTileId": "property_01",
         "ownedPropertyIds": ["property_02"],
         "heldCardIds": [],
+        "statusEffects": [],
         "loan": {
           "totalBorrowed": 0,
           "currentInterestRatePercent": 0,
@@ -418,7 +419,7 @@ Accepted snapshots return one direct `snapshot_result` response:
 }
 ```
 
-Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
 
 ### Game completed
 

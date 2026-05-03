@@ -3025,6 +3025,17 @@ public class LobbyMessageHandlerTests
                                 new("Z_HELD"),
                                 new("A_HELD"),
                             },
+                            StatusEffects = new[]
+                            {
+                                new PlayerStatusEffect(
+                                    "status_instance_1",
+                                    PlayerStatusEffectKind.NoOp,
+                                    new PlayerStatusEffectData(
+                                        "status_noop_foundation",
+                                        StackCount: 2,
+                                        RemainingTurns: 3,
+                                        SourceId: "source_card_1")),
+                            },
                             LoanState = new PlayerLoanState(
                                 new Money(300),
                                 CurrentInterestRatePercent: 15,
@@ -3078,6 +3089,8 @@ public class LobbyMessageHandlerTests
         var turn = payload.GetProperty("turn");
         var players = payload.GetProperty("players").EnumerateArray().ToArray();
         var firstPlayer = players[0];
+        var statusEffect = Assert.Single(firstPlayer.GetProperty("statusEffects").EnumerateArray());
+        var statusData = statusEffect.GetProperty("data");
         var propertyTile = payload
             .GetProperty("board")
             .GetProperty("tiles")
@@ -3103,6 +3116,12 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { "player_1", "player_2" }, players.Select(player => player.GetProperty("playerId").GetString()).ToArray());
         Assert.Equal(new[] { "property_01", "property_02" }, firstPlayer.GetProperty("ownedPropertyIds").EnumerateArray().Select(id => id.GetString()).ToArray());
         Assert.Equal(new[] { "A_HELD", "Z_HELD" }, firstPlayer.GetProperty("heldCardIds").EnumerateArray().Select(id => id.GetString()).ToArray());
+        Assert.Equal("status_instance_1", statusEffect.GetProperty("instanceId").GetString());
+        Assert.Equal("no_op", statusEffect.GetProperty("kind").GetString());
+        Assert.Equal("status_noop_foundation", statusData.GetProperty("definitionId").GetString());
+        Assert.Equal(2, statusData.GetProperty("stackCount").GetInt32());
+        Assert.Equal(3, statusData.GetProperty("remainingTurns").GetInt32());
+        Assert.Equal("source_card_1", statusData.GetProperty("sourceId").GetString());
         Assert.Equal(1234, firstPlayer.GetProperty("money").GetInt32());
         Assert.True(firstPlayer.GetProperty("isLockedUp").GetBoolean());
         Assert.Equal(300, firstPlayer.GetProperty("loan").GetProperty("totalBorrowed").GetInt32());
@@ -3120,6 +3139,94 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
         Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
         Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public void GetSnapshot_ProjectsEmptyStatusEffectsAsArray()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var players = payload.GetProperty("players").EnumerateArray().ToArray();
+
+        Assert.Equal(JsonValueKind.Array, players[0].GetProperty("statusEffects").ValueKind);
+        Assert.Empty(players[0].GetProperty("statusEffects").EnumerateArray());
+        Assert.Empty(sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].StatusEffects);
+    }
+
+    [Fact]
+    public void ReconnectSession_ReturnsPersistedStatusEffectsInSnapshot()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                StatusEffects = new[]
+                {
+                    new PlayerStatusEffect(
+                        "status_instance_1",
+                        PlayerStatusEffectKind.NoOp,
+                        new PlayerStatusEffectData(
+                            "status_noop_foundation",
+                            StackCount: 1,
+                            RemainingTurns: null,
+                            SourceId: "source_card_1")),
+                },
+            });
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+        var player = payload
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(snapshotPlayer => snapshotPlayer.GetProperty("playerId").GetString() == "player_1");
+        var statusEffect = Assert.Single(player.GetProperty("statusEffects").EnumerateArray());
+        var statusData = statusEffect.GetProperty("data");
+
+        Assert.Equal("status_instance_1", statusEffect.GetProperty("instanceId").GetString());
+        Assert.Equal("no_op", statusEffect.GetProperty("kind").GetString());
+        Assert.Equal("status_noop_foundation", statusData.GetProperty("definitionId").GetString());
+        Assert.Equal(1, statusData.GetProperty("stackCount").GetInt32());
+        Assert.Equal(JsonValueKind.Null, statusData.GetProperty("remainingTurns").ValueKind);
+        Assert.Equal("source_card_1", statusData.GetProperty("sourceId").GetString());
+    }
+
+    [Fact]
+    public void StatusEffectPayload_JsonRoundTripPreservesPrimitiveFields()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var statusEffect = new SnapshotPlayerStatusEffectPayload(
+            "status_instance_1",
+            "no_op",
+            new SnapshotPlayerStatusEffectDataPayload(
+                "status_noop_foundation",
+                StackCount: 2,
+                RemainingTurns: 3,
+                SourceId: "source_card_1"));
+
+        var json = JsonSerializer.Serialize(statusEffect, jsonOptions);
+        var roundTrip = JsonSerializer.Deserialize<SnapshotPlayerStatusEffectPayload>(json, jsonOptions);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(statusEffect.InstanceId, roundTrip.InstanceId);
+        Assert.Equal(statusEffect.Kind, roundTrip.Kind);
+        Assert.Equal(statusEffect.Data.DefinitionId, roundTrip.Data.DefinitionId);
+        Assert.Equal(statusEffect.Data.StackCount, roundTrip.Data.StackCount);
+        Assert.Equal(statusEffect.Data.RemainingTurns, roundTrip.Data.RemainingTurns);
+        Assert.Equal(statusEffect.Data.SourceId, roundTrip.Data.SourceId);
     }
 
     [Fact]
