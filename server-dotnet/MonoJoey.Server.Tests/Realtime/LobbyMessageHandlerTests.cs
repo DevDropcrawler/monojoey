@@ -497,6 +497,133 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void RollDice_SlimedPlayerUsesFirstDieForMovementAndKeepsSlimer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(5, 6));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = ApplySlimerToEnginePlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var dice = payload.GetProperty("dice").EnumerateArray().Select(value => value.GetInt32()).ToArray();
+        var movement = payload.GetProperty("movement");
+        var updatedPlayer = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0];
+
+        Assert.Equal(new[] { 5, 6 }, dice);
+        Assert.Equal(11, payload.GetProperty("total").GetInt32());
+        Assert.False(payload.GetProperty("isDouble").GetBoolean());
+        Assert.Equal("transport_01", payload.GetProperty("newPosition").GetString());
+        Assert.Equal("transport_01", movement.GetProperty("toTileId").GetString());
+        Assert.Equal(5, movement.GetProperty("stepCount").GetInt32());
+        Assert.True(PlayerStatusEffectManager.HasSlimer(updatedPlayer));
+    }
+
+    [Fact]
+    public void RollDice_SlimedPlayerRollingFirstDieSixMovesSixAndLosesSlimer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(6, 1));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = ApplySlimerToEnginePlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var movement = payload.GetProperty("movement");
+        var updatedPlayer = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0];
+
+        Assert.Equal(7, payload.GetProperty("total").GetInt32());
+        Assert.Equal("free_space_01", payload.GetProperty("newPosition").GetString());
+        Assert.Equal(6, movement.GetProperty("stepCount").GetInt32());
+        Assert.False(PlayerStatusEffectManager.HasSlimer(updatedPlayer));
+    }
+
+    [Fact]
+    public void RollDice_SlimedDoublesUseFirstDieForMovementAndStillAllowOnlyOneRoll()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = ApplySlimerToEnginePlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var repeatRoll = handler.HandleTextMessageResult(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var payload = AssertResponseType(response, "roll_result");
+        var movement = payload.GetProperty("movement");
+
+        Assert.True(payload.GetProperty("isDouble").GetBoolean());
+        Assert.Equal(6, payload.GetProperty("total").GetInt32());
+        Assert.Equal("property_02", payload.GetProperty("newPosition").GetString());
+        Assert.Equal(3, movement.GetProperty("stepCount").GetInt32());
+        Assert.Equal("error", repeatRoll.DirectResponse.Type);
+        Assert.Null(repeatRoll.Broadcast);
+        var repeatPayload = Assert.IsType<LobbyErrorPayload>(repeatRoll.DirectResponse.Payload);
+        Assert.Equal("invalid_session_state", repeatPayload.Code);
+    }
+
+    [Fact]
+    public void RollDice_SlimedStatusIsProjectedBeforeRollAndRemovedFromSnapshotsAfterSix()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(6, 1));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = ApplySlimerToEnginePlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var beforeSnapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var beforePlayer = AssertResponseType(beforeSnapshotResponse, "snapshot_result")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        var beforeStatus = Assert.Single(beforePlayer.GetProperty("statusEffects").EnumerateArray());
+        var beforeStatusData = beforeStatus.GetProperty("data");
+
+        _ = handler.HandleTextMessage(
+            RollDiceMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        using var afterSnapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        using var afterReconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_1"));
+        var afterSnapshotPlayer = AssertResponseType(afterSnapshotResponse, "snapshot_result")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        var afterReconnectPlayer = AssertResponseType(afterReconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+
+        Assert.Equal("slimer:player_1", beforeStatus.GetProperty("instanceId").GetString());
+        Assert.Equal("slimer", beforeStatus.GetProperty("kind").GetString());
+        Assert.Equal("slimer", beforeStatusData.GetProperty("definitionId").GetString());
+        Assert.Equal(1, beforeStatusData.GetProperty("stackCount").GetInt32());
+        Assert.Equal(JsonValueKind.Null, beforeStatusData.GetProperty("remainingTurns").ValueKind);
+        Assert.Empty(afterSnapshotPlayer.GetProperty("statusEffects").EnumerateArray());
+        Assert.Empty(afterReconnectPlayer.GetProperty("statusEffects").EnumerateArray());
+    }
+
+    [Fact]
     public void SuccessfulBroadcastsIncrementSequenceAndRejectedRequestsDoNotConsumeSequence()
     {
         var sessionManager = new SessionManager();
@@ -3262,6 +3389,37 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ReconnectSession_ReturnsActiveSlimerStatusEffectInSnapshot()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = ApplySlimerToEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            sourceId: "source_card_1");
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "reconnect_result");
+        var player = payload
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(snapshotPlayer => snapshotPlayer.GetProperty("playerId").GetString() == "player_1");
+        var statusEffect = Assert.Single(player.GetProperty("statusEffects").EnumerateArray());
+        var statusData = statusEffect.GetProperty("data");
+
+        Assert.Equal("slimer:player_1", statusEffect.GetProperty("instanceId").GetString());
+        Assert.Equal("slimer", statusEffect.GetProperty("kind").GetString());
+        Assert.Equal("slimer", statusData.GetProperty("definitionId").GetString());
+        Assert.Equal(1, statusData.GetProperty("stackCount").GetInt32());
+        Assert.Equal(JsonValueKind.Null, statusData.GetProperty("remainingTurns").ValueKind);
+        Assert.Equal("source_card_1", statusData.GetProperty("sourceId").GetString());
+    }
+
+    [Fact]
     public void PropertyStatePayload_JsonRoundTripPreservesPrimitiveFields()
     {
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -4812,6 +4970,18 @@ public class LobbyMessageHandlerTests
         return sessionManager.UpdateGameState(
             sessionId,
             session.GameState with { Players = updatedPlayers });
+    }
+
+    private static GameSession ApplySlimerToEnginePlayer(
+        SessionManager sessionManager,
+        string sessionId,
+        string playerId,
+        string? sourceId = null)
+    {
+        return UpdateGameState(
+            sessionManager,
+            sessionId,
+            gameState => PlayerStatusEffectManager.ApplySlimer(gameState, new PlayerId(playerId), sourceId));
     }
 
     private static GameSession UpdateGameState(

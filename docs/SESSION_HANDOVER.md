@@ -5,11 +5,11 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.23A Status Effect Foundation
-- Completion status: Chunk 5.23A complete; player status effects now have inert server model/storage support and are included in authoritative snapshot/reconnect player payloads. No dice, movement, card, turn, auction, loan, lockup, Slimer, or win-condition behavior was changed.
+- Chunk: 5.24C Slimer Status Effect
+- Completion status: Chunk 5.24C complete; Slimer is now a deterministic player status effect that makes affected players move using only the first physical die, clears after a first die of 6, and remains visible through existing snapshot/reconnect status projection. Dice contracts and roll payload shapes were not changed.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `3b4b5ea`
-- Last commit before this chunk: `3b4b5ea`
+- Previous commit: `ed1b1d0`
+- Last commit before this chunk: `ed1b1d0`
 - Last commit after this chunk: not committed yet
 - Date/time: 2026-05-03
 
@@ -19,18 +19,21 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.23A - Status Effect Foundation.
+Phase 5, Chunk 5.24C - Slimer Status Effect.
 
 Completed:
 
-- Added inert status model records under `GameEngine`: `PlayerStatusEffectKind`, `PlayerStatusEffect`, and `PlayerStatusEffectData`.
-- Added `Player.StatusEffects` as an empty-by-default read-only list property.
-- Added `statusEffects` to `snapshot_result` player payloads and therefore to `reconnect_result.snapshot.players`.
-- Preserved empty status collections as `[]`, not `null`.
-- Preserved stored status list order during snapshot projection.
-- Added snapshot DTOs for status effects using primitive wire fields only: nullable `instanceId`, string `kind`, and data fields `definitionId`, `stackCount`, nullable `remainingTurns`, and nullable `sourceId`.
-- Added tests for started-player defaults, empty snapshot arrays, manually stored no-op status projection, reconnect hydration, status JSON round-trip, turn eligibility guard behavior, and completion-manager no-op behavior.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 548 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Added `PlayerStatusEffectKind.Slimer` and explicit `"slimer"` snapshot/reconnect projection.
+- Added `PlayerStatusEffectManager` with deterministic Slimer apply/remove helpers:
+  `DefinitionId = "slimer"`, `InstanceId = "slimer:{playerId}"`, `StackCount = 1`, and nullable `RemainingTurns`.
+- Kept Slimer application idempotent and non-stacking.
+- Kept Slimer removal scoped to Slimer entries only while preserving other status effects in order.
+- Updated `roll_dice` so slimed players still roll two physical dice through the existing `DiceService`, but movement uses `FirstDie` instead of `Total`.
+- Kept pass-start reward behavior unchanged after Slimer movement.
+- Removed Slimer only after movement/reward succeeds and only when `FirstDie == 6`.
+- Preserved existing `roll_result` / `dice_rolled` payload shape: `dice`, `total`, and `isDouble` still report the two physical dice.
+- Added game-engine status manager tests and realtime roll/snapshot/reconnect coverage for Slimer movement, removal, doubles, non-stacking status behavior, and the existing one-roll-per-turn guard.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 563 passed, 0 failed, 0 skipped. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -49,21 +52,15 @@ Not included by explicit user scope:
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
 - Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
-- Slimer behavior, status application, status aging/removal, stacking semantics, status mutation events, Unity client code, property damage, Earthquake, or broad engine refactors.
+- Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, property damage, Earthquake, or broad engine refactors.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/Player.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffect.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectData.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectKind.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerStatusEffectManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameCompletionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlayerStatusEffectManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
-- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -144,7 +141,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 548 passed, 0 failed, 0 skipped.
+  - Output summary: 563 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -182,8 +179,8 @@ Not included by explicit user scope:
 - `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
 - Started engine players use selected lobby profiles when present; unset profile fields still fall back to deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
-- `roll_dice` rolls dice and moves the current player only.
-- `roll_result` contains the rolling `playerId`, two dice values, `total`, `isDouble`, landing tile ID as `newPosition`, `passedStart`, `hasRolledThisTurn`, and optional helper `movement` / `moneyDeltas`.
+- `roll_dice` rolls dice and moves the current player only; players with Slimer move by `FirstDie` while non-slimed players move by the two-dice total.
+- `roll_result` contains the rolling `playerId`, two dice values, physical two-dice `total`, physical `isDouble`, landing tile ID as `newPosition`, `passedStart`, `hasRolledThisTurn`, and optional helper `movement` / `moneyDeltas`.
 - `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, or change `GamePhase`; successful rolls emit `dice_rolled`.
 - A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
 - `resolve_tile` passively classifies the current player's current tile only after `HasRolledThisTurn` is true.
@@ -416,4 +413,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.22C.7 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.24C is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

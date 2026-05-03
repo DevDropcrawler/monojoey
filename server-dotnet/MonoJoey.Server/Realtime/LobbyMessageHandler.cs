@@ -269,16 +269,21 @@ public sealed class LobbyMessageHandler
                     "Player has already rolled this turn.");
             }
 
+            var isSlimed = PlayerStatusEffectManager.HasSlimer(player);
             var dice = diceService.RollDice(session.GameState.Rules.Dice.SidesPerDie);
+            var movementSteps = isSlimed ? dice.FirstDie : dice.Total;
             var movementResult = MovementManager.MovePlayer(
                 session.GameState,
                 player.PlayerId,
-                dice.Total);
+                movementSteps);
             var passStartReward = new Money(session.GameState.Rules.Economy.PassStartReward);
             var rewardedGameState = movementResult.PassedStart
                 ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, passStartReward)
                 : movementResult.GameState;
-            var updatedGameState = rewardedGameState with
+            var statusGameState = isSlimed && dice.FirstDie == 6
+                ? PlayerStatusEffectManager.RemoveSlimer(rewardedGameState, player.PlayerId)
+                : rewardedGameState;
+            var updatedGameState = statusGameState with
             {
                 HasRolledThisTurn = true,
                 HasResolvedTileThisTurn = false,
@@ -3291,6 +3296,7 @@ public sealed class LobbyMessageHandler
         return kind switch
         {
             PlayerStatusEffectKind.NoOp => "no_op",
+            PlayerStatusEffectKind.Slimer => "slimer",
             _ => kind.ToString().ToLowerInvariant(),
         };
     }
