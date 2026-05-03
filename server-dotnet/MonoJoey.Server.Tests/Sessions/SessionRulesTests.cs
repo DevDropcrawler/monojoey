@@ -17,6 +17,10 @@ public class SessionRulesTests
         Assert.Equal("monojoey_default", session.DraftRules.PresetId);
         Assert.False(session.DraftRules.IsCustom);
         Assert.Equal(9, session.DraftRules.Auction.InitialTimerSeconds);
+        Assert.True(session.DraftRules.Jail.Enabled);
+        Assert.True(session.DraftRules.Jail.EscapeCardsEnabled);
+        Assert.Equal(50, session.DraftRules.Jail.FineAmount);
+        Assert.Equal(3, session.DraftRules.Jail.MaxTurns);
         Assert.False(session.DraftRules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(3, session.DraftRules.Dice.MaxConsecutiveDoublesBeforeLockup);
     }
@@ -34,6 +38,12 @@ public class SessionRulesTests
             Auction = GameRulesPresets.MonoJoeyDefault.Auction with
             {
                 InitialTimerSeconds = 12,
+            },
+            Jail = GameRulesPresets.MonoJoeyDefault.Jail with
+            {
+                EscapeCardsEnabled = false,
+                FineAmount = 75,
+                MaxTurns = 4,
             },
             Dice = GameRulesPresets.MonoJoeyDefault.Dice with
             {
@@ -57,6 +67,9 @@ public class SessionRulesTests
         Assert.NotSame(startedSession.DraftRules.Win, startedSession.GameState.Rules.Win);
         Assert.NotSame(startedSession.DraftRules.Future, startedSession.GameState.Rules.Future);
         Assert.Equal(12, startedSession.GameState.Rules.Auction.InitialTimerSeconds);
+        Assert.False(startedSession.GameState.Rules.Jail.EscapeCardsEnabled);
+        Assert.Equal(75, startedSession.GameState.Rules.Jail.FineAmount);
+        Assert.Equal(4, startedSession.GameState.Rules.Jail.MaxTurns);
         Assert.True(startedSession.GameState.Rules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(2, startedSession.GameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
     }
@@ -81,6 +94,10 @@ public class SessionRulesTests
         Assert.NotSame(rules.Win, copy.Win);
         Assert.NotSame(rules.Future, copy.Future);
         Assert.NotSame(firstDeckRead, secondDeckRead);
+        Assert.True(copy.Jail.Enabled);
+        Assert.True(copy.Jail.EscapeCardsEnabled);
+        Assert.Equal(50, copy.Jail.FineAmount);
+        Assert.Equal(3, copy.Jail.MaxTurns);
 
         var mutableDeckRead = Assert.IsType<string[]>(firstDeckRead);
         mutableDeckRead[0] = "mutated";

@@ -29,6 +29,8 @@ public class GameRulesResolverTests
         Assert.Equal(0, rules.Auction.StartingBid);
         Assert.True(rules.Jail.Enabled);
         Assert.True(rules.Jail.EscapeCardsEnabled);
+        Assert.Equal(50, rules.Jail.FineAmount);
+        Assert.Equal(3, rules.Jail.MaxTurns);
         Assert.Equal(2, rules.Dice.DiceCount);
         Assert.Equal(6, rules.Dice.SidesPerDie);
         Assert.False(rules.Dice.DoublesExtraTurnEnabled);
@@ -85,6 +87,28 @@ public class GameRulesResolverTests
     }
 
     [Fact]
+    public void JailPayload_ResolvesCustomSettings()
+    {
+        using var document = JsonDocument.Parse(
+            @"{
+                ""jail"": {
+                    ""enabled"": false,
+                    ""escapeCardsEnabled"": false,
+                    ""fineAmount"": 75,
+                    ""maxTurns"": 4
+                }
+            }");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Equal("custom", rules.PresetId);
+        Assert.False(rules.Jail.Enabled);
+        Assert.False(rules.Jail.EscapeCardsEnabled);
+        Assert.Equal(75, rules.Jail.FineAmount);
+        Assert.Equal(4, rules.Jail.MaxTurns);
+    }
+
+    [Fact]
     public void DicePayload_ResolvesCustomDoubleSettings()
     {
         using var document = JsonDocument.Parse(
@@ -124,6 +148,12 @@ public class GameRulesResolverTests
     [InlineData(@"{""auction"":{""minimumBidIncrement"":""5""}}")]
     [InlineData(@"{""economy"":{""incomeTaxAmount"":-1}}")]
     [InlineData(@"{""economy"":{""luxuryTaxAmount"":-1}}")]
+    [InlineData(@"{""jail"":{""enabled"":""yes""}}")]
+    [InlineData(@"{""jail"":{""escapeCardsEnabled"":""yes""}}")]
+    [InlineData(@"{""jail"":{""fineAmount"":-1}}")]
+    [InlineData(@"{""jail"":{""fineAmount"":50.5}}")]
+    [InlineData(@"{""jail"":{""maxTurns"":0}}")]
+    [InlineData(@"{""jail"":{""maxTurns"":3.5}}")]
     [InlineData(@"{""dice"":{""diceCount"":0}}")]
     [InlineData(@"{""dice"":{""sidesPerDie"":1}}")]
     [InlineData(@"{""dice"":{""doublesExtraTurnEnabled"":""yes""}}")]

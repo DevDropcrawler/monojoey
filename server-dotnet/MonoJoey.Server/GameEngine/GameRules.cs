@@ -72,13 +72,17 @@ public sealed record AuctionRules(
 
 public sealed record JailRules(
     bool Enabled,
-    bool EscapeCardsEnabled)
+    bool EscapeCardsEnabled,
+    int FineAmount,
+    int MaxTurns)
 {
     public JailRules DeepCopy()
     {
         return new JailRules(
             Enabled,
-            EscapeCardsEnabled);
+            EscapeCardsEnabled,
+            FineAmount,
+            MaxTurns);
     }
 }
 

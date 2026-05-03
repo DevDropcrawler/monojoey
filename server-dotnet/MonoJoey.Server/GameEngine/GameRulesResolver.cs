@@ -169,12 +169,20 @@ public static class GameRulesResolver
 
     private static JailRules MergeJail(JailRules baseline, JsonElement group)
     {
-        RequireObjectWithKnownFields(group, "jail", new[] { "enabled", "escapeCardsEnabled" });
+        RequireObjectWithKnownFields(group, "jail", new[]
+        {
+            "enabled",
+            "escapeCardsEnabled",
+            "fineAmount",
+            "maxTurns",
+        });
 
         return baseline with
         {
             Enabled = ReadOptionalBool(group, "enabled") ?? baseline.Enabled,
             EscapeCardsEnabled = ReadOptionalBool(group, "escapeCardsEnabled") ?? baseline.EscapeCardsEnabled,
+            FineAmount = ReadOptionalNonNegativeInt(group, "fineAmount") ?? baseline.FineAmount,
+            MaxTurns = ReadOptionalPositiveInt(group, "maxTurns") ?? baseline.MaxTurns,
         };
     }
 
@@ -416,6 +424,8 @@ public static class GameRulesResolver
             rules.Auction.BidResetTimerSeconds <= 0 ||
             rules.Auction.MinimumBidIncrement <= 0 ||
             rules.Auction.StartingBid < 0 ||
+            rules.Jail.FineAmount < 0 ||
+            rules.Jail.MaxTurns < 1 ||
             rules.Dice.DiceCount <= 0 ||
             rules.Dice.SidesPerDie < 2 ||
             rules.Dice.MaxConsecutiveDoublesBeforeLockup < 1 ||

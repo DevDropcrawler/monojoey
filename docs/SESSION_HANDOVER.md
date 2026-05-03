@@ -5,11 +5,11 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.22C.3 Hook Dice Sides Into Gameplay
-- Completion status: Chunk 5.22C.3 complete; gameplay still rolls exactly two dice, but the roll range now comes from `GameState.Rules.Dice.SidesPerDie`. Doubles rule knobs are present in rules/schema/snapshots only and are not wired into turn flow.
+- Chunk: 5.22C.4 Add Jail / The Joey Hole Rule Fields
+- Completion status: Chunk 5.22C.4 complete; `Rules.Jail` / `JailRules` / JSON `jail` now include schema/config fields for `fineAmount` and `maxTurns` alongside the existing booleans. The player-facing name is documented as "The Joey Hole". No jail/lockup gameplay behavior was changed.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `de4761b feat(server): hook auction rules into gameplay`
-- Last commit before this chunk: `de4761b feat(server): hook auction rules into gameplay`
+- Previous commit: `3b4b5ea`
+- Last commit before this chunk: `3b4b5ea`
 - Last commit after this chunk: not committed yet
 - Date/time: 2026-05-03
 
@@ -19,19 +19,17 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.22C.3 - Hook Dice Sides Into Gameplay.
+Phase 5, Chunk 5.22C.4 - Add Jail / The Joey Hole Rule Fields.
 
 Completed:
 
-- Added `DiceRules.DoublesExtraTurnEnabled` default `false` and `DiceRules.MaxConsecutiveDoublesBeforeLockup` default `3`.
-- Updated rules resolution/validation to accept `doublesExtraTurnEnabled` and `maxConsecutiveDoublesBeforeLockup`; invalid types and thresholds below 1 are rejected.
-- Preserved `DiceRules.DiceCount` as schema state only for this chunk; gameplay still rolls exactly two dice.
-- Changed `IDiceRoller.Roll`, `RandomDiceRoller.Roll`, and `DiceService.RollDice` to accept `sidesPerDie`.
-- Kept the existing two-argument `DiceRoll` constructor d6-compatible and added a custom-sides constructor path.
-- Updated `LobbyMessageHandler.HandleRollDice` to pass `session.GameState.Rules.Dice.SidesPerDie` into `DiceService`.
-- Preserved `RollResultPayload` shape: dice remains `[firstDie, secondDie]`, with `total` and `isDouble` unchanged.
-- Added focused engine, rules, session, realtime, and WebSocket test updates.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 515 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Extended `JailRules` with `FineAmount` and `MaxTurns`, preserving backend naming as `Rules.Jail`, `JailRules`, and JSON `jail`.
+- Set MonoJoey defaults to `jail.enabled = true`, `jail.escapeCardsEnabled = true`, `jail.fineAmount = 50`, and `jail.maxTurns = 3`.
+- Updated `GameRulesResolver` to accept and validate `jail.enabled`, `jail.escapeCardsEnabled`, `jail.fineAmount >= 0`, and `jail.maxTurns >= 1`.
+- Confirmed the existing rules payload shape serializes the new fields through lobby state, `rules_updated`, snapshots, and reconnect snapshots.
+- Updated `docs/GAME_RULES_SPEC.md` to record "The Joey Hole" as the player-facing category/name while backend fields remain `jail` for now.
+- Added focused resolver, session, and realtime tests for the new jail fields and invalid payloads.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 524 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -49,6 +47,7 @@ Not included by explicit user scope:
 - Unity client.
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
+- Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
 - Slimer, status effects, Unity client code, property damage, Earthquake, or broad engine refactors.
 
 ## Files Changed In This Chunk
@@ -56,17 +55,10 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/DiceRoll.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/RandomDiceRoller.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/DiceService.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/DiceServiceTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionRulesTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyRulesMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
+- `docs/GAME_RULES_SPEC.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -147,7 +139,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 459 passed, 0 failed, 0 skipped.
+  - Output summary: 524 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -267,6 +259,7 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; WebSocket card execution returns `invalid_card` before persisting any draw, discard, execution flag, or player mutation.
 - `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged, and WebSocket card execution pre-filters those actions as `unsupported_card_action` before calling it.
 - Lockup uses the placeholder `lockup_01` tile ID only; there is no advanced jail location selection or custom board lookup beyond requiring that tile to exist.
+- `JailRules.FineAmount` and `JailRules.MaxTurns` are serialized configuration only; gameplay does not read them yet.
 - Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent currently uses base rent only: the first rent table value, or a placeholder `10` for purchasable tiles without a rent table.
@@ -401,7 +394,7 @@ Do not implement before its assigned chunk:
 - Debt recovery.
 - Asset liquidation.
 - Automatic card reshuffling.
-- Advanced jail/lockup rules beyond the simple status and escape consumption now in place.
+- Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
 - Mortgages.
 - Houses/upgrades.
 - Trading.
@@ -412,4 +405,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.22C.3 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.22C.4 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

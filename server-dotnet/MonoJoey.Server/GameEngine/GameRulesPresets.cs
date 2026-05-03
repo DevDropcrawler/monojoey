@@ -25,7 +25,9 @@ public static class GameRulesPresets
             StartingBid: 0),
         Jail: new JailRules(
             Enabled: true,
-            EscapeCardsEnabled: true),
+            EscapeCardsEnabled: true,
+            FineAmount: 50,
+            MaxTurns: 3),
         Dice: new DiceRules(
             DiceCount: 2,
             SidesPerDie: 6,
