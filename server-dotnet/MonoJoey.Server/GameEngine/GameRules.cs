@@ -124,6 +124,11 @@ public sealed record CardRules
 
     public bool DeckEditingEnabled { get; }
 
+    public bool IsDeckEnabled(string deckId)
+    {
+        return decksEnabled.Contains(deckId, StringComparer.Ordinal);
+    }
+
     public CardRules DeepCopy()
     {
         return new CardRules(

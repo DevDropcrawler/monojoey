@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.22C.5 Hook Loan Rules Into Gameplay
-- Completion status: Chunk 5.22C.5 complete; loan gameplay now derives runtime loan config from `GameState.Rules.Loans` for realtime loan enablement, the loan-payment borrowing toggle, snapshots, and turn-start interest handoff. Existing default loan rate behavior remains 20/30/50/+10 capped at 100%. `GameRulesPresets` defaults were not changed.
+- Chunk: 5.22C.6 Card System Hooks
+- Completion status: Chunk 5.22C.6 complete; card tile execution now gates draws/effects per deck using `GameState.Rules.Cards.DecksEnabled`. Default rules still enable `chance` and `table`, so default card behavior is unchanged. Disabled deck tiles execute as existing `no_action` results and mark the tile executed without deck lookup, draw, effect execution, discard, or player/deck mutation.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `3b4b5ea`
 - Last commit before this chunk: `3b4b5ea`
@@ -19,19 +19,17 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.22C.5 - Hook Loan Rules Into Gameplay.
+Phase 5, Chunk 5.22C.6 - Card System Hooks.
 
 Completed:
 
-- Expanded `LoanSharkConfig` into an explicit runtime config with current default rate behavior: first borrow 20%, second 30%, third 50%, later tiers +10 percentage points capped by `LoanManager` at 100%.
-- Added `LoanSharkConfig.FromRules(LoanRules)` and intentionally mapped only `LoanSharkEnabled` and `CanBorrowForLoanPayments`; `BaseInterestRate`, rate-increase fields, and `MinimumInterestPayment` remain schema/snapshot data only.
-- Updated `LoanManager.TakeLoan` and `LoanManager.StartTurnInterestCheck` to require an explicit `LoanSharkConfig`.
-- Wired `TurnManager` to derive loan config from `gameState.Rules.Loans` before start-turn interest checks.
-- Wired realtime `take_loan` enablement and loan-payment-purpose behavior to `gameState.Rules.Loans` through the derived config.
-- Updated snapshot `loanShark.enabled` projection to come from rules-derived config instead of legacy `GameState.LoanSharkConfig`.
-- Left `GameState.LoanSharkConfig` in place as legacy state, but it no longer controls realtime loan taking or snapshot enabled projection.
-- Added focused tests for default-rate preservation, custom runtime config tier math, the loan-payment borrowing toggle, ignored schema rate fields, rules-owned realtime disablement, legacy config non-control, and snapshot projection.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 535 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Added `CardRules.IsDeckEnabled(string deckId)` as the only card-rules helper for deck enablement.
+- Wired `LobbyMessageHandler.ExecuteCardTile` to skip disabled decks immediately after tile-type deck ID resolution and before runtime deck-state lookup.
+- Disabled deck execution persists only `HasExecutedTileThisTurn = true`, returns the existing `execute_tile_result` shape with `executionKind = "no_action"`, and keeps `card`, `auction`, and `rent` null.
+- Preserved default behavior for enabled `chance` and `table` decks, including existing missing-deck, empty-deck, invalid-card, and unsupported-card-action error paths.
+- Added realtime tests for chance-disabled, table-disabled, empty-deck-list, disabled-missing-state, end-turn allowance, and no player/deck mutation on disabled deck tiles.
+- Added rules resolver tests for empty `decksEnabled`, default enabled deck IDs, and exact `IsDeckEnabled` matching.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 542 passed, 0 failed. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
 
 Not included by explicit user scope:
 
@@ -54,12 +52,9 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -141,7 +136,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 535 passed, 0 failed, 0 skipped.
+  - Output summary: 542 passed, 0 failed, 0 skipped.
   - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
 
 ## Known Issues
@@ -343,6 +338,8 @@ Not included by explicit user scope:
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
 - WebSocket card tile execution is the integration boundary that composes `CardDeckManager.Draw()`, `CardResolver.ResolveCard()`, `CardEffectExecutor.ExecuteCardEffect()`, and a final immutable `GameState` replacement.
+- WebSocket card tile execution first checks `GameState.Rules.Cards.IsDeckEnabled(deckId)` after resolving the deck ID from tile type; disabled deck tiles skip runtime deck-state lookup and return an existing `no_action` execution result while marking the tile executed.
+- Card deck gating is per deck only through `CardRules.DecksEnabled`; there is no global cards-enabled flag or derived aggregate helper.
 - Supported WebSocket card actions are currently `MoveToStart`, `MoveSteps`, `ReceiveMoney`, `PayMoney`, `GoToLockup`, and `GetOutOfLockup`.
 - Out-of-scope resolved actions remain `MoveToTile`, `MoveToNearestTransport`, `MoveToNearestUtility`, `ReceiveMoneyFromEveryPlayer`, `PayMoneyToEveryPlayer`, and `RepairOwnedProperties`.
 - Successful non-held cards are appended to that deck's discard pile; successful held escape cards stay only in `Player.HeldCardIds` until a later explicit use path consumes them.
@@ -409,4 +406,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.22C.5 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.22C.6 is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

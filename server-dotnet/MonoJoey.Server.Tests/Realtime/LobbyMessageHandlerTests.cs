@@ -1465,6 +1465,86 @@ public class LobbyMessageHandlerTests
         Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
     }
 
+    [Theory]
+    [InlineData("chance_01", @"[""table""]", CardDeckIds.Chance)]
+    [InlineData("table_01", @"[""chance""]", CardDeckIds.Table)]
+    [InlineData("chance_01", @"[]", CardDeckIds.Chance)]
+    [InlineData("table_01", @"[]", CardDeckIds.Table)]
+    public void ExecuteTile_DisabledDeckSkipsDrawEffectsAndAllowsEndTurn(
+        string tileId,
+        string enabledDecksJson,
+        string deckId)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            $@"""cards"":{{""decksEnabled"":{enabledDecksJson}}}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", tileId);
+        var beforeExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("deck_placeholder", executePayload.GetProperty("actionKind").GetString());
+        Assert.Equal("no_action", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal(JsonValueKind.Null, executePayload.GetProperty("card").ValueKind);
+        Assert.Equal(JsonValueKind.Null, executePayload.GetProperty("auction").ValueKind);
+        Assert.Equal(JsonValueKind.Null, executePayload.GetProperty("rent").ValueKind);
+        Assert.False(executePayload.TryGetProperty("movement", out _));
+        Assert.False(executePayload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(executePayload.TryGetProperty("playerEliminations", out _));
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.Equal(beforeExecute.Players[0], afterExecute.Players[0]);
+        Assert.Same(beforeExecute.CardDeckStates, afterExecute.CardDeckStates);
+        Assert.Same(beforeExecute.CardDeckStates[deckId], afterExecute.CardDeckStates[deckId]);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+    }
+
+    [Fact]
+    public void ExecuteTile_DisabledMissingDeckSkipsWithoutCardDeckNotFound()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""cards"":{""decksEnabled"":[""table""]}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                CardDeckStates = gameState.CardDeckStates
+                    .Where(entry => entry.Key != CardDeckIds.Chance)
+                    .ToDictionary(entry => entry.Key, entry => entry.Value),
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("no_action", payload.GetProperty("executionKind").GetString());
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+        Assert.False(afterExecute.CardDeckStates.ContainsKey(CardDeckIds.Chance));
+    }
+
     [Fact]
     public void ExecuteTile_HeldLockupEscapeCardPersistsWithoutDiscardAcrossTurns()
     {

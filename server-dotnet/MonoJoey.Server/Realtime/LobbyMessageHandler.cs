@@ -1814,6 +1814,28 @@ public sealed class LobbyMessageHandler
                 "This resolved tile effect is not supported yet.");
         }
 
+        if (!gameState.Rules.Cards.IsDeckEnabled(deckId))
+        {
+            var updatedGameState = gameState with
+            {
+                HasExecutedTileThisTurn = true,
+            };
+
+            var disabledDeckPersistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+
+            return CreateBroadcastResult(
+                CreateExecuteTileResult(
+                    tileResolution,
+                    "no_action",
+                    disabledDeckPersistence.Session.GameState,
+                    auction: null,
+                    rent: null,
+                    card: null),
+                LobbyMessageTypes.TileExecuted,
+                disabledDeckPersistence.Session,
+                disabledDeckPersistence.Sequence);
+        }
+
         if (!gameState.CardDeckStates.TryGetValue(deckId, out var deckState))
         {
             return CreateError(

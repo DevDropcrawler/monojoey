@@ -37,6 +37,8 @@ public class GameRulesResolverTests
         Assert.Equal(3, rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.False(rules.Dice.ResolveLandingAfterCardMove);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
+        Assert.True(rules.Cards.IsDeckEnabled("chance"));
+        Assert.True(rules.Cards.IsDeckEnabled("table"));
         Assert.True(rules.Cards.CustomCardsEnabled);
         Assert.True(rules.Cards.DeckEditingEnabled);
         Assert.True(rules.Loans.LoanSharkEnabled);
@@ -84,6 +86,32 @@ public class GameRulesResolverTests
         Assert.Equal(75, rules.Economy.IncomeTaxAmount);
         Assert.Equal(25, rules.Economy.LuxuryTaxAmount);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
+    }
+
+    [Fact]
+    public void EmptyDecksEnabled_IsValidAndDisablesAllDeckChecks()
+    {
+        using var document = JsonDocument.Parse(@"{""cards"":{""decksEnabled"":[]}}");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Empty(rules.Cards.DecksEnabled);
+        Assert.False(rules.Cards.IsDeckEnabled("chance"));
+        Assert.False(rules.Cards.IsDeckEnabled("table"));
+    }
+
+    [Fact]
+    public void CardRules_IsDeckEnabledMatchesOnlyConfiguredDeckIds()
+    {
+        using var document = JsonDocument.Parse(@"{""cards"":{""decksEnabled"":[""table""]}}");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Equal(new[] { "table" }, rules.Cards.DecksEnabled);
+        Assert.False(rules.Cards.IsDeckEnabled("chance"));
+        Assert.True(rules.Cards.IsDeckEnabled("table"));
+        Assert.False(rules.Cards.IsDeckEnabled("TABLE"));
+        Assert.False(rules.Cards.IsDeckEnabled("missing"));
     }
 
     [Fact]
