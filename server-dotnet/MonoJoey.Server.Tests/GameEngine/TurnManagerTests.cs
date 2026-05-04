@@ -103,6 +103,41 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void StartFirstTurn_RepairsSelectedPlayersPropertiesAfterLoanInterestBeforeRoll()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            Players = new[]
+            {
+                CreatePlayer(
+                    "player_1",
+                    new TileId("start"),
+                    loanState: new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1),
+                    ownedPropertyIds: new[] { "property_01" }),
+                CreatePlayer(
+                    "player_2",
+                    new TileId("start"),
+                    ownedPropertyIds: new[] { "property_02" }),
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(20)),
+                [new TileId("property_02")] = new(new TileId("property_02"), new PropertyStateData(20)),
+            },
+        };
+
+        var started = TurnManager.StartFirstTurn(gameState);
+
+        Assert.Equal("player_1", started.CurrentTurnPlayerId?.Value);
+        Assert.Equal(GamePhase.AwaitingRoll, started.Phase);
+        Assert.False(started.HasRolledThisTurn);
+        Assert.Equal(new Money(1474), started.Players[0].Money);
+        Assert.Equal(10, started.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(20, started.PropertyStates[new TileId("property_02")].Data.DamagePercent);
+    }
+
+    [Fact]
     public void StartFirstTurn_IgnoresSchemaRateFieldsWhenDerivingLoanConfig()
     {
         var gameState = CreateGameState("player_1", "player_2") with
@@ -203,6 +238,71 @@ public class TurnManagerTests
         Assert.Equal(2, next.TurnNumber);
         Assert.Equal(GamePhase.AwaitingRoll, next.Phase);
         Assert.Equal(new Money(1470), next.Players[1].Money);
+    }
+
+    [Fact]
+    public void AdvanceToNextTurn_RepairsNextPlayersPropertiesAfterLoanInterest()
+    {
+        var property02 = new TileId("property_02");
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("start"), ownedPropertyIds: new[] { "property_01" }),
+                CreatePlayer(
+                    "player_2",
+                    new TileId("start"),
+                    loanState: new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1),
+                    ownedPropertyIds: new[] { "property_02" }),
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData(20)),
+                [property02] = new(property02, new PropertyStateData(20)),
+            },
+        };
+
+        var next = TurnManager.AdvanceToNextTurn(gameState);
+
+        Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
+        Assert.Equal(2, next.TurnNumber);
+        Assert.Equal(new Money(1474), next.Players[1].Money);
+        Assert.Equal(20, next.PropertyStates[new TileId("property_01")].Data.DamagePercent);
+        Assert.Equal(10, next.PropertyStates[property02].Data.DamagePercent);
+    }
+
+    [Fact]
+    public void AdvanceToNextTurn_SkipsPropertyRepairWhenLoanInterestEliminatesPlayer()
+    {
+        var property02 = new TileId("property_02");
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("start")),
+                CreatePlayer(
+                    "player_2",
+                    new TileId("start"),
+                    money: 5,
+                    loanState: new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1),
+                    ownedPropertyIds: new[] { "property_02" }),
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property02] = new(property02, new PropertyStateData(20)),
+            },
+        };
+
+        var next = TurnManager.AdvanceToNextTurn(gameState);
+
+        Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
+        Assert.Equal(new Money(-15), next.Players[1].Money);
+        Assert.True(next.Players[1].IsEliminated);
+        Assert.Equal(20, next.PropertyStates[property02].Data.DamagePercent);
     }
 
     [Fact]
@@ -440,7 +540,8 @@ public class TurnManagerTests
         bool isEliminated = false,
         int money = 1500,
         PlayerLoanState? loanState = null,
-        bool isLockedUp = false)
+        bool isLockedUp = false,
+        IEnumerable<string>? ownedPropertyIds = null)
     {
         return new Player(
             new PlayerId(playerId),
@@ -449,7 +550,7 @@ public class TurnManagerTests
             $"color_{playerId}",
             new Money(money),
             startTileId,
-            new HashSet<TileId>(),
+            ownedPropertyIds?.Select(propertyId => new TileId(propertyId)).ToHashSet() ?? new HashSet<TileId>(),
             new HashSet<CardId>(),
             IsBankrupt: isEliminated,
             IsEliminated: isEliminated)

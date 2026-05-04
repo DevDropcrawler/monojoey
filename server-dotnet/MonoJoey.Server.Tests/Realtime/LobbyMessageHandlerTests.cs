@@ -2210,6 +2210,140 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void EndTurn_ReturnsPropertyRepairMoneyDeltaForNextPlayer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData(20)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        var moneyDelta = Assert.Single(payload.GetProperty("moneyDeltas").EnumerateArray());
+        Assert.Equal("player_2", moneyDelta.GetProperty("playerId").GetString());
+        Assert.Equal(-6, moneyDelta.GetProperty("delta").GetInt32());
+        Assert.Equal(1494, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.Equal("property_repair", moneyDelta.GetProperty("reason").GetString());
+        Assert.Equal(10, afterEnd.PropertyStates[new TileId("property_01")].Data.DamagePercent);
+    }
+
+    [Fact]
+    public void EndTurn_ReturnsSeparateLoanInterestAndPropertyRepairMoneyDeltas()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with
+                        {
+                            LoanState = new PlayerLoanState(new Money(100), 20, new Money(20), LoanTier: 1),
+                            OwnedPropertyIds = new HashSet<TileId> { new("property_01") },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData(20)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+        var moneyDeltas = payload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal(2, moneyDeltas.Length);
+        Assert.Equal("loan_interest", moneyDeltas[0].GetProperty("reason").GetString());
+        Assert.Equal(-20, moneyDeltas[0].GetProperty("delta").GetInt32());
+        Assert.Equal(1480, moneyDeltas[0].GetProperty("balance").GetInt32());
+        Assert.Equal("property_repair", moneyDeltas[1].GetProperty("reason").GetString());
+        Assert.Equal(-6, moneyDeltas[1].GetProperty("delta").GetInt32());
+        Assert.Equal(1474, moneyDeltas[1].GetProperty("balance").GetInt32());
+    }
+
+    [Fact]
+    public void EndTurn_PersistsRepairForSnapshotAndReconnect()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_01")] = new(new TileId("property_01"), new PropertyStateData(15)),
+                },
+            });
+        _ = handler.HandleTextMessage(EndTurnMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var snapshotResponse = Handle(
+            handler,
+            started.SecondContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_2"));
+        var snapshotPayload = AssertResponseType(snapshotResponse, "snapshot_result");
+        var snapshotPropertyState = Assert.Single(snapshotPayload.GetProperty("propertyStates").EnumerateArray());
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        using var reconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_2"));
+        var reconnectPayload = AssertResponseType(reconnectResponse, "reconnect_result");
+        var reconnectPropertyState = Assert.Single(reconnectPayload
+            .GetProperty("snapshot")
+            .GetProperty("propertyStates")
+            .EnumerateArray());
+
+        Assert.Equal("property_01", snapshotPropertyState.GetProperty("tileId").GetString());
+        Assert.Equal(5, snapshotPropertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.Equal("property_01", reconnectPropertyState.GetProperty("tileId").GetString());
+        Assert.Equal(5, reconnectPropertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+    }
+
+    [Fact]
     public void EndTurn_BeforeRollReturnsInvalidSessionState()
     {
         var sessionManager = new SessionManager();

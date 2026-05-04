@@ -5,13 +5,13 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.24D Earthquake Property Damage System
-- Completion status: Chunk 5.24D complete; property damage now lives in `GameState.PropertyStates`, deterministic earthquake application can damage owned properties without RNG, rent is reduced by persisted damage using decimal floor math and the requested rent floor behavior, and snapshot/reconnect projection emits only damaged property states with `data.damagePercent`.
+- Chunk: 5.25A Property Repair System
+- Completion status: Chunk 5.25A complete; start-turn property repair now runs server-authoritatively for the selected current player after loan interest and before roll eligibility, repairing damaged owned purchasable properties by 10 percentage points in ordinal tile order when affordable, deducting deterministic repair costs, removing fully repaired states, and preserving snapshot/reconnect projection through `propertyStates[].data.damagePercent`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `ed1b1d0`
-- Last commit before this chunk: `ed1b1d0`
+- Previous commit: `489d52b`
+- Last commit before this chunk: `489d52b`
 - Last commit after this chunk: not committed yet
-- Date/time: 2026-05-03
+- Date/time: 2026-05-04
 
 ## Docs Planning Note
 
@@ -19,18 +19,21 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.24D - Earthquake Property Damage System.
+Phase 5, Chunk 5.25A - Property Repair System.
 
 Completed:
 
-- Extended `PropertyStateData` with validated `DamagePercent` (`0..100`), where missing state and `0` mean undamaged.
-- Added `PropertyStateManager.ApplyEarthquake(GameState, IEnumerable<string>, int)` as a deterministic server-side damage hook with caller-supplied tile IDs, ordinal de-duplication/order, owned purchasable properties only, max(existing, incoming) merge, immutable `GameState.PropertyStates` replacement, and no repair behavior.
-- Updated `PropertyManager.PayRentForCurrentTile` so rent reads persisted property damage after ownership checks.
-- Rent now uses decimal floor math: `(100 - damagePercent) / 100m`, `Math.Floor`, full destruction rent `0`, and non-destroyed damaged rent floor `1`.
-- Preserved base rent tables and ownership/auction behavior.
-- Updated snapshot/reconnect projection to emit only damaged property states and include `propertyStates[].data.damagePercent` through the existing property-state payload shape.
-- Added engine and realtime coverage for earthquake application, damage merge/no-repair behavior, rent reduction/floor/destruction behavior, bankruptcy checks using reduced rent, and snapshot/reconnect damage projection.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 574 passed, 0 failed, 0 skipped. Restore emitted NU1900 warnings because vulnerability data could not be fetched from `https://api.nuget.org/v3/index.json`.
+- Added `PropertyStateManager.RepairDamagedOwnedProperties(GameState, PlayerId)` as the deterministic automatic repair hook.
+- Repairs process only the selected owner's damaged owned purchasable properties in ordinal `tileId` order.
+- Each processed property repairs by up to 10 damage percentage points, capped by remaining damage.
+- Repair cost uses `Math.Max(1, (int)Math.Floor(tile.Price * repairedPercent / 100m))`.
+- If the owner cannot afford the next property's full repair cost, repair processing stops; no partial repair, borrowing, or bankruptcy is triggered.
+- Fully repaired properties are removed from `GameState.PropertyStates`; partially repaired properties keep reduced `DamagePercent`.
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` now apply loan interest first, skip repair if that eliminates the selected player, then apply automatic property repair before the player can roll.
+- `end_turn_result.moneyDeltas` now reports repair deductions separately as `property_repair` instead of merging them into `loan_interest`.
+- Snapshot/reconnect continue to project repaired state through the existing `propertyStates[].data.damagePercent` shape; no snapshot version bump or client command was added.
+- Added engine and realtime coverage for repair amount/cost/removal, ordinal processing, insufficient funds, current-player-only repair, no-op cases, loan-interest ordering, elimination skip, rent after partial/full repair, end-turn helper deltas, and snapshot/reconnect persistence.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 588 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -53,13 +56,12 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyState.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyStateManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -141,12 +143,10 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 574 passed, 0 failed, 0 skipped.
-  - Warnings: `NU1900` vulnerability-data lookup could not reach `https://api.nuget.org/v3/index.json`.
+  - Output summary: 588 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
-- `NU1900` warnings remain because NuGet vulnerability metadata lookup cannot reach `https://api.nuget.org/v3/index.json`.
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
 - `GameRules.Loans` rate-field defaults still do not match current runtime loan manager behavior. This chunk deliberately preserved runtime 20/30/50/+10/100 behavior and left schema/default correction for a separate phase.
 - No UI, persistence, stats, event replay, or reconnect catch-up was added.
@@ -199,7 +199,8 @@ Not included by explicit user scope:
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
 - `end_turn` requires a successful roll, resolve, execute, no active auction, and a non-eliminated current player before advancing.
-- `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, and `turnIndex` from the advanced `GameState.TurnNumber`.
+- `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, `turnIndex` from the advanced `GameState.TurnNumber`, and optional `moneyDeltas` / `playerEliminations`.
+- Start-turn loan-interest deductions reported from `end_turn_result.moneyDeltas` use reason `loan_interest`; automatic property repair deductions use reason `property_repair`.
 - `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, locked current players before the completed-turn state through `player_locked`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
 - Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
 - If `execute_tile` eliminated the current player and the match completed, later gameplay requests return `game_already_completed`; if the match did not complete, `end_turn` still returns `player_eliminated` and does not advance.
@@ -269,7 +270,8 @@ Not included by explicit user scope:
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent uses the first rent table value, or a placeholder `10` for purchasable tiles without a rent table, then reduces it by persisted `PropertyStateData.DamagePercent`.
 - Damaged rent uses decimal floor math; fully damaged properties charge `0`, while damaged-but-not-destroyed properties charge at least `1`.
-- `PropertyStateManager.ApplyEarthquake` is an engine/manual-test hook only; no card trigger, client request, repair action, randomness, or UI has been added.
+- `PropertyStateManager.ApplyEarthquake` is an engine/manual-test damage hook only; no card trigger, client request, randomness, or UI has been added.
+- `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
 - Default loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%; these runtime rates live in `LoanSharkConfig` defaults for now, not in `GameRules.Loans` rate fields.
@@ -415,4 +417,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.24D is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.25A is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

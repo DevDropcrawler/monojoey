@@ -4,6 +4,8 @@ using MonoJoey.Shared.Protocol;
 
 public static class PropertyStateManager
 {
+    private const int StartTurnRepairPercent = 10;
+
     public static GameState ApplyEarthquake(
         GameState gameState,
         IEnumerable<string> tileIds,
@@ -66,6 +68,84 @@ public static class PropertyStateManager
             : gameState;
     }
 
+    public static GameState RepairDamagedOwnedProperties(GameState gameState, PlayerId ownerId)
+    {
+        ArgumentNullException.ThrowIfNull(gameState);
+
+        var ownerIndex = FindPlayerIndex(gameState.Players, ownerId);
+        var owner = gameState.Players[ownerIndex];
+        if (owner.IsEliminated || gameState.PropertyStates.Count == 0)
+        {
+            return gameState;
+        }
+
+        var damagedOwnedProperties = gameState.PropertyStates
+            .Where(propertyState => propertyState.Value.Data.DamagePercent > 0)
+            .Where(propertyState => owner.OwnedPropertyIds.Contains(propertyState.Key))
+            .OrderBy(propertyState => propertyState.Key.Value, StringComparer.Ordinal)
+            .ToArray();
+
+        if (damagedOwnedProperties.Length == 0)
+        {
+            return gameState;
+        }
+
+        var boardTilesById = gameState.Board.Tiles.ToDictionary(tile => tile.TileId);
+        var players = gameState.Players.ToArray();
+        var propertyStates = new Dictionary<TileId, PropertyState>(gameState.PropertyStates);
+        var changed = false;
+
+        foreach (var (tileId, propertyState) in damagedOwnedProperties)
+        {
+            if (!boardTilesById.TryGetValue(tileId, out var tile) ||
+                !tile.IsPurchasable ||
+                tile.Price is null)
+            {
+                continue;
+            }
+
+            var currentOwner = players[ownerIndex];
+            var damagePercent = propertyState.Data.DamagePercent;
+            var repairedPercent = Math.Min(StartTurnRepairPercent, damagePercent);
+            var repairCost = Math.Max(
+                1,
+                (int)Math.Floor(tile.Price.Value.Amount * repairedPercent / 100m));
+
+            if (currentOwner.Money.Amount < repairCost)
+            {
+                break;
+            }
+
+            players[ownerIndex] = currentOwner with
+            {
+                Money = new Money(currentOwner.Money.Amount - repairCost),
+            };
+
+            var nextDamagePercent = damagePercent - repairedPercent;
+            if (nextDamagePercent <= 0)
+            {
+                propertyStates.Remove(tileId);
+            }
+            else
+            {
+                propertyStates[tileId] = propertyState with
+                {
+                    Data = new PropertyStateData(nextDamagePercent),
+                };
+            }
+
+            changed = true;
+        }
+
+        return changed
+            ? gameState with
+            {
+                Players = players,
+                PropertyStates = propertyStates,
+            }
+            : gameState;
+    }
+
     private static bool IsOwnedPurchasableProperty(GameState gameState, TileId tileId)
     {
         var tile = gameState.Board.Tiles.FirstOrDefault(candidate => candidate.TileId == tileId);
@@ -75,5 +155,18 @@ public static class PropertyStateManager
         }
 
         return gameState.Players.Any(player => player.OwnedPropertyIds.Contains(tileId));
+    }
+
+    private static int FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)
+    {
+        for (var index = 0; index < players.Count; index++)
+        {
+            if (players[index].PlayerId == playerId)
+            {
+                return index;
+            }
+        }
+
+        throw new InvalidOperationException("Property repair owner must exist in the game player list.");
     }
 }

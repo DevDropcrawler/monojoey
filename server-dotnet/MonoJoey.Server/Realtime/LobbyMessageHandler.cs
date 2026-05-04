@@ -2614,7 +2614,7 @@ public sealed class LobbyMessageHandler
                 previousPlayerId.Value,
                 gameState.CurrentTurnPlayerId?.Value,
                 gameState.TurnNumber,
-                CreateMoneyDeltasFromDiff(previousGameState, gameState, "loan_interest"),
+                CreateEndTurnMoneyDeltas(previousGameState, gameState),
                 CreatePlayerEliminationsFromDiff(previousGameState, gameState, "negative_balance")));
     }
 
@@ -2908,6 +2908,60 @@ public sealed class LobbyMessageHandler
         }
 
         return deltas.Count == 0 ? null : deltas;
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateEndTurnMoneyDeltas(
+        GameState previousGameState,
+        GameState gameState)
+    {
+        if (gameState.CurrentTurnPlayerId is null)
+        {
+            return CreateMoneyDeltasFromDiff(previousGameState, gameState, "loan_interest");
+        }
+
+        var previousPlayer = previousGameState.Players.FirstOrDefault(
+            player => player.PlayerId == gameState.CurrentTurnPlayerId.Value);
+        var player = gameState.Players.FirstOrDefault(
+            candidate => candidate.PlayerId == gameState.CurrentTurnPlayerId.Value);
+        if (previousPlayer is null || player is null)
+        {
+            return CreateMoneyDeltasFromDiff(previousGameState, gameState, "loan_interest");
+        }
+
+        var deltas = new List<MoneyDeltaPayload>();
+        var loanInterestDelta = CalculateStartTurnLoanInterestDelta(previousPlayer);
+        if (loanInterestDelta != 0)
+        {
+            deltas.Add(new MoneyDeltaPayload(
+                player.PlayerId.Value,
+                loanInterestDelta,
+                previousPlayer.Money.Amount + loanInterestDelta,
+                "loan_interest"));
+        }
+
+        var totalDelta = player.Money.Amount - previousPlayer.Money.Amount;
+        var propertyRepairDelta = totalDelta - loanInterestDelta;
+        if (propertyRepairDelta != 0)
+        {
+            deltas.Add(new MoneyDeltaPayload(
+                player.PlayerId.Value,
+                propertyRepairDelta,
+                player.Money.Amount,
+                "property_repair"));
+        }
+
+        return deltas.Count == 0 ? null : deltas;
+    }
+
+    private static int CalculateStartTurnLoanInterestDelta(Player previousPlayer)
+    {
+        var loanState = previousPlayer.LoanState;
+        if (loanState is null)
+        {
+            return 0;
+        }
+
+        return -(loanState.TotalBorrowed.Amount * loanState.CurrentInterestRatePercent / 100);
     }
 
     private static IReadOnlyList<PlayerEliminationPayload>? CreatePlayerEliminationsFromDiff(

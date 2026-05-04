@@ -317,6 +317,58 @@ public class PropertyManagerTests
         Assert.Equal(new Money(1503), result.GameState.Players[1].Money);
     }
 
+    [Fact]
+    public void PayRentForCurrentTile_UsesPartiallyRepairedDamageForRentReduction()
+    {
+        var propertyTileId = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_03"),
+            CreatePlayer("player_2", "start", 1500, "property_03")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(20)),
+            },
+        };
+        var repaired = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_2"));
+
+        var result = PropertyManager.PayRentForCurrentTile(repaired, new PlayerId("player_1"));
+
+        Assert.Equal(10, repaired.PropertyStates[propertyTileId].Data.DamagePercent);
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(5), result.RentDue);
+        Assert.Equal(new Money(1495), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1495), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_UsesFullRentAfterPropertyIsFullyRepaired()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(5)),
+            },
+        };
+        var repaired = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_2"));
+
+        var result = PropertyManager.PayRentForCurrentTile(repaired, new PlayerId("player_1"));
+
+        Assert.DoesNotContain(propertyTileId, repaired.PropertyStates.Keys);
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(2), result.RentDue);
+        Assert.Equal(new Money(1498), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1499), result.GameState.Players[1].Money);
+    }
+
     private static GameState CreateGameState(params Player[] players)
     {
         return new GameState(

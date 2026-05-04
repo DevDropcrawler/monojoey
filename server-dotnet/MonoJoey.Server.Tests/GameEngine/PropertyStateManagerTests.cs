@@ -108,6 +108,164 @@ public class PropertyStateManagerTests
             () => PropertyStateManager.ApplyEarthquake(gameState, new[] { "property_01" }, damagePercent));
     }
 
+    [Fact]
+    public void RepairDamagedOwnedProperties_ReducesDamageAndDeductsFloorCost()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(50)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.Equal(40, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(new Money(1494), result.Players[0].Money);
+        Assert.Equal(50, gameState.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(new Money(1500), gameState.Players[0].Money);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_RemovesFullyRepairedStateAndCapsCostAtRemainingDamage()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(5)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.DoesNotContain(property01, result.PropertyStates.Keys);
+        Assert.Equal(new Money(1497), result.Players[0].Money);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_ProcessesOwnedDamagedPropertiesInOrdinalTileOrder()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var property03 = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_03", "property_02", "property_01") with
+            {
+                Money = new Money(12),
+            }) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property03] = new(property03, new PropertyStateData(20)),
+                [property02] = new(property02, new PropertyStateData(20)),
+                [property01] = new(property01, new PropertyStateData(20)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.Equal(new Money(0), result.Players[0].Money);
+        Assert.Equal(10, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(10, result.PropertyStates[property02].Data.DamagePercent);
+        Assert.Equal(20, result.PropertyStates[property03].Data.DamagePercent);
+        Assert.False(result.Players[0].IsBankrupt);
+        Assert.False(result.Players[0].IsEliminated);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_StopsAtFirstUnaffordablePropertyAndPreservesLaterProperties()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var property03 = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01", "property_02", "property_03") with
+            {
+                Money = new Money(9),
+            }) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(20)),
+                [property02] = new(property02, new PropertyStateData(20)),
+                [property03] = new(property03, new PropertyStateData(20)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.Equal(new Money(3), result.Players[0].Money);
+        Assert.Equal(10, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(20, result.PropertyStates[property02].Data.DamagePercent);
+        Assert.Equal(20, result.PropertyStates[property03].Data.DamagePercent);
+        Assert.False(result.Players[0].IsBankrupt);
+        Assert.False(result.Players[0].IsEliminated);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_RepairsCurrentOwnerOnlyAndPreservesUndamagedEntries()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var property03 = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01", "property_03"),
+            CreatePlayer("player_2", "start", "property_02")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(30)),
+                [property02] = new(property02, new PropertyStateData(30)),
+                [property03] = new(property03, new PropertyStateData()),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.Equal(20, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(30, result.PropertyStates[property02].Data.DamagePercent);
+        Assert.Equal(0, result.PropertyStates[property03].Data.DamagePercent);
+        Assert.Equal(new Money(1494), result.Players[0].Money);
+        Assert.Equal(new Money(1500), result.Players[1].Money);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_WhenNoEligibleDamageDoesNotMutateState()
+    {
+        var property02 = new TileId("property_02");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01"),
+            CreatePlayer("player_2", "start", "property_02")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property02] = new(property02, new PropertyStateData(30)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.Same(gameState, result);
+    }
+
     private static GameState CreateGameState(params Player[] players)
     {
         return new GameState(

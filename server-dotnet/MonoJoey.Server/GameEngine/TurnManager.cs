@@ -29,10 +29,7 @@ public static class TurnManager
             ActiveAuctionState = null,
         };
 
-        return LoanManager.StartTurnInterestCheck(
-            startedGameState,
-            firstActivePlayer.PlayerId,
-            LoanSharkConfig.FromRules(startedGameState.Rules.Loans));
+        return ApplyStartTurnEffects(startedGameState, firstActivePlayer.PlayerId);
     }
 
     public static Player GetCurrentPlayer(GameState gameState)
@@ -78,10 +75,20 @@ public static class TurnManager
             ActiveAuctionState = null,
         };
 
-        return LoanManager.StartTurnInterestCheck(
-            nextGameState,
-            nextPlayerId,
-            LoanSharkConfig.FromRules(nextGameState.Rules.Loans));
+        return ApplyStartTurnEffects(nextGameState, nextPlayerId);
+    }
+
+    private static GameState ApplyStartTurnEffects(GameState gameState, PlayerId playerId)
+    {
+        var afterLoanInterest = LoanManager.StartTurnInterestCheck(
+            gameState,
+            playerId,
+            LoanSharkConfig.FromRules(gameState.Rules.Loans));
+        var player = afterLoanInterest.Players.Single(candidate => candidate.PlayerId == playerId);
+
+        return player.IsEliminated
+            ? afterLoanInterest
+            : PropertyStateManager.RepairDamagedOwnedProperties(afterLoanInterest, playerId);
     }
 
     private static int FindCurrentPlayerIndex(IReadOnlyList<Player> players, PlayerId currentTurnPlayerId)
