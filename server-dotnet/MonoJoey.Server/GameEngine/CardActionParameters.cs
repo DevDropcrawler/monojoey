@@ -5,4 +5,6 @@ using MonoJoey.Shared.Protocol;
 public sealed record CardActionParameters(
     TileId? TargetTileId = null,
     int? StepCount = null,
-    Money? Amount = null);
+    Money? Amount = null,
+    IReadOnlyList<TileId>? TileIds = null,
+    int? DamagePercent = null);

@@ -13,6 +13,8 @@ public enum CardActionKind
     ReceiveFromEveryPlayer,
     PayEveryPlayer,
     RepairOwnedProperties,
+    ApplySlimer,
+    ApplyEarthquake,
     GoToLockup,
     HoldForLater
 }

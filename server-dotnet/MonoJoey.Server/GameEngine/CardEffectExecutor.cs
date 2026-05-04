@@ -49,6 +49,16 @@ public static class CardEffectExecutor
                 gameState,
                 cardResolution.PlayerId,
                 CalculatePropertyRepairCost(gameState, cardResolution.PlayerId, RequireAmount(cardResolution))),
+            CardResolutionActionKind.ApplySlimer => new CardEffectExecutionResult(
+                PlayerStatusEffectManager.ApplySlimer(
+                    gameState,
+                    cardResolution.PlayerId,
+                    sourceId: cardResolution.CardId.Value)),
+            CardResolutionActionKind.ApplyEarthquake => new CardEffectExecutionResult(
+                PropertyStateManager.ApplyEarthquake(
+                    gameState,
+                    RequireTileIds(cardResolution).Select(tileId => tileId.Value),
+                    RequireDamagePercent(cardResolution))),
             CardResolutionActionKind.GoToLockup => new CardEffectExecutionResult(
                 LockupManager.SendToLockup(gameState, cardResolution.PlayerId)),
             CardResolutionActionKind.GetOutOfLockup => new CardEffectExecutionResult(
@@ -187,6 +197,18 @@ public static class CardEffectExecutor
     {
         return cardResolution.Parameters?.Amount
             ?? throw new InvalidOperationException("Resolved card money effect must include an amount.");
+    }
+
+    private static IReadOnlyList<TileId> RequireTileIds(CardResolutionResult cardResolution)
+    {
+        return cardResolution.Parameters?.TileIds
+            ?? throw new InvalidOperationException("Resolved card earthquake effect must include tile IDs.");
+    }
+
+    private static int RequireDamagePercent(CardResolutionResult cardResolution)
+    {
+        return cardResolution.Parameters?.DamagePercent
+            ?? throw new InvalidOperationException("Resolved card earthquake effect must include damage percent.");
     }
 
     private static int CalculateForwardStepsToTile(

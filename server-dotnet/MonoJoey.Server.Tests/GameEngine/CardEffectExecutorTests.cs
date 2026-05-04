@@ -199,6 +199,64 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_ApplySlimerAddsDeterministicStatusEffectWithCardSource()
+    {
+        var playerId = new PlayerId("player_1");
+        var cardId = new CardId("TEST_APPLY_SLIMER");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "start"));
+        var cardResolution = new CardResolutionResult(
+            playerId,
+            cardId,
+            CardResolutionActionKind.ApplySlimer,
+            Parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        var statusEffect = Assert.Single(result.Players[0].StatusEffects);
+        Assert.Equal("slimer:player_1", statusEffect.InstanceId);
+        Assert.Equal(PlayerStatusEffectKind.Slimer, statusEffect.Kind);
+        Assert.Equal("slimer", statusEffect.Data.DefinitionId);
+        Assert.Equal(cardId.Value, statusEffect.Data.SourceId);
+        Assert.Equal(new Money(1500), result.Players[0].Money);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_ApplyEarthquakeDamagesParameterizedTilesOnly()
+    {
+        var playerId = new PlayerId("player_1");
+        var player = CreatePlayer(playerId.Value, "start") with
+        {
+            OwnedPropertyIds = new HashSet<TileId>
+            {
+                new("property_01"),
+                new("property_03"),
+            },
+        };
+        var gameState = CreateGameState(player);
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.ApplyEarthquake,
+            new CardActionParameters(
+                TileIds: new[]
+                {
+                    new TileId("property_03"),
+                    new TileId("property_01"),
+                    new TileId("property_03"),
+                    new TileId("free_space_01"),
+                },
+                DamagePercent: 50));
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.Equal(
+            new[] { "property_01", "property_03" },
+            result.PropertyStates.Keys.Select(tileId => tileId.Value).ToArray());
+        Assert.All(result.PropertyStates.Values, propertyState => Assert.Equal(50, propertyState.Data.DamagePercent));
+        Assert.Equal(gameState.Players, result.Players);
+        Assert.Empty(gameState.PropertyStates);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_GoToLockupSendsPlayerToLockup()
     {
         var playerId = new PlayerId("player_1");

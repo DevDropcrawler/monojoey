@@ -1592,6 +1592,103 @@ public class LobbyMessageHandlerTests
         Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile.Count);
     }
 
+    [Fact]
+    public void ExecuteTile_SlimerCardAppliesStatusEffectAndDiscards()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var slimerCard = CreateCard("TEST_APPLY_SLIMER", CardActionKind.ApplySlimer);
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { slimerCard }, Array.Empty<Card>()));
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var card = payload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var statusEffect = Assert.Single(afterExecute.Players[0].StatusEffects);
+
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("apply_slimer", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal("TEST_APPLY_SLIMER", card.GetProperty("cardId").GetString());
+        Assert.Equal("slimer:player_1", statusEffect.InstanceId);
+        Assert.Equal(PlayerStatusEffectKind.Slimer, statusEffect.Kind);
+        Assert.Equal("TEST_APPLY_SLIMER", statusEffect.Data.SourceId);
+        Assert.False(payload.TryGetProperty("movement", out _));
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile);
+        Assert.Equal("TEST_APPLY_SLIMER", Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile).CardId.Value);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+    }
+
+    [Fact]
+    public void ExecuteTile_EarthquakeCardDamagesExplicitOwnedTilesAndDiscards()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "table_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+        var earthquakeCard = CreateCard(
+            "TEST_APPLY_EARTHQUAKE",
+            CardActionKind.ApplyEarthquake,
+            new CardActionParameters(
+                TileIds: new[]
+                {
+                    new TileId("property_03"),
+                    new TileId("property_01"),
+                    new TileId("property_03"),
+                    new TileId("free_space_01"),
+                },
+                DamagePercent: 35));
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Table,
+            new CardDeckState(CardDeckIds.Table, new[] { earthquakeCard }, Array.Empty<Card>()));
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var card = payload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_executed", payload.GetProperty("executionKind").GetString());
+        Assert.Equal("apply_earthquake", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal("TEST_APPLY_EARTHQUAKE", card.GetProperty("cardId").GetString());
+        Assert.Equal(
+            new[] { "property_01", "property_03" },
+            afterExecute.PropertyStates.Keys.Select(tileId => tileId.Value).ToArray());
+        Assert.All(afterExecute.PropertyStates.Values, propertyState => Assert.Equal(35, propertyState.Data.DamagePercent));
+        Assert.False(payload.TryGetProperty("movement", out _));
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Table].DrawPile);
+        Assert.Equal("TEST_APPLY_EARTHQUAKE", Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Table].DiscardPile).CardId.Value);
+        Assert.True(afterExecute.HasExecutedTileThisTurn);
+    }
+
     [Theory]
     [InlineData("chance_01", @"[""table""]", CardDeckIds.Chance)]
     [InlineData("table_01", @"[""chance""]", CardDeckIds.Table)]

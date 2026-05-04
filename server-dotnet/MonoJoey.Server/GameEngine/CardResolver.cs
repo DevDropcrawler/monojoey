@@ -70,6 +70,19 @@ public static class CardResolver
                 CardResolutionActionKind.RepairOwnedProperties,
                 card.Parameters),
 
+            CardActionKind.ApplySlimer => Resolved(
+                player,
+                card,
+                CardResolutionActionKind.ApplySlimer,
+                parameters: null),
+
+            CardActionKind.ApplyEarthquake when card.Parameters?.TileIds is { Count: > 0 } &&
+                card.Parameters.DamagePercent is >= 0 and <= 100 => Resolved(
+                    player,
+                    card,
+                    CardResolutionActionKind.ApplyEarthquake,
+                    card.Parameters),
+
             CardActionKind.GoToLockup => Resolved(
                 player,
                 card,

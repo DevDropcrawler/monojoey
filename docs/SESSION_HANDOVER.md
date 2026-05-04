@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.25A Property Repair System
-- Completion status: Chunk 5.25A complete; start-turn property repair now runs server-authoritatively for the selected current player after loan interest and before roll eligibility, repairing damaged owned purchasable properties by 10 percentage points in ordinal tile order when affordable, deducting deterministic repair costs, removing fully repaired states, and preserving snapshot/reconnect projection through `propertyStates[].data.damagePercent`.
+- Chunk: 5.25B Card System Triggers for Slimer and Earthquake
+- Completion status: Chunk 5.25B complete; existing Slimer and Earthquake mechanics can now be triggered by internal Chance/Table card definitions through the existing server-authoritative draw, resolve, execute, discard path. Slimer cards apply the deterministic player status effect with the card ID as source; Earthquake cards use explicit card-defined tile IDs plus damage percent and delegate deterministic damage application to `PropertyStateManager.ApplyEarthquake`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
@@ -19,27 +19,33 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.25A - Property Repair System.
+Phase 5, Chunk 5.25B - Card System Triggers for Slimer and Earthquake.
 
 Completed:
 
-- Added `PropertyStateManager.RepairDamagedOwnedProperties(GameState, PlayerId)` as the deterministic automatic repair hook.
-- Repairs process only the selected owner's damaged owned purchasable properties in ordinal `tileId` order.
-- Each processed property repairs by up to 10 damage percentage points, capped by remaining damage.
-- Repair cost uses `Math.Max(1, (int)Math.Floor(tile.Price * repairedPercent / 100m))`.
-- If the owner cannot afford the next property's full repair cost, repair processing stops; no partial repair, borrowing, or bankruptcy is triggered.
-- Fully repaired properties are removed from `GameState.PropertyStates`; partially repaired properties keep reduced `DamagePercent`.
-- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` now apply loan interest first, skip repair if that eliminates the selected player, then apply automatic property repair before the player can roll.
-- `end_turn_result.moneyDeltas` now reports repair deductions separately as `property_repair` instead of merging them into `loan_interest`.
-- Snapshot/reconnect continue to project repaired state through the existing `propertyStates[].data.damagePercent` shape; no snapshot version bump or client command was added.
-- Added engine and realtime coverage for repair amount/cost/removal, ordinal processing, insufficient funds, current-player-only repair, no-op cases, loan-interest ordering, elimination skip, rent after partial/full repair, end-turn helper deltas, and snapshot/reconnect persistence.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 588 passed, 0 failed, 0 skipped.
+- Added `CardActionKind.ApplySlimer` / `CardResolutionActionKind.ApplySlimer`.
+- Added `CardActionKind.ApplyEarthquake` / `CardResolutionActionKind.ApplyEarthquake`.
+- Extended `CardActionParameters` with explicit `TileIds` and `DamagePercent` fields for Earthquake card definitions.
+- `CardResolver.ResolveCard(player, card)` maps Slimer to the current card player and validates Earthquake cards before returning a supported resolution.
+- `CardEffectExecutor` now applies Slimer through `PlayerStatusEffectManager.ApplySlimer(gameState, playerId, sourceId: cardId)` and Earthquake through `PropertyStateManager.ApplyEarthquake(gameState, tileIds, damagePercent)`.
+- WebSocket `execute_tile` now supports the new resolved card actions through the existing chance/table card tile flow; payload shapes are unchanged and `resolutionKind` serializes as `apply_slimer` or `apply_earthquake`.
+- Replaced one low-impact Chance placeholder with `CHANCE_06_APPLY_SLIMER`.
+- Replaced one low-impact Table placeholder with `TABLE_10_APPLY_EARTHQUAKE`.
+- Kept both placeholder decks at 16 cards; no deck draw/discard mechanics changed.
+- Added engine and realtime coverage for resolver validity, Slimer status persistence, deterministic Earthquake damage, fixed deck counts, and card-tile execution/discard behavior.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 599 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
 - Unity/UI.
 - Persistence.
 - Stats.
+- Custom card editor or custom card creation.
+- New client commands.
+- Payload shape changes.
+- `GamePhase` changes.
+- Turn loop restructuring.
+- Runtime randomness or random Earthquake tile selection.
 - Unsupported tile effects beyond unowned property auction start, owned property rent, and no-action completion.
 - Auction retry handling.
 - Scaling.
@@ -52,9 +58,24 @@ Not included by explicit user scope:
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
 - Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
-- Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, card-triggered Earthquake, repair, or broad engine refactors.
+- Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 
 ## Files Changed In This Chunk
+
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardEffectExecutorTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardResolverTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `docs/SESSION_HANDOVER.md`
+
+## Previous Chunk Files
 
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
@@ -143,7 +164,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 588 passed, 0 failed, 0 skipped.
+  - Output summary: 599 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -258,8 +279,10 @@ Not included by explicit user scope:
 - Placeholder board IDs/display names from Chunk 2.1 are preserved.
 - Tile resolution action kinds remain placeholders and do not apply game effects.
 - Placeholder card IDs/display names from Chunk 4.1 are functional identifiers only, not final card names or text.
+- `CHANCE_06_APPLY_SLIMER` is an internal placeholder Chance card that applies Slimer to the drawing player.
+- `TABLE_10_APPLY_EARTHQUAKE` is an internal placeholder Table card that applies 50 percent Earthquake damage to explicit tile IDs: `property_01`, `property_02`, `property_03`, `transport_01`, and `utility_01`.
 - Placeholder card decks have fixed ordered definitions; `CardDeckState.FromDeck()` preserves that order for deterministic draw behavior.
-- Placeholder card action parameters are functional metadata only; tile targets and money amounts are not final card design.
+- Placeholder card action parameters are functional metadata only; tile targets, tile ID lists, damage percentages, and money amounts are not final card design.
 - Empty card draw piles return `CardDrawResultKind.DrawPileEmpty`; discards are not reshuffled yet.
 - Card deck state is stored in `GameState.CardDeckStates` using full immutable replacement; deck states are keyed by the `CardDeckIds.Chance` / `CardDeckIds.Table` constants.
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; WebSocket card execution returns `invalid_card` before persisting any draw, discard, execution flag, or player mutation.
@@ -270,7 +293,7 @@ Not included by explicit user scope:
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent uses the first rent table value, or a placeholder `10` for purchasable tiles without a rent table, then reduces it by persisted `PropertyStateData.DamagePercent`.
 - Damaged rent uses decimal floor math; fully damaged properties charge `0`, while damaged-but-not-destroyed properties charge at least `1`.
-- `PropertyStateManager.ApplyEarthquake` is an engine/manual-test damage hook only; no card trigger, client request, randomness, or UI has been added.
+- `PropertyStateManager.ApplyEarthquake` is now used by internal card execution; no client request, randomness, or UI has been added.
 - `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
@@ -351,8 +374,9 @@ Not included by explicit user scope:
 - WebSocket card tile execution is the integration boundary that composes `CardDeckManager.Draw()`, `CardResolver.ResolveCard()`, `CardEffectExecutor.ExecuteCardEffect()`, and a final immutable `GameState` replacement.
 - WebSocket card tile execution first checks `GameState.Rules.Cards.IsDeckEnabled(deckId)` after resolving the deck ID from tile type; disabled deck tiles skip runtime deck-state lookup and return an existing `no_action` execution result while marking the tile executed.
 - Card deck gating is per deck only through `CardRules.DecksEnabled`; there is no global cards-enabled flag or derived aggregate helper.
-- Supported WebSocket card actions are currently `MoveToStart`, `MoveSteps`, `ReceiveMoney`, `PayMoney`, `GoToLockup`, and `GetOutOfLockup`.
-- Out-of-scope resolved actions remain `MoveToTile`, `MoveToNearestTransport`, `MoveToNearestUtility`, `ReceiveMoneyFromEveryPlayer`, `PayMoneyToEveryPlayer`, and `RepairOwnedProperties`.
+- Slimer and Earthquake card execution uses deck-only gating for this phase: if an enabled deck contains the card and it is drawn, the card executes; `FutureRules.SlimerEnabled` and `FutureRules.EarthquakeEnabled` are not checked at draw time.
+- Supported WebSocket card actions are currently `MoveToStart`, `MoveToTile`, `MoveSteps`, `MoveToNearestTransport`, `MoveToNearestUtility`, `ReceiveMoney`, `PayMoney`, `ReceiveMoneyFromEveryPlayer`, `PayMoneyToEveryPlayer`, `RepairOwnedProperties`, `ApplySlimer`, `ApplyEarthquake`, `GoToLockup`, and `GetOutOfLockup`.
+- No resolved card actions are intentionally left unsupported in the current enum set; unknown future enum values still fall through as unsupported or unchanged depending on the boundary.
 - Successful non-held cards are appended to that deck's discard pile; successful held escape cards stay only in `Player.HeldCardIds` until a later explicit use path consumes them.
 - Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
 - `CardResolver.ResolveCard(player, card)` maps `CardActionKind` plus card parameters into `CardResolutionResult` only.
@@ -364,6 +388,8 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.MoveSteps` execution can move forward or backward through `MovementManager`.
 - `CardResolutionActionKind.ReceiveMoney` and `CardResolutionActionKind.PayMoney` affect only the resolved player.
 - `CardResolutionActionKind.PayMoney` deducts first; if the player's balance becomes negative, `BankruptcyManager.EliminateIfBankrupt` marks the player bankrupt/eliminated.
+- `CardResolutionActionKind.ApplySlimer` applies Slimer to the resolved player through `PlayerStatusEffectManager.ApplySlimer` and stores the card ID as the status source.
+- `CardResolutionActionKind.ApplyEarthquake` applies damage only from explicit card parameter tile IDs and damage percent through `PropertyStateManager.ApplyEarthquake`; the property manager handles dedupe, ordinal ordering, owned-property filtering, and max-damage behavior.
 - `CardResolutionActionKind.GoToLockup` directly moves the resolved player to `lockup_01` and marks `IsLockedUp = true`; it does not use `MovementManager` and does not create pass-start money.
 - `CardResolutionActionKind.GetOutOfLockup` grants the resolved card ID into `HeldCardIds`; actual escape consumption is performed explicitly through `LockupManager.UseGetOutOfLockupEscape`.
 - `CardEffectExecutor` does not draw, discard, reshuffle, advance turns, resolve landing tiles, start auctions, consume lockup escapes, or interact with loans.
@@ -417,4 +443,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.25A is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Chunk 5.25B is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

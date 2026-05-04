@@ -13,6 +13,8 @@ public enum CardResolutionActionKind
     ReceiveMoneyFromEveryPlayer,
     PayMoneyToEveryPlayer,
     RepairOwnedProperties,
+    ApplySlimer,
+    ApplyEarthquake,
     GoToLockup,
     GetOutOfLockup
 }

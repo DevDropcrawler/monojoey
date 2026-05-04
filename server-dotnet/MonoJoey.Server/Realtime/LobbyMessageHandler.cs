@@ -3136,6 +3136,8 @@ public sealed class LobbyMessageHandler
             CardResolutionActionKind.ReceiveMoneyFromEveryPlayer or
             CardResolutionActionKind.PayMoneyToEveryPlayer or
             CardResolutionActionKind.RepairOwnedProperties or
+            CardResolutionActionKind.ApplySlimer or
+            CardResolutionActionKind.ApplyEarthquake or
             CardResolutionActionKind.GoToLockup or
             CardResolutionActionKind.GetOutOfLockup;
     }
@@ -3341,6 +3343,8 @@ public sealed class LobbyMessageHandler
             CardResolutionActionKind.ReceiveMoneyFromEveryPlayer => "receive_money_from_every_player",
             CardResolutionActionKind.PayMoneyToEveryPlayer => "pay_money_to_every_player",
             CardResolutionActionKind.RepairOwnedProperties => "repair_owned_properties",
+            CardResolutionActionKind.ApplySlimer => "apply_slimer",
+            CardResolutionActionKind.ApplyEarthquake => "apply_earthquake",
             CardResolutionActionKind.GoToLockup => "go_to_lockup",
             CardResolutionActionKind.GetOutOfLockup => "get_out_of_lockup",
             _ => actionKind.ToString().ToLowerInvariant(),

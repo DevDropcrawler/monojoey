@@ -68,6 +68,28 @@ public class CardResolverTests
         Assert.Null(result.Parameters);
     }
 
+    [Theory]
+    [InlineData(null, 50)]
+    [InlineData("property_01", null)]
+    [InlineData("property_01", -1)]
+    [InlineData("property_01", 101)]
+    public void ResolveCard_ReturnsInvalidResultWhenEarthquakeParametersAreInvalid(
+        string? tileId,
+        int? damagePercent)
+    {
+        var player = CreatePlayer("player_1", "start");
+        IReadOnlyList<TileId>? tileIds = tileId is null ? null : new[] { new TileId(tileId) };
+        var card = CreateCard(
+            CardActionKind.ApplyEarthquake,
+            new CardActionParameters(TileIds: tileIds, DamagePercent: damagePercent));
+
+        var result = CardResolver.ResolveCard(player, card);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(CardResolutionActionKind.InvalidCard, result.ActionKind);
+        Assert.Null(result.Parameters);
+    }
+
     [Fact]
     public void ResolveCard_ReturnsInvalidResultForUndefinedActionKind()
     {
@@ -210,6 +232,29 @@ public class CardResolverTests
             new CardActionParameters(Amount: new Money(25)),
             CardResolutionActionKind.RepairOwnedProperties,
             new CardActionParameters(Amount: new Money(25)),
+        };
+
+        yield return new object[]
+        {
+            CardActionKind.ApplySlimer,
+            null!,
+            CardResolutionActionKind.ApplySlimer,
+            null!,
+        };
+
+        var earthquakeParameters = new CardActionParameters(
+            TileIds: new[]
+            {
+                new TileId("property_01"),
+                new TileId("property_02"),
+            },
+            DamagePercent: 50);
+        yield return new object[]
+        {
+            CardActionKind.ApplyEarthquake,
+            earthquakeParameters,
+            CardResolutionActionKind.ApplyEarthquake,
+            earthquakeParameters,
         };
 
         yield return new object[]

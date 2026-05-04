@@ -19,7 +19,7 @@ public static class PlaceholderCardDeckFactory
                 CreateMoveToTileCard("CHANCE_03_MOVE_TO_MID_PROPERTY", "property_03"),
                 CreateMoveToTileCard("CHANCE_04_MOVE_TO_LATE_PROPERTY", "transport_01"),
                 CreateCard("CHANCE_05_MOVE_TO_NEAREST_TRANSPORT", CardActionKind.MoveToNearestTransport),
-                CreateCard("CHANCE_06_MOVE_TO_NEAREST_TRANSPORT", CardActionKind.MoveToNearestTransport),
+                CreateCard("CHANCE_06_APPLY_SLIMER", CardActionKind.ApplySlimer),
                 CreateCard("CHANCE_07_MOVE_TO_NEAREST_UTILITY", CardActionKind.MoveToNearestUtility),
                 CreateMoneyCard("CHANCE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 50),
                 CreateCard("CHANCE_09_RELEASE_FROM_LOCKUP_HOLD", CardActionKind.HoldForLater),
@@ -49,7 +49,7 @@ public static class PlaceholderCardDeckFactory
                 CreateMoneyCard("TABLE_07_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 20),
                 CreateMoneyCard("TABLE_08_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 10),
                 CreateMoneyCard("TABLE_09_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
-                CreateMoneyCard("TABLE_10_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 20),
+                CreateEarthquakeCard("TABLE_10_APPLY_EARTHQUAKE", 50),
                 CreateMoneyCard("TABLE_11_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
                 CreateMoneyCard("TABLE_12_PAY_BANK", CardActionKind.PayBank, 100),
                 CreateMoneyCard("TABLE_13_PAY_BANK", CardActionKind.PayBank, 150),
@@ -94,5 +94,23 @@ public static class PlaceholderCardDeckFactory
             id,
             actionKind,
             new CardActionParameters(Amount: new Money(amount)));
+    }
+
+    private static Card CreateEarthquakeCard(string id, int damagePercent)
+    {
+        return new Card(
+            new CardId(id),
+            id,
+            CardActionKind.ApplyEarthquake,
+            new CardActionParameters(
+                TileIds: new[]
+                {
+                    new TileId("property_01"),
+                    new TileId("property_02"),
+                    new TileId("property_03"),
+                    new TileId("transport_01"),
+                    new TileId("utility_01"),
+                },
+                DamagePercent: damagePercent));
     }
 }
