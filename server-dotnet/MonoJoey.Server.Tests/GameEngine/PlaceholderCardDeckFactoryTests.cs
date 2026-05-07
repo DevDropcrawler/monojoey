@@ -170,6 +170,56 @@ public class PlaceholderCardDeckFactoryTests
         Assert.Null(slimerCard.Parameters);
     }
 
+    [Fact]
+    public void CreatePreset_ClassicIshMatchesDefaultDeckOrder()
+    {
+        var preset = PlaceholderCardDeckFactory.CreatePreset(CardDeckPresetIds.ClassicIsh);
+        var defaultDecks = PlaceholderCardDeckFactory.CreateAll();
+
+        Assert.Equal(
+            defaultDecks.Select(deck => deck.DeckId).ToArray(),
+            preset.Select(deck => deck.DeckId).ToArray());
+        Assert.Equal(
+            defaultDecks.SelectMany(deck => deck.Cards.Select(card => card.CardId.Value)).ToArray(),
+            preset.SelectMany(deck => deck.Cards.Select(card => card.CardId.Value)).ToArray());
+    }
+
+    [Fact]
+    public void CreatePreset_ChaosPreservesDeckIdsAndSizesWithAlternateOrder()
+    {
+        var preset = PlaceholderCardDeckFactory.CreatePreset(CardDeckPresetIds.Chaos);
+        var chanceDeck = Assert.Single(preset, deck => deck.DeckId == CardDeckIds.Chance);
+        var tableDeck = Assert.Single(preset, deck => deck.DeckId == CardDeckIds.Table);
+
+        Assert.Equal(PlaceholderCardDeckFactory.ChanceDeckCardCount, chanceDeck.Cards.Count);
+        Assert.Equal(PlaceholderCardDeckFactory.TableDeckCardCount, tableDeck.Cards.Count);
+        Assert.Equal("CHANCE_11_GO_TO_LOCKUP", chanceDeck.Cards[0].CardId.Value);
+        Assert.Equal("TABLE_06_GO_TO_LOCKUP", tableDeck.Cards[0].CardId.Value);
+        Assert.Equal(
+            PlaceholderCardDeckFactory.CreateChanceDeck().Cards.Select(card => card.CardId.Value).OrderBy(cardId => cardId),
+            chanceDeck.Cards.Select(card => card.CardId.Value).OrderBy(cardId => cardId));
+        Assert.Equal(
+            PlaceholderCardDeckFactory.CreateTableDeck().Cards.Select(card => card.CardId.Value).OrderBy(cardId => cardId),
+            tableDeck.Cards.Select(card => card.CardId.Value).OrderBy(cardId => cardId));
+    }
+
+    [Fact]
+    public void CreatePreset_CustomReadyCurrentlyMatchesClassicIsh()
+    {
+        var classic = PlaceholderCardDeckFactory.CreatePreset(CardDeckPresetIds.ClassicIsh);
+        var customReady = PlaceholderCardDeckFactory.CreatePreset(CardDeckPresetIds.CustomReady);
+
+        Assert.Equal(
+            classic.SelectMany(deck => deck.Cards.Select(card => card.CardId.Value)).ToArray(),
+            customReady.SelectMany(deck => deck.Cards.Select(card => card.CardId.Value)).ToArray());
+    }
+
+    [Fact]
+    public void CreatePreset_RejectsUnknownPresetId()
+    {
+        Assert.Throws<ArgumentException>(() => PlaceholderCardDeckFactory.CreatePreset("missing"));
+    }
+
     private static void AssertMoveToTile(Card card, string targetTileId)
     {
         Assert.Equal(CardActionKind.MoveToTile, card.ActionKind);

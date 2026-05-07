@@ -9,6 +9,42 @@ public static class PlaceholderCardDeckFactory
 
     public static CardDeck CreateChanceDeck()
     {
+        return CreatePreset(CardDeckPresetIds.Default).Single(deck => deck.DeckId == CardDeckIds.Chance);
+    }
+
+    public static CardDeck CreateTableDeck()
+    {
+        return CreatePreset(CardDeckPresetIds.Default).Single(deck => deck.DeckId == CardDeckIds.Table);
+    }
+
+    public static IReadOnlyList<CardDeck> CreateAll()
+    {
+        return CreatePreset(CardDeckPresetIds.Default);
+    }
+
+    public static IReadOnlyList<CardDeck> CreatePreset(string presetId)
+    {
+        return presetId switch
+        {
+            CardDeckPresetIds.ClassicIsh => CreateClassicIshPreset(),
+            CardDeckPresetIds.Chaos => CreateChaosPreset(),
+            CardDeckPresetIds.CustomReady => CreateClassicIshPreset(),
+            _ => throw new ArgumentException("Unknown card deck preset.", nameof(presetId)),
+        };
+    }
+
+    private static IReadOnlyList<CardDeck> CreateClassicIshPreset()
+    {
+        return new[] { CreateClassicIshChanceDeck(), CreateClassicIshTableDeck() };
+    }
+
+    private static IReadOnlyList<CardDeck> CreateChaosPreset()
+    {
+        return new[] { CreateChaosChanceDeck(), CreateChaosTableDeck() };
+    }
+
+    private static CardDeck CreateClassicIshChanceDeck()
+    {
         return new CardDeck(
             CardDeckIds.Chance,
             "Placeholder Chance Deck",
@@ -33,7 +69,7 @@ public static class PlaceholderCardDeckFactory
             });
     }
 
-    public static CardDeck CreateTableDeck()
+    private static CardDeck CreateClassicIshTableDeck()
     {
         return new CardDeck(
             CardDeckIds.Table,
@@ -59,9 +95,56 @@ public static class PlaceholderCardDeckFactory
             });
     }
 
-    public static IReadOnlyList<CardDeck> CreateAll()
+    private static CardDeck CreateChaosChanceDeck()
     {
-        return new[] { CreateChanceDeck(), CreateTableDeck() };
+        return new CardDeck(
+            CardDeckIds.Chance,
+            "Placeholder Chance Deck",
+            new[]
+            {
+                CreateCard("CHANCE_11_GO_TO_LOCKUP", CardActionKind.GoToLockup),
+                CreateMoneyCard("CHANCE_15_PAY_EVERY_PLAYER", CardActionKind.PayEveryPlayer, 20),
+                CreateMoveRelativeCard("CHANCE_10_MOVE_RELATIVE_BACK", -3),
+                CreateCard("CHANCE_06_APPLY_SLIMER", CardActionKind.ApplySlimer),
+                CreateCard("CHANCE_05_MOVE_TO_NEAREST_TRANSPORT", CardActionKind.MoveToNearestTransport),
+                CreateMoneyCard("CHANCE_16_PAY_BANK_MEDIUM", CardActionKind.PayBank, 75),
+                CreateMoveToTileCard("CHANCE_03_MOVE_TO_TABLE", "table_01"),
+                CreateMoneyCard("CHANCE_14_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 150),
+                CreateEarthquakeCard("CHANCE_13_LIGHT_EARTHQUAKE", 25),
+                CreateCard("CHANCE_09_RELEASE_FROM_LOCKUP_HOLD", CardActionKind.HoldForLater),
+                CreateMoveToTileCard("CHANCE_04_MOVE_TO_LOCKUP_VISIT", "lockup_01"),
+                CreateCard("CHANCE_07_MOVE_TO_NEAREST_UTILITY", CardActionKind.MoveToNearestUtility),
+                CreateMoneyCard("CHANCE_12_REPAIR_ASSESSMENT_SMALL", CardActionKind.RepairOwnedProperties, 15),
+                CreateMoveToTileCard("CHANCE_02_MOVE_TO_EARLY_PROPERTY", "property_01"),
+                CreateMoneyCard("CHANCE_08_RECEIVE_MEDIUM_BANK_BONUS", CardActionKind.ReceiveFromBank, 75),
+                CreateCard("CHANCE_01_MOVE_TO_START", CardActionKind.MoveToStart),
+            });
+    }
+
+    private static CardDeck CreateChaosTableDeck()
+    {
+        return new CardDeck(
+            CardDeckIds.Table,
+            "Placeholder Table Deck",
+            new[]
+            {
+                CreateCard("TABLE_06_GO_TO_LOCKUP", CardActionKind.GoToLockup),
+                CreateMoneyCard("TABLE_13_PAY_BANK", CardActionKind.PayBank, 150),
+                CreateCard("TABLE_11_APPLY_SLIMER", CardActionKind.ApplySlimer),
+                CreateMoneyCard("TABLE_15_RECEIVE_FROM_EVERY_PLAYER", CardActionKind.ReceiveFromEveryPlayer, 10),
+                CreateMoveToTileCard("TABLE_08_MOVE_TO_TRANSPORT", "transport_01"),
+                CreateMoneyCard("TABLE_12_PAY_BANK", CardActionKind.PayBank, 100),
+                CreateEarthquakeCard("TABLE_10_APPLY_EARTHQUAKE", 50),
+                CreateMoneyCard("TABLE_16_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 200),
+                CreateMoneyCard("TABLE_02_PAY_BANK_SMALL", CardActionKind.PayBank, 25),
+                CreateCard("TABLE_05_RELEASE_FROM_LOCKUP_HOLD", CardActionKind.HoldForLater),
+                CreateMoveToTileCard("TABLE_07_MOVE_TO_PROPERTY_02", "property_02"),
+                CreateMoneyCard("TABLE_03_PAY_BANK", CardActionKind.PayBank, 50),
+                CreateMoneyCard("TABLE_14_REPAIR_OWNED_PROPERTIES", CardActionKind.RepairOwnedProperties, 25),
+                CreateMoneyCard("TABLE_04_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
+                CreateMoneyCard("TABLE_09_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 100),
+                CreateMoneyCard("TABLE_01_RECEIVE_FROM_BANK", CardActionKind.ReceiveFromBank, 25),
+            });
     }
 
     private static Card CreateCard(string id, CardActionKind actionKind)

@@ -5,13 +5,13 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.25B Card System Triggers for Slimer and Earthquake
-- Completion status: Chunk 5.25B complete; existing Slimer and Earthquake mechanics can now be triggered by internal Chance/Table card definitions through the existing server-authoritative draw, resolve, execute, discard path. Slimer cards apply the deterministic player status effect with the card ID as source; Earthquake cards use explicit card-defined tile IDs plus damage percent and delegate deterministic damage application to `PropertyStateManager.ApplyEarthquake`.
+- Chunk: 5.26B Deck Presets
+- Completion status: Chunk 5.26B complete; server-authoritative card rules now support deterministic built-in deck preset IDs through `cards.deckPresetId`. `classic_ish` is the default and preserves the existing Chance/Table deck composition and order, `chaos` uses the same deck IDs and card counts with deterministic alternate order, and `custom_ready` is reserved while currently matching `classic_ish`.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
 - Last commit after this chunk: not committed yet
-- Date/time: 2026-05-04
+- Date/time: 2026-05-07
 
 ## Docs Planning Note
 
@@ -19,21 +19,20 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.25B - Card System Triggers for Slimer and Earthquake.
+Phase 5, Chunk 5.26B - Deck Presets.
 
 Completed:
 
-- Added `CardActionKind.ApplySlimer` / `CardResolutionActionKind.ApplySlimer`.
-- Added `CardActionKind.ApplyEarthquake` / `CardResolutionActionKind.ApplyEarthquake`.
-- Extended `CardActionParameters` with explicit `TileIds` and `DamagePercent` fields for Earthquake card definitions.
-- `CardResolver.ResolveCard(player, card)` maps Slimer to the current card player and validates Earthquake cards before returning a supported resolution.
-- `CardEffectExecutor` now applies Slimer through `PlayerStatusEffectManager.ApplySlimer(gameState, playerId, sourceId: cardId)` and Earthquake through `PropertyStateManager.ApplyEarthquake(gameState, tileIds, damagePercent)`.
-- WebSocket `execute_tile` now supports the new resolved card actions through the existing chance/table card tile flow; payload shapes are unchanged and `resolutionKind` serializes as `apply_slimer` or `apply_earthquake`.
-- Replaced one low-impact Chance placeholder with `CHANCE_06_APPLY_SLIMER`.
-- Replaced one low-impact Table placeholder with `TABLE_10_APPLY_EARTHQUAKE`.
-- Kept both placeholder decks at 16 cards; no deck draw/discard mechanics changed.
-- Added engine and realtime coverage for resolver validity, Slimer status persistence, deterministic Earthquake damage, fixed deck counts, and card-tile execution/discard behavior.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 599 passed, 0 failed, 0 skipped.
+- Added `CardDeckPresetIds` with `classic_ish`, `chaos`, `custom_ready`, and default `classic_ish`.
+- Extended `CardRules` with `DeckPresetId`, preserving existing constructor callers through a default value.
+- `set_rules` now accepts `cards.deckPresetId` and rejects unknown, null, or empty explicit values through the existing `invalid_rules` path.
+- `PlaceholderCardDeckFactory.CreatePreset(presetId)` returns deterministic server-only deck definitions.
+- Existing `CreateChanceDeck`, `CreateTableDeck`, and `CreateAll` now delegate to the default `classic_ish` preset, preserving current behavior.
+- `SessionManager.StartGame` freezes `GameState.CardDeckStates` from `session.DraftRules.Cards.DeckPresetId`; later rule changes remain blocked because started sessions already reject `set_rules`.
+- `chaos` preserves the same Chance/Table deck IDs and 16-card deck sizes while using deterministic alternate first-card/order differences.
+- `custom_ready` currently resolves to the same deck definitions as `classic_ish`.
+- Added resolver, realtime rules, session start, and deck factory coverage for defaulting, validation, preset acceptance, preset order, and frozen deck state.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 624 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -42,7 +41,7 @@ Not included by explicit user scope:
 - Stats.
 - Custom card editor or custom card creation.
 - New client commands.
-- Payload shape changes.
+- Gameplay payload shape changes.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -62,17 +61,16 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/CardActionKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardActionParameters.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardEffectExecutor.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardResolutionActionKind.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/CardResolver.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/CardDeckPresetIds.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PlaceholderCardDeckFactory.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardEffectExecutorTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/CardResolverTests.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionRulesTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyRulesMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Previous Chunk Files
@@ -164,7 +162,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 599 passed, 0 failed, 0 skipped.
+  - Output summary: 624 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 

@@ -345,7 +345,7 @@ public sealed class SessionManager
             DateTimeOffset.UtcNow,
             EndedAtUtc: null)
         {
-            CardDeckStates = CreateInitialCardDeckStates(),
+            CardDeckStates = CreateInitialCardDeckStates(session.DraftRules.Cards.DeckPresetId),
             Rules = session.DraftRules.DeepCopy(),
         };
         var startedGameState = TurnManager.StartFirstTurn(lobbyGameState);
@@ -459,12 +459,10 @@ public sealed class SessionManager
             IsEliminated: false);
     }
 
-    private static IReadOnlyDictionary<string, CardDeckState> CreateInitialCardDeckStates()
+    private static IReadOnlyDictionary<string, CardDeckState> CreateInitialCardDeckStates(
+        string presetId = CardDeckPresetIds.Default)
     {
-        return new Dictionary<string, CardDeckState>
-        {
-            [CardDeckIds.Chance] = CardDeckState.FromDeck(PlaceholderCardDeckFactory.CreateChanceDeck()),
-            [CardDeckIds.Table] = CardDeckState.FromDeck(PlaceholderCardDeckFactory.CreateTableDeck()),
-        };
+        return PlaceholderCardDeckFactory.CreatePreset(presetId)
+            .ToDictionary(deck => deck.DeckId, CardDeckState.FromDeck, StringComparer.Ordinal);
     }
 }

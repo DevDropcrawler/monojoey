@@ -41,6 +41,7 @@ public class GameRulesResolverTests
         Assert.True(rules.Cards.IsDeckEnabled("table"));
         Assert.True(rules.Cards.CustomCardsEnabled);
         Assert.True(rules.Cards.DeckEditingEnabled);
+        Assert.Equal(CardDeckPresetIds.ClassicIsh, rules.Cards.DeckPresetId);
         Assert.True(rules.Loans.LoanSharkEnabled);
         Assert.Equal(0.25m, rules.Loans.BaseInterestRate);
         Assert.Equal(0.10m, rules.Loans.InterestRateIncreasePerLoan);
@@ -112,6 +113,30 @@ public class GameRulesResolverTests
         Assert.True(rules.Cards.IsDeckEnabled("table"));
         Assert.False(rules.Cards.IsDeckEnabled("TABLE"));
         Assert.False(rules.Cards.IsDeckEnabled("missing"));
+    }
+
+    [Theory]
+    [InlineData("classic_ish")]
+    [InlineData("chaos")]
+    [InlineData("custom_ready")]
+    public void CardRules_AcceptsKnownDeckPresetIds(string deckPresetId)
+    {
+        using var document = JsonDocument.Parse($@"{{""cards"":{{""deckPresetId"":""{deckPresetId}""}}}}");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Equal(deckPresetId, rules.Cards.DeckPresetId);
+    }
+
+    [Fact]
+    public void CardRules_DefaultConstructionUsesClassicIshDeckPreset()
+    {
+        var rules = new CardRules(
+            new[] { CardDeckIds.Chance, CardDeckIds.Table },
+            customCardsEnabled: true,
+            deckEditingEnabled: true);
+
+        Assert.Equal(CardDeckPresetIds.ClassicIsh, rules.DeckPresetId);
     }
 
     [Fact]
@@ -189,6 +214,9 @@ public class GameRulesResolverTests
     [InlineData(@"{""dice"":{""maxConsecutiveDoublesBeforeLockup"":""3""}}")]
     [InlineData(@"{""loans"":{""baseInterestRate"":1.5}}")]
     [InlineData(@"{""cards"":{""decksEnabled"":[""chance"",""missing""]}}")]
+    [InlineData(@"{""cards"":{""deckPresetId"":""missing""}}")]
+    [InlineData(@"{""cards"":{""deckPresetId"":""""}}")]
+    [InlineData(@"{""cards"":{""deckPresetId"":null}}")]
     [InlineData(@"{""win"":{""conditionType"":""score""}}")]
     [InlineData(@"{""future"":{""slimerEnabled"":""yes""}}")]
     public void InvalidPayloads_AreRejected(string json)

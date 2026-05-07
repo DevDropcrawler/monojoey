@@ -23,6 +23,7 @@ public class SessionRulesTests
         Assert.Equal(3, session.DraftRules.Jail.MaxTurns);
         Assert.False(session.DraftRules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(3, session.DraftRules.Dice.MaxConsecutiveDoublesBeforeLockup);
+        Assert.Equal(CardDeckPresetIds.ClassicIsh, session.DraftRules.Cards.DeckPresetId);
     }
 
     [Fact]
@@ -50,6 +51,11 @@ public class SessionRulesTests
                 DoublesExtraTurnEnabled = true,
                 MaxConsecutiveDoublesBeforeLockup = 2,
             },
+            Cards = new CardRules(
+                new[] { CardDeckIds.Chance, CardDeckIds.Table },
+                customCardsEnabled: true,
+                deckEditingEnabled: true,
+                deckPresetId: CardDeckPresetIds.Chaos),
         };
         _ = sessionManager.SetDraftRules(session.SessionId, new PlayerId("player_1"), draftRules);
 
@@ -72,6 +78,8 @@ public class SessionRulesTests
         Assert.Equal(4, startedSession.GameState.Rules.Jail.MaxTurns);
         Assert.True(startedSession.GameState.Rules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(2, startedSession.GameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
+        Assert.Equal(CardDeckPresetIds.Chaos, startedSession.GameState.Rules.Cards.DeckPresetId);
+        Assert.Equal("CHANCE_11_GO_TO_LOCKUP", startedSession.GameState.CardDeckStates[CardDeckIds.Chance].DrawPile[0].CardId.Value);
     }
 
     [Fact]
@@ -131,6 +139,31 @@ public class SessionRulesTests
     }
 
     [Fact]
+    public void StartGame_WithCustomReadyPresetFreezesClassicIshDeckOrder()
+    {
+        var sessionManager = new SessionManager();
+        var session = CreateReadyLobby(sessionManager);
+        var draftRules = GameRulesPresets.MonoJoeyDefault with
+        {
+            PresetId = "custom",
+            PresetName = "Custom ready deck",
+            IsCustom = true,
+            Cards = new CardRules(
+                new[] { CardDeckIds.Chance, CardDeckIds.Table },
+                customCardsEnabled: true,
+                deckEditingEnabled: true,
+                deckPresetId: CardDeckPresetIds.CustomReady),
+        };
+        _ = sessionManager.SetDraftRules(session.SessionId, new PlayerId("player_1"), draftRules);
+
+        var startedSession = sessionManager.StartGame(session.SessionId);
+
+        Assert.Equal(CardDeckPresetIds.CustomReady, startedSession.GameState.Rules.Cards.DeckPresetId);
+        Assert.Equal("CHANCE_01_MOVE_TO_START", startedSession.GameState.CardDeckStates[CardDeckIds.Chance].DrawPile[0].CardId.Value);
+        Assert.Equal("TABLE_01_RECEIVE_FROM_BANK", startedSession.GameState.CardDeckStates[CardDeckIds.Table].DrawPile[0].CardId.Value);
+    }
+
+    [Fact]
     public void SetDraftRules_RejectsStartedSession()
     {
         var sessionManager = new SessionManager();
@@ -175,6 +208,7 @@ public class SessionRulesTests
         Assert.Equal(expected.Cards.DecksEnabled, actual.Cards.DecksEnabled);
         Assert.Equal(expected.Cards.CustomCardsEnabled, actual.Cards.CustomCardsEnabled);
         Assert.Equal(expected.Cards.DeckEditingEnabled, actual.Cards.DeckEditingEnabled);
+        Assert.Equal(expected.Cards.DeckPresetId, actual.Cards.DeckPresetId);
         Assert.Equal(expected.Loans, actual.Loans);
         Assert.Equal(expected.Win, actual.Win);
         Assert.Equal(expected.Future, actual.Future);

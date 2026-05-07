@@ -1,6 +1,7 @@
 namespace MonoJoey.Server.Tests.Realtime;
 
 using System.Text.Json;
+using MonoJoey.Server.GameEngine;
 using MonoJoey.Server.Realtime;
 using MonoJoey.Server.Sessions;
 
@@ -30,6 +31,7 @@ public class LobbyRulesMessageHandlerTests
         Assert.False(rules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
         Assert.Equal(3, rules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
         Assert.Equal(new[] { "chance", "table" }, rules.GetProperty("cards").GetProperty("decksEnabled").EnumerateArray().Select(deck => deck.GetString()).ToArray());
+        Assert.Equal("classic_ish", rules.GetProperty("cards").GetProperty("deckPresetId").GetString());
     }
 
     [Fact]
@@ -70,6 +72,28 @@ public class LobbyRulesMessageHandlerTests
         Assert.True(payload.Rules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(2, payload.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.False(payload.Rules.Loans.LoanSharkEnabled);
+    }
+
+    [Theory]
+    [InlineData("classic_ish")]
+    [InlineData("chaos")]
+    [InlineData("custom_ready")]
+    public void SetRules_AcceptsKnownCardDeckPresetIds(string deckPresetId)
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(
+            handler,
+            context,
+            SetRulesMessage(session.SessionId, "player_1", $@"""cards"":{{""deckPresetId"":""{deckPresetId}""}}"));
+        var payload = AssertResponseType(response, "rules_updated");
+
+        Assert.Equal(deckPresetId, payload.GetProperty("rules").GetProperty("cards").GetProperty("deckPresetId").GetString());
+        Assert.Equal(deckPresetId, sessionManager.GetSession(session.SessionId)?.DraftRules.Cards.DeckPresetId);
     }
 
     [Fact]
@@ -113,6 +137,9 @@ public class LobbyRulesMessageHandlerTests
     [InlineData(@"""dice"":{""doublesExtraTurnEnabled"":""yes""}")]
     [InlineData(@"""loans"":{""baseInterestRate"":-0.1}")]
     [InlineData(@"""cards"":{""decksEnabled"":[""unknown""]}")]
+    [InlineData(@"""cards"":{""deckPresetId"":""unknown""}")]
+    [InlineData(@"""cards"":{""deckPresetId"":""""}")]
+    [InlineData(@"""cards"":{""deckPresetId"":null}")]
     public void SetRules_InvalidRulesReturnsInvalidRules(string rulesJson)
     {
         var sessionManager = new SessionManager();
@@ -127,6 +154,27 @@ public class LobbyRulesMessageHandlerTests
             SetRulesMessage(session.SessionId, "player_1", rulesJson));
 
         AssertError(response, "invalid_rules");
+    }
+
+    [Fact]
+    public void SetRules_InvalidDeckPresetIdDoesNotMutateStoredRules()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = new LobbyMessageHandler(sessionManager);
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+        _ = handler.HandleTextMessage(
+            SetRulesMessage(session.SessionId, "player_1", @"""cards"":{""deckPresetId"":""chaos""}"),
+            context);
+
+        using var response = Handle(
+            handler,
+            context,
+            SetRulesMessage(session.SessionId, "player_1", @"""cards"":{""deckPresetId"":""unknown""}"));
+
+        AssertError(response, "invalid_rules");
+        Assert.Equal(CardDeckPresetIds.Chaos, sessionManager.GetSession(session.SessionId)?.DraftRules.Cards.DeckPresetId);
     }
 
     [Fact]
@@ -177,9 +225,12 @@ public class LobbyRulesMessageHandlerTests
         using var response = Handle(
             handler,
             firstContext,
-            SetRulesMessage(session.SessionId, "player_1", @"""auction"":{""initialTimerSeconds"":12}"));
+            SetRulesMessage(session.SessionId, "player_1", @"""cards"":{""deckPresetId"":""chaos""}"));
 
         AssertError(response, "invalid_session_status");
+        var gameState = sessionManager.GetSession(session.SessionId)!.GameState;
+        Assert.Equal(CardDeckPresetIds.ClassicIsh, gameState.Rules.Cards.DeckPresetId);
+        Assert.Equal("CHANCE_01_MOVE_TO_START", gameState.CardDeckStates[CardDeckIds.Chance].DrawPile[0].CardId.Value);
     }
 
     [Fact]

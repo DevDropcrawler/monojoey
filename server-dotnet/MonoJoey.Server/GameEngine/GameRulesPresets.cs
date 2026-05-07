@@ -37,7 +37,8 @@ public static class GameRulesPresets
         Cards: new CardRules(
             new[] { CardDeckIds.Chance, CardDeckIds.Table },
             customCardsEnabled: true,
-            deckEditingEnabled: true),
+            deckEditingEnabled: true,
+            deckPresetId: CardDeckPresetIds.Default),
         Loans: new LoanRules(
             LoanSharkEnabled: true,
             BaseInterestRate: 0.25m,

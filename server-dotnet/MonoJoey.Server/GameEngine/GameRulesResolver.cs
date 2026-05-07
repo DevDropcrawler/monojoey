@@ -218,12 +218,20 @@ public static class GameRulesResolver
             "decksEnabled",
             "customCardsEnabled",
             "deckEditingEnabled",
+            "deckPresetId",
         });
+
+        var deckPresetId = ReadOptionalString(group, "deckPresetId") ?? baseline.DeckPresetId;
+        if (!CardDeckPresetIds.IsKnown(deckPresetId))
+        {
+            throw new GameRulesValidationException("Unknown card deck preset.");
+        }
 
         return new CardRules(
             ReadOptionalDeckIds(group, "decksEnabled") ?? baseline.DecksEnabled,
             ReadOptionalBool(group, "customCardsEnabled") ?? baseline.CustomCardsEnabled,
-            ReadOptionalBool(group, "deckEditingEnabled") ?? baseline.DeckEditingEnabled);
+            ReadOptionalBool(group, "deckEditingEnabled") ?? baseline.DeckEditingEnabled,
+            deckPresetId);
     }
 
     private static LoanRules MergeLoans(LoanRules baseline, JsonElement group)
@@ -437,6 +445,7 @@ public static class GameRulesResolver
             rules.Loans.InterestRateIncreasePerDebtTier > 1m ||
             rules.Loans.MinimumInterestPayment < 0 ||
             rules.Win.ConditionType != "lastPlayerStanding" ||
+            !CardDeckPresetIds.IsKnown(rules.Cards.DeckPresetId) ||
             rules.Cards.DecksEnabled.Any(deckId => !KnownDeckIds.Contains(deckId)))
         {
             throw new GameRulesValidationException("Rules failed validation.");
@@ -454,6 +463,7 @@ public static class GameRulesResolver
             first.Future == second.Future &&
             first.Cards.CustomCardsEnabled == second.Cards.CustomCardsEnabled &&
             first.Cards.DeckEditingEnabled == second.Cards.DeckEditingEnabled &&
+            first.Cards.DeckPresetId == second.Cards.DeckPresetId &&
             first.Cards.DecksEnabled.SequenceEqual(second.Cards.DecksEnabled, StringComparer.Ordinal);
     }
 }

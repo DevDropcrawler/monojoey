@@ -111,11 +111,13 @@ public sealed record CardRules
     public CardRules(
         IEnumerable<string> decksEnabled,
         bool customCardsEnabled,
-        bool deckEditingEnabled)
+        bool deckEditingEnabled,
+        string deckPresetId = CardDeckPresetIds.Default)
     {
         this.decksEnabled = decksEnabled.ToArray();
         CustomCardsEnabled = customCardsEnabled;
         DeckEditingEnabled = deckEditingEnabled;
+        DeckPresetId = deckPresetId;
     }
 
     public IReadOnlyList<string> DecksEnabled => decksEnabled.ToArray();
@@ -123,6 +125,8 @@ public sealed record CardRules
     public bool CustomCardsEnabled { get; }
 
     public bool DeckEditingEnabled { get; }
+
+    public string DeckPresetId { get; }
 
     public bool IsDeckEnabled(string deckId)
     {
@@ -134,7 +138,8 @@ public sealed record CardRules
         return new CardRules(
             decksEnabled,
             CustomCardsEnabled,
-            DeckEditingEnabled);
+            DeckEditingEnabled,
+            DeckPresetId);
     }
 }
 
