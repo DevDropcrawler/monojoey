@@ -290,6 +290,63 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_DefaultChanceLockupVisitMovesWithoutLockingPlayer()
+    {
+        var player = CreatePlayer("player_1", "property_03");
+
+        var result = ExecuteDefaultCard("CHANCE_04_MOVE_TO_LOCKUP_VISIT", player);
+
+        Assert.Equal("lockup_01", result.Players[0].CurrentTileId.Value);
+        Assert.False(result.Players[0].IsLockedUp);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_DefaultLightEarthquakeDamagesOnlyOwnedEligibleListedTiles()
+    {
+        var player = CreatePlayer("player_1", "start") with
+        {
+            OwnedPropertyIds = new HashSet<TileId>
+            {
+                new("property_01"),
+                new("property_02"),
+                new("transport_01"),
+                new("utility_01"),
+            },
+        };
+
+        var result = ExecuteDefaultCard("CHANCE_13_LIGHT_EARTHQUAKE", player);
+
+        Assert.Equal(
+            new[] { "property_01", "property_02", "transport_01", "utility_01" },
+            result.PropertyStates.Keys.Select(tileId => tileId.Value).ToArray());
+        Assert.All(result.PropertyStates.Values, propertyState => Assert.Equal(25, propertyState.Data.DamagePercent));
+        Assert.DoesNotContain(new TileId("property_03"), result.PropertyStates.Keys);
+        Assert.DoesNotContain(new TileId("free_space_01"), result.PropertyStates.Keys);
+        Assert.DoesNotContain(new TileId("table_01"), result.PropertyStates.Keys);
+        Assert.DoesNotContain(new TileId("lockup_01"), result.PropertyStates.Keys);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_DefaultTableProperty02CardMovesPlayerToProperty02()
+    {
+        var player = CreatePlayer("player_1", "start");
+
+        var result = ExecuteDefaultCard("TABLE_07_MOVE_TO_PROPERTY_02", player);
+
+        Assert.Equal("property_02", result.Players[0].CurrentTileId.Value);
+    }
+
+    [Fact]
+    public void ExecuteCardEffect_DefaultTableTransportCardMovesPlayerToTransport()
+    {
+        var player = CreatePlayer("player_1", "property_02");
+
+        var result = ExecuteDefaultCard("TABLE_08_MOVE_TO_TRANSPORT", player);
+
+        Assert.Equal("transport_01", result.Players[0].CurrentTileId.Value);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_AllDefaultPlaceholderCardsExecute()
     {
         var playerId = new PlayerId("player_1");
@@ -388,5 +445,24 @@ public class CardEffectExecutorTests
         CardActionParameters? parameters)
     {
         return new CardResolutionResult(playerId, new CardId($"card_{actionKind}"), actionKind, parameters);
+    }
+
+    private static GameState ExecuteDefaultCard(string cardId, Player player, params Player[] additionalPlayers)
+    {
+        var players = new[] { player }.Concat(additionalPlayers).ToArray();
+        var gameState = CreateGameState(players);
+        var card = FindDefaultCard(cardId);
+        var resolution = CardResolver.ResolveCard(player, card);
+
+        Assert.True(resolution.IsValid);
+
+        return CardEffectExecutor.ExecuteCardEffect(gameState, resolution);
+    }
+
+    private static Card FindDefaultCard(string cardId)
+    {
+        return PlaceholderCardDeckFactory.CreateAll()
+            .SelectMany(deck => deck.Cards)
+            .Single(card => card.CardId.Value == cardId);
     }
 }
