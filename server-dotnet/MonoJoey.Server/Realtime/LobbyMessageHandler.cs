@@ -2,6 +2,7 @@ namespace MonoJoey.Server.Realtime;
 
 using System.Text.Json;
 using MonoJoey.Server.GameEngine;
+using MonoJoey.Server.GameEngine.Stats;
 using MonoJoey.Server.Sessions;
 using MonoJoey.Shared.Protocol;
 using MonoJoey.Shared.Schemas;
@@ -15,14 +16,19 @@ public sealed class LobbyMessageHandler
     private readonly DiceService diceService;
     private readonly SessionManager sessionManager;
     private readonly AuctionTimerService auctionTimerService;
+    private readonly IStatEventSink statEventSink;
 
     public LobbyMessageHandler(SessionManager sessionManager)
-        : this(sessionManager, new DiceService(new RandomDiceRoller()), new AuctionTimerService())
+        : this(
+            sessionManager,
+            new DiceService(new RandomDiceRoller()),
+            new AuctionTimerService(),
+            NullStatEventSink.Instance)
     {
     }
 
     public LobbyMessageHandler(SessionManager sessionManager, DiceService diceService)
-        : this(sessionManager, diceService, new AuctionTimerService())
+        : this(sessionManager, diceService, new AuctionTimerService(), NullStatEventSink.Instance)
     {
     }
 
@@ -30,10 +36,20 @@ public sealed class LobbyMessageHandler
         SessionManager sessionManager,
         DiceService diceService,
         AuctionTimerService auctionTimerService)
+        : this(sessionManager, diceService, auctionTimerService, NullStatEventSink.Instance)
+    {
+    }
+
+    internal LobbyMessageHandler(
+        SessionManager sessionManager,
+        DiceService diceService,
+        AuctionTimerService auctionTimerService,
+        IStatEventSink statEventSink)
     {
         this.sessionManager = sessionManager;
         this.diceService = diceService;
         this.auctionTimerService = auctionTimerService;
+        this.statEventSink = statEventSink;
     }
 
     internal AuctionTimerService AuctionTimerService => auctionTimerService;
@@ -629,11 +645,20 @@ public sealed class LobbyMessageHandler
                 advancedGameState,
                 DateTimeOffset.UtcNow);
 
-            return CreateTerminalBroadcastResult(
-                CreateEndTurnResult(previousPlayerId, beforeAdvanceGameState, persistence.Session.GameState),
+            var directResponse = CreateEndTurnResult(
+                previousPlayerId,
+                beforeAdvanceGameState,
+                persistence.Session.GameState);
+            var result = CreateTerminalBroadcastResult(
+                directResponse,
                 LobbyMessageTypes.TurnEnded,
                 persistence.Session,
                 persistence);
+
+            EmitPropertyRepairStats(beforeAdvanceGameState, persistence.Session.GameState);
+            EmitGameWonStat(persistence, persistence.Session.GameState);
+
+            return result;
         }
     }
 
@@ -830,11 +855,17 @@ public sealed class LobbyMessageHandler
                 DateTimeOffset.UtcNow);
             auctionTimerService.Cancel(sessionId);
 
-            return CreateTerminalBroadcastResult(
-                CreateAuctionResult(finalizationResult, persistence.Session.GameState),
+            var directResponse = CreateAuctionResult(finalizationResult, persistence.Session.GameState);
+            var result = CreateTerminalBroadcastResult(
+                directResponse,
                 LobbyMessageTypes.AuctionFinalized,
                 persistence.Session,
                 persistence);
+
+            EmitAuctionStats(finalizationResult);
+            EmitGameWonStat(persistence, persistence.Session.GameState);
+
+            return result;
         }
     }
 
@@ -898,11 +929,17 @@ public sealed class LobbyMessageHandler
                 nowUtc);
             auctionTimerService.Cancel(sessionId);
 
-            return CreateTerminalBroadcastResult(
-                CreateAuctionResult(finalizationResult, persistence.Session.GameState),
+            var directResponse = CreateAuctionResult(finalizationResult, persistence.Session.GameState);
+            var result = CreateTerminalBroadcastResult(
+                directResponse,
                 LobbyMessageTypes.AuctionFinalized,
                 persistence.Session,
                 persistence);
+
+            EmitAuctionStats(finalizationResult);
+            EmitGameWonStat(persistence, persistence.Session.GameState);
+
+            return result;
         }
     }
 
@@ -1054,11 +1091,20 @@ public sealed class LobbyMessageHandler
                 gamePlayer => gamePlayer.PlayerId == player.PlayerId)
                 ?? throw new InvalidOperationException("Accepted loans must persist the borrowing player.");
 
-            return CreateBroadcastResult(
-                CreateLoanResult(persistedPlayer, amount, purpose),
+            var directResponse = CreateLoanResult(persistedPlayer, amount, purpose);
+            var result = CreateBroadcastResult(
+                directResponse,
                 LobbyMessageTypes.LoanTaken,
                 persistence.Session,
                 persistence.Sequence);
+
+            EmitStatEvent(new StatEvent(
+                player.PlayerId,
+                StatEventKind.LoanTaken,
+                new Money(amount),
+                Source: "loan"));
+
+            return result;
         }
     }
 
@@ -1723,8 +1769,7 @@ public sealed class LobbyMessageHandler
             rentGameState,
             DateTimeOffset.UtcNow);
 
-        return CreateTerminalBroadcastResult(
-            CreateExecuteTileResult(
+        var directResponse = CreateExecuteTileResult(
                 resolution,
                 GetRentExecutionKind(rent),
                 rentPersistence.Session.GameState,
@@ -1732,10 +1777,17 @@ public sealed class LobbyMessageHandler
                 rent: CreateRentPayload(rent, rentPersistence.Session.GameState),
                 card: null,
                 moneyDeltas: CreateRentMoneyDeltas(rent, rentPersistence.Session.GameState),
-                playerEliminations: CreateRentPlayerEliminations(rent, rentPersistence.Session.GameState)),
+                playerEliminations: CreateRentPlayerEliminations(rent, rentPersistence.Session.GameState));
+        var result = CreateTerminalBroadcastResult(
+            directResponse,
             LobbyMessageTypes.TileExecuted,
             rentPersistence.Session,
             rentPersistence);
+
+        EmitRentStats(rent);
+        EmitGameWonStat(rentPersistence, rentPersistence.Session.GameState);
+
+        return result;
     }
 
     private LobbyMessageHandleResult ExecuteTaxTile(
@@ -1758,8 +1810,7 @@ public sealed class LobbyMessageHandler
         var persistedPlayer = persistence.Session.GameState.Players.First(player => player.PlayerId == resolution.PlayerId);
         var executionKind = persistedPlayer.IsEliminated ? "tax_eliminated_player" : "tax_paid";
 
-        return CreateTerminalBroadcastResult(
-            CreateExecuteTileResult(
+        var directResponse = CreateExecuteTileResult(
                 resolution,
                 executionKind,
                 persistence.Session.GameState,
@@ -1774,10 +1825,16 @@ public sealed class LobbyMessageHandler
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "negative_balance")),
+                    "negative_balance"));
+        var result = CreateTerminalBroadcastResult(
+            directResponse,
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
             persistence);
+
+        EmitGameWonStat(persistence, persistence.Session.GameState);
+
+        return result;
     }
 
     private LobbyMessageHandleResult ExecuteGoToLockupTile(
@@ -1895,8 +1952,7 @@ public sealed class LobbyMessageHandler
             updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
         var executionKind = GetCardExecutionKind(cardResolution.ActionKind, persistedPlayer);
 
-        return CreateTerminalBroadcastResult(
-            CreateExecuteTileResult(
+        var directResponse = CreateExecuteTileResult(
                 tileResolution,
                 executionKind,
                 persistence.Session.GameState,
@@ -1917,10 +1973,17 @@ public sealed class LobbyMessageHandler
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "card_payment")),
+                    "card_payment"));
+        var result = CreateTerminalBroadcastResult(
+            directResponse,
             LobbyMessageTypes.TileExecuted,
             persistence.Session,
             persistence);
+
+        EmitCardStats(gameState, persistence.Session.GameState, tileResolution, player, cardResolution);
+        EmitGameWonStat(persistence, persistence.Session.GameState);
+
+        return result;
     }
 
     private void RemovePreviousSessionBindingIfNeeded(
@@ -2457,6 +2520,153 @@ public sealed class LobbyMessageHandler
         }
 
         auctionTimerService.Schedule(sessionId, auctionState.TimerEndsAtUtc.Value);
+    }
+
+    private void EmitRentStats(RentPaymentResult rent)
+    {
+        if (!rent.RentCharged)
+        {
+            return;
+        }
+
+        EmitStatEvent(new StatEvent(
+            rent.LandingPlayerId,
+            StatEventKind.RentPaid,
+            rent.RentPaid,
+            rent.TileId,
+            "rent"));
+
+        if (rent.OwnerId is not null)
+        {
+            EmitStatEvent(new StatEvent(
+                rent.OwnerId.Value,
+                StatEventKind.RentReceived,
+                rent.RentPaid,
+                rent.TileId,
+                "rent"));
+        }
+    }
+
+    private void EmitAuctionStats(AuctionFinalizationResult finalizationResult)
+    {
+        if (!finalizationResult.FinalizedWithWinner ||
+            finalizationResult.WinnerId is null ||
+            finalizationResult.WinningBid is null)
+        {
+            return;
+        }
+
+        EmitStatEvent(new StatEvent(
+            finalizationResult.WinnerId.Value,
+            StatEventKind.AuctionWon,
+            finalizationResult.WinningBid.Value,
+            finalizationResult.PropertyTileId,
+            "auction"));
+    }
+
+    private void EmitCardStats(
+        GameState previousGameState,
+        GameState persistedGameState,
+        TileResolutionResult tileResolution,
+        Player previousPlayer,
+        CardResolutionResult cardResolution)
+    {
+        EmitStatEvent(new StatEvent(
+            previousPlayer.PlayerId,
+            StatEventKind.CardTriggered,
+            TileId: tileResolution.TileId,
+            Source: "card"));
+
+        var persistedPlayer = persistedGameState.Players.First(player => player.PlayerId == previousPlayer.PlayerId);
+        if (cardResolution.ActionKind == CardResolutionActionKind.ApplySlimer &&
+            !PlayerStatusEffectManager.HasSlimer(previousPlayer) &&
+            PlayerStatusEffectManager.HasSlimer(persistedPlayer))
+        {
+            EmitStatEvent(new StatEvent(
+                previousPlayer.PlayerId,
+                StatEventKind.SlimerApplied,
+                TileId: tileResolution.TileId,
+                Source: "card"));
+        }
+
+        if (cardResolution.ActionKind != CardResolutionActionKind.ApplyEarthquake)
+        {
+            return;
+        }
+
+        var targetTileIds = cardResolution.Parameters?.TileIds?
+            .Distinct()
+            .OrderBy(tileId => tileId.Value, StringComparer.Ordinal)
+            .ToArray() ?? Array.Empty<TileId>();
+        foreach (var tileId in targetTileIds)
+        {
+            if (GetPropertyDamagePercent(persistedGameState, tileId) <= GetPropertyDamagePercent(previousGameState, tileId))
+            {
+                continue;
+            }
+
+            EmitStatEvent(new StatEvent(
+                previousPlayer.PlayerId,
+                StatEventKind.EarthquakeApplied,
+                TileId: tileId,
+                Source: "card"));
+        }
+    }
+
+    private void EmitPropertyRepairStats(GameState previousGameState, GameState persistedGameState)
+    {
+        if (persistedGameState.CurrentTurnPlayerId is null)
+        {
+            return;
+        }
+
+        var player = persistedGameState.Players.FirstOrDefault(candidate =>
+            candidate.PlayerId == persistedGameState.CurrentTurnPlayerId.Value);
+        if (player is null)
+        {
+            return;
+        }
+
+        foreach (var tileId in player.OwnedPropertyIds.OrderBy(tileId => tileId.Value, StringComparer.Ordinal))
+        {
+            var previousDamagePercent = GetPropertyDamagePercent(previousGameState, tileId);
+            var persistedDamagePercent = GetPropertyDamagePercent(persistedGameState, tileId);
+            if (persistedDamagePercent >= previousDamagePercent)
+            {
+                continue;
+            }
+
+            EmitStatEvent(new StatEvent(
+                player.PlayerId,
+                StatEventKind.PropertyRepaired,
+                CalculateRepairCost(previousGameState, tileId, previousDamagePercent - persistedDamagePercent),
+                tileId,
+                "property_repair"));
+        }
+    }
+
+    private void EmitGameWonStat(GameStateEventPersistenceResult persistence, GameState persistedGameState)
+    {
+        if (persistence.CompletionSequence is null || persistedGameState.WinnerPlayerId is null)
+        {
+            return;
+        }
+
+        EmitStatEvent(new StatEvent(
+            persistedGameState.WinnerPlayerId.Value,
+            StatEventKind.GameWon,
+            Source: "completion"));
+    }
+
+    private void EmitStatEvent(StatEvent evt)
+    {
+        try
+        {
+            statEventSink.Emit(evt);
+        }
+        catch
+        {
+        }
     }
 
     private static LobbyMessageHandleResult CreateTerminalBroadcastResult(
@@ -3220,6 +3430,31 @@ public sealed class LobbyMessageHandler
         }
 
         return null;
+    }
+
+    private static int GetPropertyDamagePercent(GameState gameState, TileId tileId)
+    {
+        return gameState.PropertyStates.TryGetValue(tileId, out var propertyState)
+            ? propertyState.Data.DamagePercent
+            : 0;
+    }
+
+    private static Money? CalculateRepairCost(GameState gameState, TileId tileId, int repairedDamagePercent)
+    {
+        if (repairedDamagePercent <= 0)
+        {
+            return null;
+        }
+
+        var tile = gameState.Board.Tiles.FirstOrDefault(candidate => candidate.TileId == tileId);
+        if (tile?.Price is null)
+        {
+            return null;
+        }
+
+        return new Money(Math.Max(
+            1,
+            (int)Math.Floor(tile.Price.Value.Amount * repairedDamagePercent / 100m)));
     }
 
     private static GameState ChangePlayerMoney(GameState gameState, PlayerId playerId, Money delta)
