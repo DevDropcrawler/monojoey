@@ -164,6 +164,8 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.PlaceBid => HandlePlaceBid(root, connectionContext),
             LobbyMessageTypes.FinalizeAuction => HandleFinalizeAuction(root, connectionContext),
             LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
+            LobbyMessageTypes.MortgageProperty => HandleMortgageProperty(root, connectionContext),
+            LobbyMessageTypes.UnmortgageProperty => HandleUnmortgageProperty(root, connectionContext),
             LobbyMessageTypes.UseHeldCard => HandleUseHeldCard(root, connectionContext),
             LobbyMessageTypes.GetSnapshot => HandleGetSnapshot(root, connectionContext),
             LobbyMessageTypes.ReconnectSession => HandleReconnectSession(root, connectionContext),
@@ -176,6 +178,8 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidResult or
                 LobbyMessageTypes.AuctionResult or
                 LobbyMessageTypes.LoanResult or
+                LobbyMessageTypes.MortgageResult or
+                LobbyMessageTypes.UnmortgageResult or
                 LobbyMessageTypes.UseHeldCardResult or
                 LobbyMessageTypes.SnapshotResult or
                 LobbyMessageTypes.ReconnectResult or
@@ -187,6 +191,8 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.BidAccepted or
                 LobbyMessageTypes.AuctionFinalized or
                 LobbyMessageTypes.LoanTaken or
+                LobbyMessageTypes.PropertyMortgaged or
+                LobbyMessageTypes.PropertyUnmortgaged or
                 LobbyMessageTypes.HeldCardUsed or
                 LobbyMessageTypes.GameCompleted or
                 LobbyMessageTypes.Error => CreateError(
@@ -1105,6 +1111,138 @@ public sealed class LobbyMessageHandler
                 Source: "loan"));
 
             return result;
+        }
+    }
+
+    private LobbyMessageHandleResult HandleMortgageProperty(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadPropertyMortgagePayload(root, out var sessionId, out var playerId, out var propertyTileId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "mortgage_property requires payload.sessionId, payload.playerId, and payload.propertyTileId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var mortgageResult = MortgageManager.MortgageProperty(
+                session.GameState,
+                new PlayerId(playerId),
+                new TileId(propertyTileId));
+            if (!mortgageResult.MortgageAccepted)
+            {
+                return CreateMortgageRejectedError(mortgageResult);
+            }
+
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, mortgageResult.GameState);
+            var persistedPlayer = persistence.Session.GameState.Players.First(player =>
+                player.PlayerId == mortgageResult.PlayerId);
+            var persistedResult = mortgageResult with
+            {
+                GameState = persistence.Session.GameState,
+                Money = persistedPlayer.Money,
+            };
+
+            return CreateBroadcastResult(
+                CreateMortgageResult(persistedResult),
+                LobbyMessageTypes.PropertyMortgaged,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
+    private LobbyMessageHandleResult HandleUnmortgageProperty(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadPropertyMortgagePayload(root, out var sessionId, out var playerId, out var propertyTileId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "unmortgage_property requires payload.sessionId, payload.playerId, and payload.propertyTileId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var unmortgageResult = MortgageManager.UnmortgageProperty(
+                session.GameState,
+                new PlayerId(playerId),
+                new TileId(propertyTileId));
+            if (!unmortgageResult.UnmortgageAccepted)
+            {
+                return CreateUnmortgageRejectedError(unmortgageResult);
+            }
+
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, unmortgageResult.GameState);
+            var persistedPlayer = persistence.Session.GameState.Players.First(player =>
+                player.PlayerId == unmortgageResult.PlayerId);
+            var persistedResult = unmortgageResult with
+            {
+                GameState = persistence.Session.GameState,
+                Money = persistedPlayer.Money,
+            };
+
+            return CreateBroadcastResult(
+                CreateUnmortgageResult(persistedResult),
+                LobbyMessageTypes.PropertyUnmortgaged,
+                persistence.Session,
+                persistence.Sequence);
         }
     }
 
@@ -2067,6 +2205,28 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadPropertyMortgagePayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out string propertyTileId)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        propertyTileId = string.Empty;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !TryReadString(payload, "propertyTileId", out propertyTileId))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TryReadSetReadyPayload(
         JsonElement root,
         out string sessionId,
@@ -2298,7 +2458,9 @@ public sealed class LobbyMessageHandler
                 .ToArray(),
             Board: CreateSnapshotBoard(gameState),
             PropertyStates: gameState.PropertyStates
-                .Where(propertyState => propertyState.Value.Data.DamagePercent > 0)
+                .Where(propertyState =>
+                    propertyState.Value.Data.DamagePercent > 0 ||
+                    propertyState.Value.Data.IsMortgaged)
                 .OrderBy(propertyState => propertyState.Value.TileId.Value, StringComparer.Ordinal)
                 .Select(propertyState => CreateSnapshotPropertyState(propertyState.Value))
                 .ToArray(),
@@ -2427,7 +2589,8 @@ public sealed class LobbyMessageHandler
         return new SnapshotPropertyStatePayload(
             propertyState.TileId.Value,
             new SnapshotPropertyStateDataPayload(
-                propertyState.Data.DamagePercent));
+                propertyState.Data.DamagePercent,
+                propertyState.Data.IsMortgaged));
     }
 
     private static SnapshotAuctionPayload CreateSnapshotAuction(AuctionState auctionState)
@@ -2932,6 +3095,50 @@ public sealed class LobbyMessageHandler
                 player.HeldCardIds.Select(heldCardId => heldCardId.Value).OrderBy(heldCardId => heldCardId).ToArray()));
     }
 
+    private static LobbyServerEnvelope CreateMortgageResult(MortgageResult mortgageResult)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.MortgageResult,
+            new MortgageResultPayload(
+                mortgageResult.PlayerId.Value,
+                mortgageResult.PropertyTileId.Value,
+                mortgageResult.MortgageValue.Amount,
+                mortgageResult.Money.Amount,
+                mortgageResult.IsMortgaged,
+                new[]
+                {
+                    new MoneyDeltaPayload(
+                        mortgageResult.PlayerId.Value,
+                        mortgageResult.MortgageValue.Amount,
+                        mortgageResult.Money.Amount,
+                        "mortgage",
+                        TileId: mortgageResult.PropertyTileId.Value),
+                }));
+    }
+
+    private static LobbyServerEnvelope CreateUnmortgageResult(UnmortgageResult unmortgageResult)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.UnmortgageResult,
+            new UnmortgageResultPayload(
+                unmortgageResult.PlayerId.Value,
+                unmortgageResult.PropertyTileId.Value,
+                unmortgageResult.MortgageValue.Amount,
+                unmortgageResult.UnmortgageInterest.Amount,
+                unmortgageResult.UnmortgageCost.Amount,
+                unmortgageResult.Money.Amount,
+                unmortgageResult.IsMortgaged,
+                new[]
+                {
+                    new MoneyDeltaPayload(
+                        unmortgageResult.PlayerId.Value,
+                        -unmortgageResult.UnmortgageCost.Amount,
+                        unmortgageResult.Money.Amount,
+                        "unmortgage",
+                        TileId: unmortgageResult.PropertyTileId.Value),
+                }));
+    }
+
     private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
     {
         return bidResult.ResultKind switch
@@ -2971,6 +3178,65 @@ public sealed class LobbyMessageHandler
             _ => CreateError(
                 LobbyErrorCodes.InvalidSessionState,
                 loanResult.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateMortgageRejectedError(MortgageResult mortgageResult)
+    {
+        return mortgageResult.ResultKind switch
+        {
+            MortgageResultKind.MortgagesDisabled => CreateError(
+                LobbyErrorCodes.MortgageModeDisabled,
+                mortgageResult.Message),
+            MortgageResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                mortgageResult.Message),
+            MortgageResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                mortgageResult.Message),
+            MortgageResultKind.InvalidProperty => CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                mortgageResult.Message),
+            MortgageResultKind.PropertyNotOwned => CreateError(
+                LobbyErrorCodes.PropertyNotOwned,
+                mortgageResult.Message),
+            MortgageResultKind.AlreadyMortgaged => CreateError(
+                LobbyErrorCodes.PropertyAlreadyMortgaged,
+                mortgageResult.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                mortgageResult.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateUnmortgageRejectedError(UnmortgageResult unmortgageResult)
+    {
+        return unmortgageResult.ResultKind switch
+        {
+            UnmortgageResultKind.MortgagesDisabled => CreateError(
+                LobbyErrorCodes.MortgageModeDisabled,
+                unmortgageResult.Message),
+            UnmortgageResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                unmortgageResult.Message),
+            UnmortgageResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                unmortgageResult.Message),
+            UnmortgageResultKind.InvalidProperty => CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                unmortgageResult.Message),
+            UnmortgageResultKind.PropertyNotOwned => CreateError(
+                LobbyErrorCodes.PropertyNotOwned,
+                unmortgageResult.Message),
+            UnmortgageResultKind.NotMortgaged => CreateError(
+                LobbyErrorCodes.PropertyNotMortgaged,
+                unmortgageResult.Message),
+            UnmortgageResultKind.InsufficientCash => CreateError(
+                LobbyErrorCodes.InsufficientCash,
+                unmortgageResult.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                unmortgageResult.Message),
         };
     }
 

@@ -3660,6 +3660,156 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void MortgageProperty_ValidRequestReturnsResultBroadcastAndSnapshotState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } });
+
+        var result = handler.HandleTextMessageResult(
+            MortgagePropertyMessage(started.Session.SessionId, "player_1", "property_03"),
+            started.FirstContext);
+        var payload = Assert.IsType<MortgageResultPayload>(result.DirectResponse.Payload);
+        var afterMortgage = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("mortgage_result", result.DirectResponse.Type);
+        Assert.Equal("property_mortgaged", Assert.Single(result.Broadcasts).Type);
+        Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
+        Assert.Equal("player_1", payload.PlayerId);
+        Assert.Equal("property_03", payload.PropertyTileId);
+        Assert.Equal(50, payload.MortgageValue);
+        Assert.Equal(1550, payload.Money);
+        Assert.True(payload.IsMortgaged);
+        var moneyDelta = Assert.Single(payload.MoneyDeltas ?? Array.Empty<MoneyDeltaPayload>());
+        Assert.Equal(50, moneyDelta.Delta);
+        Assert.Equal("mortgage", moneyDelta.Reason);
+        Assert.Equal("property_03", moneyDelta.TileId);
+        Assert.True(afterMortgage.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+
+        using var snapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var propertyState = Assert.Single(AssertResponseType(snapshotResponse, "snapshot_result")
+            .GetProperty("propertyStates")
+            .EnumerateArray());
+        Assert.Equal("property_03", propertyState.GetProperty("tileId").GetString());
+        Assert.Equal(0, propertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.True(propertyState.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+    }
+
+    [Fact]
+    public void UnmortgageProperty_ValidRequestReturnsResultBroadcastAndClearsCleanState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_03")] = new(
+                        new TileId("property_03"),
+                        new PropertyStateData(isMortgaged: true)),
+                },
+            });
+
+        var result = handler.HandleTextMessageResult(
+            UnmortgagePropertyMessage(started.Session.SessionId, "player_1", "property_03"),
+            started.FirstContext);
+        var payload = Assert.IsType<UnmortgageResultPayload>(result.DirectResponse.Payload);
+        var afterUnmortgage = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("unmortgage_result", result.DirectResponse.Type);
+        Assert.Equal("property_unmortgaged", Assert.Single(result.Broadcasts).Type);
+        Assert.Equal("player_1", payload.PlayerId);
+        Assert.Equal("property_03", payload.PropertyTileId);
+        Assert.Equal(50, payload.MortgageValue);
+        Assert.Equal(5, payload.UnmortgageInterest);
+        Assert.Equal(55, payload.UnmortgageCost);
+        Assert.Equal(1445, payload.Money);
+        Assert.False(payload.IsMortgaged);
+        var moneyDelta = Assert.Single(payload.MoneyDeltas ?? Array.Empty<MoneyDeltaPayload>());
+        Assert.Equal(-55, moneyDelta.Delta);
+        Assert.Equal("unmortgage", moneyDelta.Reason);
+        Assert.DoesNotContain(new TileId("property_03"), afterUnmortgage.PropertyStates.Keys);
+    }
+
+    [Theory]
+    [InlineData("mortgage_property", "propertyTileId", "invalid_payload")]
+    [InlineData("mortgage_property", "missing_property", "invalid_payload")]
+    [InlineData("mortgage_property", "property_02", "property_not_owned")]
+    [InlineData("unmortgage_property", "property_03", "property_not_mortgaged")]
+    public void MortgageRequests_InvalidActionsReturnErrorsWithoutMutation(
+        string type,
+        string propertyTileId,
+        string expectedCode)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } });
+        var beforeRequest = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var message = propertyTileId == "propertyTileId"
+            ? $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{started.Session.SessionId}"",""playerId"":""player_1"",""propertyTileId"":5}}}}"
+            : $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{started.Session.SessionId}"",""playerId"":""player_1"",""propertyTileId"":""{propertyTileId}""}}}}";
+
+        var result = handler.HandleTextMessageResult(message, started.FirstContext);
+        var afterRequest = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var errorPayload = Assert.IsType<LobbyErrorPayload>(result.DirectResponse.Payload);
+
+        Assert.Equal("error", result.DirectResponse.Type);
+        Assert.Equal(expectedCode, errorPayload.Code);
+        Assert.Empty(result.Broadcasts);
+        Assert.Same(beforeRequest, afterRequest);
+    }
+
+    [Fact]
+    public void MortgageProperty_BlockedDuringUnresolvedTileExecution()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            "property_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } });
+        var beforeRequest = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            MortgagePropertyMessage(started.Session.SessionId, "player_1", "property_03"));
+        var afterRequest = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "invalid_session_state");
+        Assert.Same(beforeRequest, afterRequest);
+    }
+
+    [Fact]
     public void UseHeldCard_ClearsLockupConsumesHeldEscapeAndBroadcasts()
     {
         var sessionManager = new SessionManager();
@@ -3892,7 +4042,9 @@ public class LobbyMessageHandlerTests
         Assert.Equal(20, bid.GetProperty("amount").GetInt32());
         Assert.Equal(new[] { "property_01", "property_02" }, propertyStates.Select(state => state.GetProperty("tileId").GetString()).ToArray());
         Assert.Equal(50, propertyStates[0].GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.False(propertyStates[0].GetProperty("data").GetProperty("isMortgaged").GetBoolean());
         Assert.Equal(25, propertyStates[1].GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.False(propertyStates[1].GetProperty("data").GetProperty("isMortgaged").GetBoolean());
         Assert.Equal(new[] { "chance", "table" }, decks.Select(deck => deck.GetProperty("deckId").GetString()).ToArray());
         Assert.Equal("CHANCE_02", Assert.Single(decks[0].GetProperty("drawPileCardIds").EnumerateArray()).GetString());
         Assert.True(payload.GetProperty("loanShark").GetProperty("enabled").GetBoolean());
@@ -3941,6 +4093,37 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal(JsonValueKind.Array, payload.GetProperty("propertyStates").ValueKind);
         Assert.Empty(payload.GetProperty("propertyStates").EnumerateArray());
+    }
+
+    [Fact]
+    public void GetSnapshot_ProjectsCleanMortgagedPropertyStateEntries()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_01")] = new(
+                        new TileId("property_01"),
+                        new PropertyStateData(isMortgaged: true)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var propertyState = Assert.Single(payload.GetProperty("propertyStates").EnumerateArray());
+
+        Assert.Equal("property_01", propertyState.GetProperty("tileId").GetString());
+        Assert.Equal(0, propertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.True(propertyState.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
     }
 
     [Fact]
@@ -4084,7 +4267,24 @@ public class LobbyMessageHandlerTests
         Assert.Equal(propertyState.TileId, roundTrip.TileId);
         Assert.NotNull(roundTrip.Data);
         Assert.Equal(50, roundTrip.Data.DamagePercent);
-        Assert.Equal(@"{""damagePercent"":50}", JsonSerializer.Serialize(roundTrip.Data, jsonOptions));
+        Assert.False(roundTrip.Data.IsMortgaged);
+        Assert.Equal(
+            @"{""damagePercent"":50,""isMortgaged"":false}",
+            JsonSerializer.Serialize(roundTrip.Data, jsonOptions));
+    }
+
+    [Fact]
+    public void PropertyStatePayload_MissingMortgageFieldDefaultsFalse()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var roundTrip = JsonSerializer.Deserialize<SnapshotPropertyStateDataPayload>(
+            @"{""damagePercent"":50}",
+            jsonOptions);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(50, roundTrip.DamagePercent);
+        Assert.False(roundTrip.IsMortgaged);
     }
 
     [Fact]
@@ -5461,6 +5661,21 @@ public class LobbyMessageHandlerTests
         AssertError(response, "unsupported_message");
     }
 
+    [Theory]
+    [InlineData("mortgage_result")]
+    [InlineData("unmortgage_result")]
+    [InlineData("property_mortgaged")]
+    [InlineData("property_unmortgaged")]
+    public void ClientSentMortgageServerMessagesReturnUnsupportedMessage(string type)
+    {
+        var handler = new LobbyMessageHandler(new SessionManager());
+        var context = new LobbyConnectionContext("connection_1");
+
+        using var response = Handle(handler, context, $@"{{""type"":""{type}""}}");
+
+        AssertError(response, "unsupported_message");
+    }
+
     [Fact]
     public void ClientSentSnapshotResultReturnsUnsupportedMessage()
     {
@@ -5504,6 +5719,12 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""finalize_auction"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""take_loan"",""payload"":{""playerId"":""player_1"",""amount"":10,""reason"":""rent_payment""}}")]
     [InlineData(@"{""type"":""take_loan"",""payload"":{""sessionId"":""session_1"",""amount"":10,""reason"":""rent_payment""}}")]
+    [InlineData(@"{""type"":""mortgage_property"",""payload"":{""playerId"":""player_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""mortgage_property"",""payload"":{""sessionId"":""session_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""mortgage_property"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""playerId"":""player_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""sessionId"":""session_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""reconnect_session"",""payload"":{""playerId"":""player_1""}}")]
@@ -5895,6 +6116,16 @@ public class LobbyMessageHandlerTests
         return $@"{{""type"":""take_loan"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""amount"":{amount},""reason"":""{reason}""}}}}";
     }
 
+    private static string MortgagePropertyMessage(string sessionId, string playerId, string propertyTileId)
+    {
+        return $@"{{""type"":""mortgage_property"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""propertyTileId"":""{propertyTileId}""}}}}";
+    }
+
+    private static string UnmortgagePropertyMessage(string sessionId, string playerId, string propertyTileId)
+    {
+        return $@"{{""type"":""unmortgage_property"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""propertyTileId"":""{propertyTileId}""}}}}";
+    }
+
     private static string UseHeldCardMessage(string sessionId, string playerId, string cardId)
     {
         return $@"{{""type"":""use_held_card"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""cardId"":""{cardId}""}}}}";
@@ -5906,6 +6137,8 @@ public class LobbyMessageHandlerTests
         {
             "place_bid" => PlaceBidMessage(sessionId, playerId, 10),
             "take_loan" => TakeLoanMessage(sessionId, playerId, 10, "rent_payment"),
+            "mortgage_property" => MortgagePropertyMessage(sessionId, playerId, "property_01"),
+            "unmortgage_property" => UnmortgagePropertyMessage(sessionId, playerId, "property_01"),
             "use_held_card" => UseHeldCardMessage(sessionId, playerId, "escape_01"),
             _ => $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}",
         };

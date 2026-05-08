@@ -16,7 +16,10 @@ public static class GameRulesPresets
             IncomeTaxAmount: 100,
             LuxuryTaxAmount: 100,
             BaseRentEnabled: true,
-            UpgradesEnabled: false),
+            UpgradesEnabled: false,
+            MortgagesEnabled: true,
+            MortgageValuePercent: 50,
+            UnmortgageInterestPercent: 10),
         Auction: new AuctionRules(
             MandatoryAuctionsEnabled: true,
             InitialTimerSeconds: 9,

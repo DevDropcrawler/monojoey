@@ -70,6 +70,11 @@ public static class PropertyManager
             return NoRent(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
         }
 
+        if (IsMortgaged(tile, gameState))
+        {
+            return NoRent(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
+        }
+
         var rent = CalculateRent(tile, gameState);
         if (landingPlayer.Money.Amount < rent.Amount)
         {
@@ -129,6 +134,12 @@ public static class PropertyManager
         var reduced = (int)Math.Floor(baseRent.Amount * multiplier);
 
         return new Money(Math.Max(1, reduced));
+    }
+
+    private static bool IsMortgaged(Tile tile, GameState gameState)
+    {
+        return gameState.PropertyStates.TryGetValue(tile.TileId, out var propertyState) &&
+            propertyState.Data.IsMortgaged;
     }
 
     private static Player AddOwnedProperty(Player player, TileId propertyTileId)

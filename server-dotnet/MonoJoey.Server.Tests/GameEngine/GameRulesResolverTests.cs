@@ -22,6 +22,9 @@ public class GameRulesResolverTests
         Assert.Equal(100, rules.Economy.LuxuryTaxAmount);
         Assert.True(rules.Economy.BaseRentEnabled);
         Assert.False(rules.Economy.UpgradesEnabled);
+        Assert.True(rules.Economy.MortgagesEnabled);
+        Assert.Equal(50, rules.Economy.MortgageValuePercent);
+        Assert.Equal(10, rules.Economy.UnmortgageInterestPercent);
         Assert.True(rules.Auction.MandatoryAuctionsEnabled);
         Assert.Equal(9, rules.Auction.InitialTimerSeconds);
         Assert.Equal(3, rules.Auction.BidResetTimerSeconds);
@@ -62,7 +65,10 @@ public class GameRulesResolverTests
                 ""economy"": {
                     ""passStartReward"": 125,
                     ""incomeTaxAmount"": 75,
-                    ""luxuryTaxAmount"": 25
+                    ""luxuryTaxAmount"": 25,
+                    ""mortgagesEnabled"": false,
+                    ""mortgageValuePercent"": 40,
+                    ""unmortgageInterestPercent"": 20
                 },
                 ""auction"": {
                     ""initialTimerSeconds"": 12,
@@ -86,6 +92,9 @@ public class GameRulesResolverTests
         Assert.Equal(125, rules.Economy.PassStartReward);
         Assert.Equal(75, rules.Economy.IncomeTaxAmount);
         Assert.Equal(25, rules.Economy.LuxuryTaxAmount);
+        Assert.False(rules.Economy.MortgagesEnabled);
+        Assert.Equal(40, rules.Economy.MortgageValuePercent);
+        Assert.Equal(20, rules.Economy.UnmortgageInterestPercent);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
     }
 
@@ -201,6 +210,13 @@ public class GameRulesResolverTests
     [InlineData(@"{""auction"":{""minimumBidIncrement"":""5""}}")]
     [InlineData(@"{""economy"":{""incomeTaxAmount"":-1}}")]
     [InlineData(@"{""economy"":{""luxuryTaxAmount"":-1}}")]
+    [InlineData(@"{""economy"":{""mortgagesEnabled"":""yes""}}")]
+    [InlineData(@"{""economy"":{""mortgageValuePercent"":-1}}")]
+    [InlineData(@"{""economy"":{""mortgageValuePercent"":101}}")]
+    [InlineData(@"{""economy"":{""mortgageValuePercent"":50.5}}")]
+    [InlineData(@"{""economy"":{""unmortgageInterestPercent"":-1}}")]
+    [InlineData(@"{""economy"":{""unmortgageInterestPercent"":101}}")]
+    [InlineData(@"{""economy"":{""unmortgageInterestPercent"":10.5}}")]
     [InlineData(@"{""jail"":{""enabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""escapeCardsEnabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""fineAmount"":-1}}")]

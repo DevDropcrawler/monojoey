@@ -19,6 +19,8 @@ public static class LobbyMessageTypes
     public const string PlaceBid = "place_bid";
     public const string FinalizeAuction = "finalize_auction";
     public const string TakeLoan = "take_loan";
+    public const string MortgageProperty = "mortgage_property";
+    public const string UnmortgageProperty = "unmortgage_property";
     public const string UseHeldCard = "use_held_card";
     public const string GetSnapshot = "get_snapshot";
     public const string ReconnectSession = "reconnect_session";
@@ -31,6 +33,8 @@ public static class LobbyMessageTypes
     public const string BidResult = "bid_result";
     public const string AuctionResult = "auction_result";
     public const string LoanResult = "loan_result";
+    public const string MortgageResult = "mortgage_result";
+    public const string UnmortgageResult = "unmortgage_result";
     public const string UseHeldCardResult = "use_held_card_result";
     public const string SnapshotResult = "snapshot_result";
     public const string ReconnectResult = "reconnect_result";
@@ -42,6 +46,8 @@ public static class LobbyMessageTypes
     public const string BidAccepted = "bid_accepted";
     public const string AuctionFinalized = "auction_finalized";
     public const string LoanTaken = "loan_taken";
+    public const string PropertyMortgaged = "property_mortgaged";
+    public const string PropertyUnmortgaged = "property_unmortgaged";
     public const string HeldCardUsed = "held_card_used";
     public const string GameCompleted = "game_completed";
     public const string Error = "error";
@@ -75,6 +81,11 @@ public static class LobbyErrorCodes
     public const string InvalidRules = "invalid_rules";
     public const string LoanModeDisabled = "loan_mode_disabled";
     public const string LoanReasonBlocked = "loan_reason_blocked";
+    public const string MortgageModeDisabled = "mortgage_mode_disabled";
+    public const string PropertyNotOwned = "property_not_owned";
+    public const string PropertyAlreadyMortgaged = "property_already_mortgaged";
+    public const string PropertyNotMortgaged = "property_not_mortgaged";
+    public const string InsufficientCash = "insufficient_cash";
     public const string CardDeckNotFound = "card_deck_not_found";
     public const string CardDeckEmpty = "card_deck_empty";
     public const string InvalidCard = "invalid_card";
@@ -293,6 +304,26 @@ public sealed record LoanResultPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
 
+public sealed record MortgageResultPayload(
+    string PlayerId,
+    string PropertyTileId,
+    int MortgageValue,
+    int Money,
+    bool IsMortgaged,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
+
+public sealed record UnmortgageResultPayload(
+    string PlayerId,
+    string PropertyTileId,
+    int MortgageValue,
+    int UnmortgageInterest,
+    int UnmortgageCost,
+    int Money,
+    bool IsMortgaged,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
+
 public sealed record UseHeldCardResultPayload(
     string PlayerId,
     string CardId,
@@ -399,7 +430,8 @@ public sealed record SnapshotPropertyStatePayload(
     SnapshotPropertyStateDataPayload Data);
 
 public sealed record SnapshotPropertyStateDataPayload(
-    int DamagePercent);
+    int DamagePercent,
+    bool IsMortgaged = false);
 
 public sealed record SnapshotAuctionPayload(
     string PropertyTileId,

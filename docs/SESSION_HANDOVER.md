@@ -5,13 +5,13 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: 5.26B Deck Presets
-- Completion status: Chunk 5.26B complete; server-authoritative card rules now support deterministic built-in deck preset IDs through `cards.deckPresetId`. `classic_ish` is the default and preserves the existing Chance/Table deck composition and order, `chaos` uses the same deck IDs and card counts with deterministic alternate order, and `custom_ready` is reserved while currently matching `classic_ish`.
+- Chunk: Classic Mortgage Foundations
+- Completion status: Classic mortgage foundations complete; server-authoritative mortgage/unmortgage behavior now exists for owned purchasable properties with runtime state in `PropertyStateData.IsMortgaged`, additive economy rules, realtime request/result/broadcast messages, snapshot projection, and rent suppression for mortgaged properties.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
 - Last commit after this chunk: not committed yet
-- Date/time: 2026-05-07
+- Date/time: 2026-05-09
 
 ## Docs Planning Note
 
@@ -19,20 +19,22 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Phase 5, Chunk 5.26B - Deck Presets.
+Classic Mortgage Foundations.
 
 Completed:
 
-- Added `CardDeckPresetIds` with `classic_ish`, `chaos`, `custom_ready`, and default `classic_ish`.
-- Extended `CardRules` with `DeckPresetId`, preserving existing constructor callers through a default value.
-- `set_rules` now accepts `cards.deckPresetId` and rejects unknown, null, or empty explicit values through the existing `invalid_rules` path.
-- `PlaceholderCardDeckFactory.CreatePreset(presetId)` returns deterministic server-only deck definitions.
-- Existing `CreateChanceDeck`, `CreateTableDeck`, and `CreateAll` now delegate to the default `classic_ish` preset, preserving current behavior.
-- `SessionManager.StartGame` freezes `GameState.CardDeckStates` from `session.DraftRules.Cards.DeckPresetId`; later rule changes remain blocked because started sessions already reject `set_rules`.
-- `chaos` preserves the same Chance/Table deck IDs and 16-card deck sizes while using deterministic alternate first-card/order differences.
-- `custom_ready` currently resolves to the same deck definitions as `classic_ish`.
-- Added resolver, realtime rules, session start, and deck factory coverage for defaulting, validation, preset acceptance, preset order, and frozen deck state.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 624 passed, 0 failed, 0 skipped.
+- Added `PropertyStateData.IsMortgaged` as additive runtime per-property state while preserving earthquake `DamagePercent`.
+- Added economy rules `mortgagesEnabled`, `mortgageValuePercent`, and `unmortgageInterestPercent` with defaults `true`, `50`, and `10`; `GameRules.Version` remains `1`.
+- Added `MortgageManager`, `MortgageResult`, and `UnmortgageResult` for server-authoritative mortgage transitions.
+- Mortgage value derives from board price: `floor(price * mortgageValuePercent / 100)`.
+- Unmortgage cost derives from mortgage value plus `floor(mortgageValue * unmortgageInterestPercent / 100)`.
+- Mortgaged owned properties charge no rent and emit no rent money deltas.
+- Automatic earthquake repair now preserves a clean mortgaged property-state entry instead of deleting it.
+- Added realtime requests `mortgage_property` and `unmortgage_property`, direct responses `mortgage_result` and `unmortgage_result`, and broadcasts `property_mortgaged` and `property_unmortgaged`.
+- Snapshot version remains `1`; `propertyStates[].data` now includes additive `isMortgaged`.
+- Snapshot projection omits only clean unmortgaged properties; damaged or mortgaged properties are projected.
+- Added focused engine, rules, snapshot, and realtime tests for success, rejection, rent suppression, damage preservation, defaults, validation, and broadcast behavior.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 709 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -40,8 +42,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Custom card editor or custom card creation.
-- New client commands.
-- Gameplay payload shape changes.
+- Trading, upgrades, asset liquidation, loan repayment, or debt recovery.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -61,6 +62,28 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MortgageManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MortgageResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/MortgageManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyStateManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `docs/GAME_RULES_SPEC.md`
+- `docs/MULTIPLAYER_PROTOCOL.md`
+- `docs/UNITY_INTEGRATION_CONTRACT.md`
+- `docs/SESSION_HANDOVER.md`
+
+## Previous Chunk Files
+
 - `server-dotnet/MonoJoey.Server/GameEngine/CardDeckPresetIds.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
@@ -71,17 +94,6 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlaceholderCardDeckFactoryTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionRulesTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyRulesMessageHandlerTests.cs`
-- `docs/SESSION_HANDOVER.md`
-
-## Previous Chunk Files
-
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyStateManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Existing Realtime Files
@@ -162,7 +174,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 624 passed, 0 failed, 0 skipped.
+  - Output summary: 709 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -178,7 +190,7 @@ Not included by explicit user scope:
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - Successful state-changing gameplay requests then emit one or more best-effort ordered broadcast events to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `game_completed`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`, `game_completed`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -291,6 +303,13 @@ Not included by explicit user scope:
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent uses the first rent table value, or a placeholder `10` for purchasable tiles without a rent table, then reduces it by persisted `PropertyStateData.DamagePercent`.
 - Damaged rent uses decimal floor math; fully damaged properties charge `0`, while damaged-but-not-destroyed properties charge at least `1`.
+- Mortgaged property state lives in `PropertyStateData.IsMortgaged`; ownership still lives only on `Player.OwnedPropertyIds`.
+- Mortgaged owned properties charge no rent and do not emit rent money deltas.
+- Mortgage value derives from static board tile `Price` and active `GameState.Rules.Economy.MortgageValuePercent`.
+- Unmortgage cost derives from mortgage value plus active `GameState.Rules.Economy.UnmortgageInterestPercent`.
+- Accepted `mortgage_property` and `unmortgage_property` requests mutate only player money and property state, return direct result payloads, and emit one matching sequenced broadcast.
+- Mortgage/unmortgage requests require a bound in-game connection, an existing non-eliminated player, enabled mortgage rules, no active auction, no unresolved current tile execution, and an owned purchasable priced tile.
+- Snapshot `propertyStates[].data` includes additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged states are projected without changing `snapshotVersion`.
 - `PropertyStateManager.ApplyEarthquake` is now used by internal card execution; no client request, randomness, or UI has been added.
 - `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
@@ -431,7 +450,6 @@ Do not implement before its assigned chunk:
 - Asset liquidation.
 - Automatic card reshuffling.
 - Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
-- Mortgages.
 - Houses/upgrades.
 - Trading.
 - Taxes/fines money changes.
@@ -441,4 +459,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Chunk 5.25B is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Classic Mortgage Foundations is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

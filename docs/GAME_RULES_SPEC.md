@@ -83,6 +83,9 @@ These are planning identifiers for the editable surface. They do not require Pha
 | `economy.passStartReward` | Money & Economy | integer | 200 | true | conditional | conditional | Min 0 | Only safe before any player movement can pass the start tile under the new value. |
 | `property.baseRentEnabled` | Property & Rent | boolean | true | true | conditional | conditional | boolean | Only safe before unresolved rent under the current turn. |
 | `property.upgradesEnabled` | Property & Rent | boolean | false | true | false | locked | boolean | Future rule; upgrades are not implemented in Phase 5.22. |
+| `economy.mortgagesEnabled` | Property & Rent | boolean | true | true | conditional | conditional | boolean | Server-authoritative mortgage/unmortgage requests are accepted only while no auction is active and no current tile is awaiting execution. |
+| `economy.mortgageValuePercent` | Property & Rent | integer | 50 | true | conditional | conditional | 0 to 100 | Mortgage value is `floor(property.price * mortgageValuePercent / 100)`. |
+| `economy.unmortgageInterestPercent` | Property & Rent | integer | 10 | true | conditional | conditional | 0 to 100 | Unmortgage cost is mortgage value plus `floor(mortgageValue * unmortgageInterestPercent / 100)`. |
 | `auction.mandatoryAuctionsEnabled` | Auctions | boolean | true | true | conditional | conditional | boolean | Only safe while no auction is active and no current tile is awaiting auction execution. |
 | `auction.initialTimerSeconds` | Auctions | integer | 9 | true | conditional | conditional | Min 1 | Current implementation default is 9. Applies only before an auction starts. |
 | `auction.bidResetTimerSeconds` | Auctions | integer | 3 | true | conditional | conditional | Min 1 | Current implementation default is 3. Applies only before an auction starts. |
@@ -296,7 +299,10 @@ Snapshots must include active rules as a versioned rules object:
       "auction.initialTimerSeconds": 9,
       "auction.bidResetTimerSeconds": 3,
       "auction.minimumBidIncrement": 1,
-      "auction.startingBid": 0
+      "auction.startingBid": 0,
+      "economy.mortgagesEnabled": true,
+      "economy.mortgageValuePercent": 50,
+      "economy.unmortgageInterestPercent": 10
     }
   }
 }

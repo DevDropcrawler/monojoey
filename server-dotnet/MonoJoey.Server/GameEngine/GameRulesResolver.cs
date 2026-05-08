@@ -133,6 +133,9 @@ public static class GameRulesResolver
             "luxuryTaxAmount",
             "baseRentEnabled",
             "upgradesEnabled",
+            "mortgagesEnabled",
+            "mortgageValuePercent",
+            "unmortgageInterestPercent",
         });
 
         return baseline with
@@ -143,6 +146,11 @@ public static class GameRulesResolver
             LuxuryTaxAmount = ReadOptionalNonNegativeInt(group, "luxuryTaxAmount") ?? baseline.LuxuryTaxAmount,
             BaseRentEnabled = ReadOptionalBool(group, "baseRentEnabled") ?? baseline.BaseRentEnabled,
             UpgradesEnabled = ReadOptionalBool(group, "upgradesEnabled") ?? baseline.UpgradesEnabled,
+            MortgagesEnabled = ReadOptionalBool(group, "mortgagesEnabled") ?? baseline.MortgagesEnabled,
+            MortgageValuePercent = ReadOptionalAtMostInt(group, "mortgageValuePercent", 0, 100) ??
+                baseline.MortgageValuePercent,
+            UnmortgageInterestPercent = ReadOptionalAtMostInt(group, "unmortgageInterestPercent", 0, 100) ??
+                baseline.UnmortgageInterestPercent,
         };
     }
 
@@ -355,6 +363,21 @@ public static class GameRulesResolver
         return ReadOptionalAtLeastInt(group, propertyName, 1);
     }
 
+    private static int? ReadOptionalAtMostInt(
+        JsonElement group,
+        string propertyName,
+        int minimumValue,
+        int maximumValue)
+    {
+        var value = ReadOptionalAtLeastInt(group, propertyName, minimumValue);
+        if (value is not null && value.Value > maximumValue)
+        {
+            throw new GameRulesValidationException($"{propertyName} is outside the allowed range.");
+        }
+
+        return value;
+    }
+
     private static int? ReadOptionalAtLeastInt(JsonElement group, string propertyName, int minimumValue)
     {
         if (!group.TryGetProperty(propertyName, out var property))
@@ -428,6 +451,8 @@ public static class GameRulesResolver
             rules.Economy.PassStartReward < 0 ||
             rules.Economy.IncomeTaxAmount < 0 ||
             rules.Economy.LuxuryTaxAmount < 0 ||
+            rules.Economy.MortgageValuePercent is < 0 or > 100 ||
+            rules.Economy.UnmortgageInterestPercent is < 0 or > 100 ||
             rules.Auction.InitialTimerSeconds <= 0 ||
             rules.Auction.BidResetTimerSeconds <= 0 ||
             rules.Auction.MinimumBidIncrement <= 0 ||

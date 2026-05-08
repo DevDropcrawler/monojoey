@@ -38,7 +38,10 @@ public sealed record EconomyRules(
     int IncomeTaxAmount,
     int LuxuryTaxAmount,
     bool BaseRentEnabled,
-    bool UpgradesEnabled)
+    bool UpgradesEnabled,
+    bool MortgagesEnabled,
+    int MortgageValuePercent,
+    int UnmortgageInterestPercent)
 {
     public EconomyRules DeepCopy()
     {
@@ -48,7 +51,10 @@ public sealed record EconomyRules(
             IncomeTaxAmount,
             LuxuryTaxAmount,
             BaseRentEnabled,
-            UpgradesEnabled);
+            UpgradesEnabled,
+            MortgagesEnabled,
+            MortgageValuePercent,
+            UnmortgageInterestPercent);
     }
 }
 

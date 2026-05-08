@@ -69,12 +69,14 @@ Current broadcast event types:
 - `bid_accepted` for accepted `place_bid`
 - `auction_finalized` for successful `finalize_auction`
 - `loan_taken` for accepted `take_loan`
+- `property_mortgaged` for accepted `mortgage_property`
+- `property_unmortgaged` for accepted `unmortgage_property`
 - `game_completed` after a terminal action leaves exactly one active non-bankrupt, non-eliminated player
 
 Completed games keep session status `in_game` so `get_snapshot` and `reconnect_session` remain available.
 Gameplay mutations (`roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-`finalize_auction`, and `take_loan`) are rejected with `game_already_completed` once `gameStatus` is
-`completed`.
+`finalize_auction`, `take_loan`, `mortgage_property`, and `unmortgage_property`) are rejected with
+`game_already_completed` once `gameStatus` is `completed`.
 
 ## Additive Unity helper payloads
 
@@ -163,6 +165,8 @@ Gameplay:
 - `RollDiceRequest`
 - `PlaceBidRequest`
 - `TakeLoanRequest`
+- `MortgagePropertyRequest`
+- `UnmortgagePropertyRequest`
 - `UseHeldCardRequest`
 - `EndTurnRequest`
 - `RequestSnapshot`
@@ -171,7 +175,6 @@ Gameplay:
 Future:
 
 - `TradeOfferRequest`
-- `MortgagePropertyRequest`
 - `UpgradePropertyRequest`
 - `ChatMessageRequest`
 
@@ -319,6 +322,84 @@ Accepted loans return one direct sender `loan_result`, emit one `loan_taken` bro
 
 Rejected loans return the standard `error` envelope and do not mutate `GameState`.
 
+### Mortgage property
+
+```json
+{
+  "type": "mortgage_property",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1",
+    "propertyTileId": "property_03"
+  }
+}
+```
+
+Server validates:
+
+- Mortgages are enabled by `rules.economy.mortgagesEnabled`.
+- Sender connection is bound to the same in-game session/player.
+- Player exists in `GameState.Players` and is not eliminated.
+- Game is in progress and not completed.
+- No auction is active.
+- The current turn is not between tile resolution and tile execution.
+- `propertyTileId` is a string, exists on the board, is purchasable, has a price, is owned by the requester, and is not already mortgaged.
+
+Mortgage value is derived from static tile price: `floor(price * mortgageValuePercent / 100)`. Accepted mortgages return one direct `mortgage_result` and emit one `property_mortgaged` broadcast:
+
+```json
+{
+  "type": "mortgage_result",
+  "payload": {
+    "playerId": "player_1",
+    "propertyTileId": "property_03",
+    "mortgageValue": 50,
+    "money": 1550,
+    "isMortgaged": true,
+    "moneyDeltas": [
+      { "playerId": "player_1", "delta": 50, "balance": 1550, "reason": "mortgage", "tileId": "property_03" }
+    ]
+  }
+}
+```
+
+### Unmortgage property
+
+```json
+{
+  "type": "unmortgage_property",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1",
+    "propertyTileId": "property_03"
+  }
+}
+```
+
+Unmortgage uses the same session, player, ownership, active-auction, and unresolved-tile validation as mortgage. The property must already be mortgaged and the player must have enough cash.
+
+Unmortgage cost is `mortgageValue + floor(mortgageValue * unmortgageInterestPercent / 100)`. Accepted unmortgages return one direct `unmortgage_result` and emit one `property_unmortgaged` broadcast:
+
+```json
+{
+  "type": "unmortgage_result",
+  "payload": {
+    "playerId": "player_1",
+    "propertyTileId": "property_03",
+    "mortgageValue": 50,
+    "unmortgageInterest": 5,
+    "unmortgageCost": 55,
+    "money": 1495,
+    "isMortgaged": false,
+    "moneyDeltas": [
+      { "playerId": "player_1", "delta": -55, "balance": 1495, "reason": "unmortgage", "tileId": "property_03" }
+    ]
+  }
+}
+```
+
+Rejected mortgage and unmortgage requests return the standard `error` envelope and do not mutate `GameState`.
+
 ### Get snapshot
 
 `get_snapshot` returns a sender-only full gameplay snapshot for a bound in-game player. It does not broadcast, poll, emit diffs, change phase, or mutate `GameState`.
@@ -404,6 +485,15 @@ Accepted snapshots return one direct `snapshot_result` response:
         }
       ]
     },
+    "propertyStates": [
+      {
+        "tileId": "property_03",
+        "data": {
+          "damagePercent": 0,
+          "isMortgaged": true
+        }
+      }
+    ],
     "activeAuction": null,
     "cardDecks": [
       {
@@ -419,7 +509,7 @@ Accepted snapshots return one direct `snapshot_result` response:
 }
 ```
 
-Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, and board tiles are sorted deterministically. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, property states, and board tiles are sorted deterministically. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. `propertyStates[].data` includes `damagePercent` and additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged properties are projected without a snapshot version bump. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
 
 ### Game completed
 

@@ -153,6 +153,28 @@ public class PropertyStateManagerTests
     }
 
     [Fact]
+    public void RepairDamagedOwnedProperties_PreservesMortgagedStateWhenFullyRepaired()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(5, isMortgaged: true)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.True(result.PropertyStates[property01].Data.IsMortgaged);
+        Assert.Equal(0, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(new Money(1497), result.Players[0].Money);
+    }
+
+    [Fact]
     public void RepairDamagedOwnedProperties_ProcessesOwnedDamagedPropertiesInOrdinalTileOrder()
     {
         var property01 = new TileId("property_01");

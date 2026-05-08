@@ -91,14 +91,15 @@ Current client request type strings are snake_case:
 - Lobby and setup: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`,
   `set_rules`, `start_game`.
 - Gameplay: `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-  `finalize_auction`, `take_loan`, `use_held_card`.
+  `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`.
 - Recovery: `get_snapshot`, `reconnect_session`.
 
 Current direct response type strings are:
 
 - `lobby_state`, `rules_updated`, `game_started`.
 - `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`.
-- `bid_result`, `auction_result`, `loan_result`, `use_held_card_result`.
+- `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`,
+  `use_held_card_result`.
 - `snapshot_result`, `reconnect_result`.
 - `error`.
 
@@ -106,7 +107,8 @@ Current broadcast type strings are:
 
 - Lobby/setup: `lobby_state`, `rules_updated`.
 - Gameplay: `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`,
-  `auction_finalized`, `loan_taken`, `held_card_used`, `game_completed`.
+  `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`,
+  `held_card_used`, `game_completed`.
 
 One client request produces exactly one direct response to the sender. Successful mutating gameplay
 requests then produce separate sequenced broadcasts to connected in-game players, including the sender.
@@ -204,6 +206,17 @@ Loans:
   rules and return `loan_reason_blocked`.
 - Taking a loan does not automatically place a bid or pay any debt; it only mutates the borrower's money
   and loan state after validation.
+
+Mortgages:
+
+- `mortgage_property` and `unmortgage_property` are server-authoritative direct requests.
+- Payload shape is `{ sessionId, playerId, propertyTileId }`.
+- The requester must own the property; turn ownership is not required.
+- Requests are rejected during active auctions and while the current turn is between tile resolution and tile execution.
+- Mortgage value derives from board price using `rules.economy.mortgageValuePercent`.
+- Unmortgage cost is mortgage value plus `rules.economy.unmortgageInterestPercent` interest.
+- Mortgaged properties remain in `ownedPropertyIds`, set `propertyStates[].data.isMortgaged = true`, and charge no rent.
+- Accepted requests return `mortgage_result` or `unmortgage_result`, emit `property_mortgaged` or `property_unmortgaged`, and include `moneyDeltas` with reason `mortgage` or `unmortgage`.
 
 Lockup and held escape cards:
 
@@ -321,9 +334,9 @@ Each `board.tiles[]` entry includes:
 - `isAuctionable`
 - `ownerPlayerId`
 
-`propertyStates` is always an array in the current projection. Each entry includes `tileId` and
-`data.damagePercent`. Current snapshots project damaged states only; an empty array, or a tile omitted from
-the array, means default undamaged state for that tile.
+`propertyStates` is always an array in the current projection. Each entry includes `tileId`,
+`data.damagePercent`, and additive `data.isMortgaged`. Current snapshots project damaged or mortgaged
+states only; an omitted tile means default undamaged and unmortgaged state for that tile.
 
 `activeAuction` is null when no auction exists or the match is completed. When present, it includes:
 
@@ -410,6 +423,11 @@ Implemented error codes are snake_case:
 - `invalid_rules`
 - `loan_mode_disabled`
 - `loan_reason_blocked`
+- `mortgage_mode_disabled`
+- `property_not_owned`
+- `property_already_mortgaged`
+- `property_not_mortgaged`
+- `insufficient_cash`
 - `card_deck_not_found`
 - `card_deck_empty`
 - `invalid_card`
@@ -467,7 +485,7 @@ The following remain future systems and are not part of the current Unity contra
 - Cross-process persistence.
 - Event replay or missed-event catch-up.
 - Matchmaking.
-- Trading, mortgages, upgrades, asset liquidation, loan repayment, or debt recovery.
+- Trading, upgrades, asset liquidation, loan repayment, or debt recovery.
 - Client-selected repairs.
 - Custom card editing or user-defined runtime cards.
 - Cosmetics, ranked play, moderation, chat, or durable social features.

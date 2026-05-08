@@ -8,7 +8,7 @@ public sealed record PropertyState(
 
 public sealed record PropertyStateData
 {
-    public PropertyStateData(int damagePercent = 0)
+    public PropertyStateData(int damagePercent = 0, bool isMortgaged = false)
     {
         if (damagePercent is < 0 or > 100)
         {
@@ -18,7 +18,10 @@ public sealed record PropertyStateData
         }
 
         DamagePercent = damagePercent;
+        IsMortgaged = isMortgaged;
     }
 
     public int DamagePercent { get; }
+
+    public bool IsMortgaged { get; }
 }
