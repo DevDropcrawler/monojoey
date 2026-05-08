@@ -23,8 +23,6 @@ public sealed record GameState(
 
     public AuctionState? ActiveAuctionState { get; init; }
 
-    public LoanSharkConfig LoanSharkConfig { get; init; } = new();
-
     public IReadOnlyDictionary<string, CardDeckState> CardDeckStates { get; init; } =
         new Dictionary<string, CardDeckState>();
 

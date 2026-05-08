@@ -3384,7 +3384,7 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
-    public void TakeLoan_LegacyDisabledLoanConfigDoesNotDisableRulesEnabledLoans()
+    public void TakeLoan_DerivesLoanConfigFromRules()
     {
         var sessionManager = new SessionManager();
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
@@ -3392,7 +3392,16 @@ public class LobbyMessageHandlerTests
         _ = UpdateGameState(
             sessionManager,
             started.Session.SessionId,
-            gameState => gameState with { LoanSharkConfig = new LoanSharkConfig { Enabled = false } });
+            gameState => gameState with
+            {
+                Rules = gameState.Rules with
+                {
+                    Loans = gameState.Rules.Loans with
+                    {
+                        BaseInterestRate = 0.15m,
+                    },
+                },
+            });
 
         using var response = Handle(
             handler,
@@ -3404,6 +3413,8 @@ public class LobbyMessageHandlerTests
         Assert.Equal("player_1", payload.GetProperty("playerId").GetString());
         Assert.Equal(new Money(1700), afterLoan.Players[0].Money);
         Assert.Equal(new Money(200), afterLoan.Players[0].LoanState?.TotalBorrowed);
+        Assert.Equal(15, afterLoan.Players[0].LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(new Money(30), afterLoan.Players[0].LoanState?.NextTurnInterestDue);
     }
 
     [Theory]
@@ -4112,7 +4123,6 @@ public class LobbyMessageHandlerTests
             started.Session.SessionId,
             gameState => gameState with
             {
-                LoanSharkConfig = new LoanSharkConfig { Enabled = true },
                 Rules = gameState.Rules with
                 {
                     Loans = gameState.Rules.Loans with { LoanSharkEnabled = false },

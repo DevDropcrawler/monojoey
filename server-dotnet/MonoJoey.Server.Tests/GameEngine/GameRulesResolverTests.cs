@@ -43,10 +43,10 @@ public class GameRulesResolverTests
         Assert.True(rules.Cards.DeckEditingEnabled);
         Assert.Equal(CardDeckPresetIds.ClassicIsh, rules.Cards.DeckPresetId);
         Assert.True(rules.Loans.LoanSharkEnabled);
-        Assert.Equal(0.25m, rules.Loans.BaseInterestRate);
+        Assert.Equal(0.20m, rules.Loans.BaseInterestRate);
         Assert.Equal(0.10m, rules.Loans.InterestRateIncreasePerLoan);
-        Assert.Equal(0.05m, rules.Loans.InterestRateIncreasePerDebtTier);
-        Assert.Equal(25, rules.Loans.MinimumInterestPayment);
+        Assert.Equal(0.20m, rules.Loans.InterestRateIncreasePerDebtTier);
+        Assert.Equal(0, rules.Loans.MinimumInterestPayment);
         Assert.False(rules.Loans.CanBorrowForLoanPayments);
         Assert.Equal("lastPlayerStanding", rules.Win.ConditionType);
         Assert.False(rules.Future.SlimerEnabled);

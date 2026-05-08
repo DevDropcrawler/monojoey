@@ -3139,7 +3139,9 @@ public sealed class LobbyMessageHandler
         }
 
         var deltas = new List<MoneyDeltaPayload>();
-        var loanInterestDelta = CalculateStartTurnLoanInterestDelta(previousPlayer);
+        var loanInterestDelta = CalculateStartTurnLoanInterestDelta(
+            previousPlayer,
+            LoanSharkConfig.FromRules(previousGameState.Rules.Loans));
         if (loanInterestDelta != 0)
         {
             deltas.Add(new MoneyDeltaPayload(
@@ -3163,15 +3165,21 @@ public sealed class LobbyMessageHandler
         return deltas.Count == 0 ? null : deltas;
     }
 
-    private static int CalculateStartTurnLoanInterestDelta(Player previousPlayer)
+    private static int CalculateStartTurnLoanInterestDelta(Player previousPlayer, LoanSharkConfig config)
     {
+        if (!config.Enabled)
+        {
+            return 0;
+        }
+
         var loanState = previousPlayer.LoanState;
         if (loanState is null)
         {
             return 0;
         }
 
-        return -(loanState.TotalBorrowed.Amount * loanState.CurrentInterestRatePercent / 100);
+        var calculatedInterest = loanState.TotalBorrowed.Amount * loanState.CurrentInterestRatePercent / 100;
+        return -Math.Max(calculatedInterest, config.MinimumInterestPayment);
     }
 
     private static IReadOnlyList<PlayerEliminationPayload>? CreatePlayerEliminationsFromDiff(

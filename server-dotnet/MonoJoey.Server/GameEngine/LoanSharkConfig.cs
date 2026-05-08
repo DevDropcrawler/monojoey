@@ -12,6 +12,8 @@ public sealed record LoanSharkConfig
 
     public int AdditionalBorrowInterestRateStepPercent { get; init; } = 10;
 
+    public int MinimumInterestPayment { get; init; }
+
     public bool CanBorrowForLoanPayments { get; init; } = false;
 
     public static LoanSharkConfig FromRules(LoanRules rules)
@@ -21,7 +23,20 @@ public sealed record LoanSharkConfig
         return new LoanSharkConfig
         {
             Enabled = rules.LoanSharkEnabled,
+            FirstBorrowInterestRatePercent = ToPercent(rules.BaseInterestRate),
+            SecondBorrowInterestRatePercent = ToPercent(rules.BaseInterestRate + rules.InterestRateIncreasePerLoan),
+            ThirdBorrowInterestRatePercent = ToPercent(
+                rules.BaseInterestRate +
+                    rules.InterestRateIncreasePerLoan +
+                    rules.InterestRateIncreasePerDebtTier),
+            AdditionalBorrowInterestRateStepPercent = ToPercent(rules.InterestRateIncreasePerLoan),
+            MinimumInterestPayment = rules.MinimumInterestPayment,
             CanBorrowForLoanPayments = rules.CanBorrowForLoanPayments,
         };
+    }
+
+    private static int ToPercent(decimal rate)
+    {
+        return Math.Min(100, (int)Math.Round(rate * 100m, MidpointRounding.AwayFromZero));
     }
 }

@@ -10,6 +10,11 @@ public static class LoanManager
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        if (!config.Enabled)
+        {
+            return gameState;
+        }
+
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         var player = gameState.Players[playerIndex];
         var loanState = player.LoanState;
@@ -18,7 +23,10 @@ public static class LoanManager
             return gameState;
         }
 
-        var interestDue = CalculateInterestDue(loanState.TotalBorrowed, loanState.CurrentInterestRatePercent);
+        var interestDue = CalculateInterestDue(
+            loanState.TotalBorrowed,
+            loanState.CurrentInterestRatePercent,
+            config);
         var players = gameState.Players.ToArray();
         players[playerIndex] = player with
         {
@@ -99,7 +107,7 @@ public static class LoanManager
         var loanState = new PlayerLoanState(
             totalBorrowed,
             interestRatePercent,
-            CalculateInterestDue(totalBorrowed, interestRatePercent),
+            CalculateInterestDue(totalBorrowed, interestRatePercent, config),
             nextLoanTier);
 
         var players = gameState.Players.ToArray();
@@ -161,9 +169,13 @@ public static class LoanManager
         };
     }
 
-    private static Money CalculateInterestDue(Money totalBorrowed, int interestRatePercent)
+    private static Money CalculateInterestDue(
+        Money totalBorrowed,
+        int interestRatePercent,
+        LoanSharkConfig config)
     {
-        return new Money(totalBorrowed.Amount * interestRatePercent / 100);
+        var calculatedInterest = totalBorrowed.Amount * interestRatePercent / 100;
+        return new Money(Math.Max(calculatedInterest, config.MinimumInterestPayment));
     }
 
     private static int? FindPlayerIndexOrNull(IReadOnlyList<Player> players, PlayerId playerId)

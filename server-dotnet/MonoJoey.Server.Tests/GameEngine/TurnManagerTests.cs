@@ -138,7 +138,7 @@ public class TurnManagerTests
     }
 
     [Fact]
-    public void StartFirstTurn_IgnoresSchemaRateFieldsWhenDerivingLoanConfig()
+    public void StartFirstTurn_UsesRulesMinimumInterestPaymentForLoanConfig()
     {
         var gameState = CreateGameState("player_1", "player_2") with
         {
@@ -146,10 +146,7 @@ public class TurnManagerTests
             {
                 Loans = GameRulesPresets.MonoJoeyDefault.Loans with
                 {
-                    BaseInterestRate = 0.99m,
-                    InterestRateIncreasePerLoan = 0.99m,
-                    InterestRateIncreasePerDebtTier = 0.99m,
-                    MinimumInterestPayment = 999,
+                    MinimumInterestPayment = 75,
                 },
             },
             Players = new[]
@@ -164,8 +161,8 @@ public class TurnManagerTests
 
         var started = TurnManager.StartFirstTurn(gameState);
 
-        Assert.Equal(new Money(1440), started.Players[0].Money);
-        Assert.Equal(new Money(60), started.Players[0].LoanState?.NextTurnInterestDue);
+        Assert.Equal(new Money(1425), started.Players[0].Money);
+        Assert.Equal(new Money(75), started.Players[0].LoanState?.NextTurnInterestDue);
     }
 
     [Fact]

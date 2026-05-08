@@ -295,7 +295,7 @@ Not included by explicit user scope:
 - `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
-- Default loan interest after the third borrow increases by 10 percentage points per loan tier and caps at 100%; these runtime rates live in `LoanSharkConfig` defaults for now, not in `GameRules.Loans` rate fields.
+- Default loan rules produce the runtime ladder 20%, 30%, 50%, then +10 percentage points per loan tier capped at 100%; the `rules.loans` fields are the source for `LoanSharkConfig`.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
 
 ## Important Decisions Preserved
@@ -355,8 +355,8 @@ Not included by explicit user scope:
 - Loan rejection results return the unchanged `GameState`.
 - Borrowing to pay `LoanInterest`, `LoanPrincipalRepayment`, or `ExistingLoanDebt` is rejected through `LoanTakeResultKind.DisallowedBorrowPurpose` unless the runtime config has `CanBorrowForLoanPayments = true`.
 - Borrowing remains allowed for `AuctionBid`, `RentPayment`, `TaxPayment`, `CardPenalty`, and `Fine`.
-- `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic.
-- Start-of-turn loan interest also uses total borrowed and the stored current interest rate using the same integer money arithmetic.
+- `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic, with `rules.loans.minimumInterestPayment` applied only when it is higher than the calculated interest.
+- Start-of-turn loan interest uses the same interest calculation and is skipped entirely when `rules.loans.loanSharkEnabled` is false.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` derive `LoanSharkConfig` from `GameState.Rules.Loans` and call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` skip players whose `IsLockedUp` flag is true.
 - `TurnManager.GetCurrentPlayer` rejects a locked current player with `Locked up players cannot take normal turns.`

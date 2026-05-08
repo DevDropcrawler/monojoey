@@ -41,10 +41,10 @@ public static class GameRulesPresets
             deckPresetId: CardDeckPresetIds.Default),
         Loans: new LoanRules(
             LoanSharkEnabled: true,
-            BaseInterestRate: 0.25m,
+            BaseInterestRate: 0.20m,
             InterestRateIncreasePerLoan: 0.10m,
-            InterestRateIncreasePerDebtTier: 0.05m,
-            MinimumInterestPayment: 25,
+            InterestRateIncreasePerDebtTier: 0.20m,
+            MinimumInterestPayment: 0,
             CanBorrowForLoanPayments: false),
         Win: new WinRules(
             ConditionType: "lastPlayerStanding"),

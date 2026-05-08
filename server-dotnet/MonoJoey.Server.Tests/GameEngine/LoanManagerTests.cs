@@ -113,17 +113,17 @@ public class LoanManagerTests
     }
 
     [Fact]
-    public void TakeLoan_CustomRuntimeConfigUsesSameTierFormula()
+    public void TakeLoan_CustomRulesDriveTierFormula()
     {
         var playerId = new PlayerId("player_1");
         var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
-        var config = new LoanSharkConfig
+        var rules = GameRulesPresets.MonoJoeyDefault.Loans with
         {
-            FirstBorrowInterestRatePercent = 11,
-            SecondBorrowInterestRatePercent = 22,
-            ThirdBorrowInterestRatePercent = 33,
-            AdditionalBorrowInterestRateStepPercent = 7,
+            BaseInterestRate = 0.11m,
+            InterestRateIncreasePerLoan = 0.07m,
+            InterestRateIncreasePerDebtTier = 0.15m,
         };
+        var config = LoanSharkConfig.FromRules(rules);
 
         var firstResult = LoanManager.TakeLoan(
             gameState,
@@ -151,10 +151,47 @@ public class LoanManagerTests
             config);
 
         Assert.Equal(11, firstResult.LoanState?.CurrentInterestRatePercent);
-        Assert.Equal(22, secondResult.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(18, secondResult.LoanState?.CurrentInterestRatePercent);
         Assert.Equal(33, thirdResult.LoanState?.CurrentInterestRatePercent);
         Assert.Equal(40, fourthResult.LoanState?.CurrentInterestRatePercent);
         Assert.Equal(new Money(160), fourthResult.LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
+    public void TakeLoan_MinimumInterestPaymentAppliesWhenAboveCalculatedInterest()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
+        var config = LoanSharkConfig.FromRules(
+            GameRulesPresets.MonoJoeyDefault.Loans with { MinimumInterestPayment = 25 });
+
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(10),
+            BorrowPurpose.RentPayment,
+            config);
+
+        Assert.Equal(20, result.LoanState?.CurrentInterestRatePercent);
+        Assert.Equal(new Money(25), result.LoanState?.NextTurnInterestDue);
+    }
+
+    [Fact]
+    public void TakeLoan_MinimumInterestPaymentDoesNotOverrideHigherCalculatedInterest()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500));
+        var config = LoanSharkConfig.FromRules(
+            GameRulesPresets.MonoJoeyDefault.Loans with { MinimumInterestPayment = 25 });
+
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(200),
+            BorrowPurpose.RentPayment,
+            config);
+
+        Assert.Equal(new Money(40), result.LoanState?.NextTurnInterestDue);
     }
 
     [Fact]
@@ -351,6 +388,43 @@ public class LoanManagerTests
         Assert.Equal(new Money(60), result.Players[0].LoanState?.NextTurnInterestDue);
         Assert.Equal(30, result.Players[0].LoanState?.CurrentInterestRatePercent);
         Assert.Equal(new Money(1500), gameState.Players[0].Money);
+    }
+
+    [Fact]
+    public void StartTurnInterestCheck_WhenDisabledDoesNotChargeInterest()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: new Money(60),
+            LoanTier: 2);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+        var config = DefaultLoanConfig with { Enabled = false };
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, config);
+
+        Assert.Same(gameState, result);
+        Assert.Equal(new Money(1500), result.Players[0].Money);
+        Assert.Same(loanState, result.Players[0].LoanState);
+    }
+
+    [Fact]
+    public void StartTurnInterestCheck_MinimumInterestPaymentAppliesWhenAboveCalculatedInterest()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(10),
+            CurrentInterestRatePercent: 20,
+            NextTurnInterestDue: Money.Zero,
+            LoanTier: 1);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+        var config = DefaultLoanConfig with { MinimumInterestPayment = 25 };
+
+        var result = LoanManager.StartTurnInterestCheck(gameState, playerId, config);
+
+        Assert.Equal(new Money(1475), result.Players[0].Money);
+        Assert.Equal(new Money(25), result.Players[0].LoanState?.NextTurnInterestDue);
     }
 
     [Fact]
