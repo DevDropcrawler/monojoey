@@ -71,11 +71,16 @@ Current broadcast event types:
 - `loan_taken` for accepted `take_loan`
 - `property_mortgaged` for accepted `mortgage_property`
 - `property_unmortgaged` for accepted `unmortgage_property`
+- `trade_offer_created` for accepted `create_trade_offer`
+- `trade_offer_accepted` for accepted `accept_trade_offer`
+- `trade_offer_declined` for accepted `decline_trade_offer`
+- `trade_offer_cancelled` for accepted `cancel_trade_offer`
 - `game_completed` after a terminal action leaves exactly one active non-bankrupt, non-eliminated player
 
 Completed games keep session status `in_game` so `get_snapshot` and `reconnect_session` remain available.
 Gameplay mutations (`roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-`finalize_auction`, `take_loan`, `mortgage_property`, and `unmortgage_property`) are rejected with
+`finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `create_trade_offer`,
+`accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer`) are rejected with
 `game_already_completed` once `gameStatus` is `completed`.
 
 ## Additive Unity helper payloads
@@ -167,6 +172,10 @@ Gameplay:
 - `TakeLoanRequest`
 - `MortgagePropertyRequest`
 - `UnmortgagePropertyRequest`
+- `CreateTradeOfferRequest`
+- `AcceptTradeOfferRequest`
+- `DeclineTradeOfferRequest`
+- `CancelTradeOfferRequest`
 - `UseHeldCardRequest`
 - `EndTurnRequest`
 - `RequestSnapshot`
@@ -174,7 +183,6 @@ Gameplay:
 
 Future:
 
-- `TradeOfferRequest`
 - `UpgradePropertyRequest`
 - `ChatMessageRequest`
 
@@ -400,6 +408,52 @@ Unmortgage cost is `mortgageValue + floor(mortgageValue * unmortgageInterestPerc
 
 Rejected mortgage and unmortgage requests return the standard `error` envelope and do not mutate `GameState`.
 
+### Realtime trades
+
+`create_trade_offer` creates one pending outgoing offer for the proposing player. Pending trade state is
+in-memory session runtime state, not settlement truth. The server validates the proposed assets through
+`TradeManager.ValidateTrade` only; it does not call settlement or mutate `GameState` on create.
+
+```json
+{
+  "type": "create_trade_offer",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1",
+    "recipientPlayerId": "player_2",
+    "offered": { "cash": 0, "propertyTileIds": ["property_03"] },
+    "requested": { "cash": 60, "propertyTileIds": [] }
+  }
+}
+```
+
+Accepted creates return `trade_offer_result` and broadcast `trade_offer_created`. The generated
+`tradeOfferId` is sequence-backed, such as `trade_42`; `createdSequence` is authoritative for offer order.
+`createdAtUtc` is informational only.
+
+`accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer` use:
+
+```json
+{
+  "type": "accept_trade_offer",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_2",
+    "tradeOfferId": "trade_42"
+  }
+}
+```
+
+Accept requires the recipient, revalidates through `TradeManager.ValidateTrade`, then settles only through
+`TradeManager.SettleTrade`. Decline requires the recipient. Cancel requires the proposer. Successful
+accept/decline/cancel each remove only the targeted offer, return one direct response, and emit one
+sequenced broadcast. Accepted trade payloads may include `moneyDeltas` with reason `trade` and
+`propertyOwnershipChanges` with reason `trade`.
+
+Rejected trade lifecycle requests return `error`, do not mutate state, do not clear pending offers, do not
+broadcast, and do not allocate sequence. Additional trade errors are `trade_offer_active`,
+`trade_offer_not_found`, and `trade_offer_not_for_player`.
+
 ### Get snapshot
 
 `get_snapshot` returns a sender-only full gameplay snapshot for a bound in-game player. It does not broadcast, poll, emit diffs, change phase, or mutate `GameState`.
@@ -504,12 +558,13 @@ Accepted snapshots return one direct `snapshot_result` response:
     ],
     "loanShark": {
       "enabled": true
-    }
+    },
+    "pendingTrades": []
   }
 }
 ```
 
-Snapshot DTOs are explicit wire records copied from persisted `GameState` while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, property states, and board tiles are sorted deterministically. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. `propertyStates[].data` includes `damagePercent` and additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged properties are projected without a snapshot version bump. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, and `endedAtUtc`. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+Snapshot DTOs are explicit wire records copied from persisted `GameState` and session runtime state while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, property states, and board tiles are sorted deterministically. Pending trades are sorted by `createdSequence`; timestamps are informational only. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. `propertyStates[].data` includes `damagePercent` and additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged properties are projected without a snapshot version bump. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and an empty `pendingTrades` array. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
 
 ### Game completed
 
@@ -727,3 +782,6 @@ Use explicit error codes. Examples:
 - `LOAN_REASON_BLOCKED`
 - `INSUFFICIENT_FUNDS`
 - `MATCH_NOT_FOUND`
+- `trade_offer_active`
+- `trade_offer_not_found`
+- `trade_offer_not_for_player`

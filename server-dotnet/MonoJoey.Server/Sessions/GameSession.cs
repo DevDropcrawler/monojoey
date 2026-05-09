@@ -10,4 +10,6 @@ public sealed record GameSession(
     long LastEventSequence)
 {
     public GameRules DraftRules { get; init; } = GameRulesPresets.MonoJoeyDefault;
+
+    public IReadOnlyList<PendingTradeOffer> PendingTradeOffers { get; init; } = Array.Empty<PendingTradeOffer>();
 }

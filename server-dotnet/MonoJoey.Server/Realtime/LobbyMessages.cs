@@ -22,6 +22,10 @@ public static class LobbyMessageTypes
     public const string MortgageProperty = "mortgage_property";
     public const string UnmortgageProperty = "unmortgage_property";
     public const string UseHeldCard = "use_held_card";
+    public const string CreateTradeOffer = "create_trade_offer";
+    public const string AcceptTradeOffer = "accept_trade_offer";
+    public const string DeclineTradeOffer = "decline_trade_offer";
+    public const string CancelTradeOffer = "cancel_trade_offer";
     public const string GetSnapshot = "get_snapshot";
     public const string ReconnectSession = "reconnect_session";
     public const string LobbyState = "lobby_state";
@@ -36,6 +40,10 @@ public static class LobbyMessageTypes
     public const string MortgageResult = "mortgage_result";
     public const string UnmortgageResult = "unmortgage_result";
     public const string UseHeldCardResult = "use_held_card_result";
+    public const string TradeOfferResult = "trade_offer_result";
+    public const string TradeAcceptResult = "trade_accept_result";
+    public const string TradeDeclineResult = "trade_decline_result";
+    public const string TradeCancelResult = "trade_cancel_result";
     public const string SnapshotResult = "snapshot_result";
     public const string ReconnectResult = "reconnect_result";
     public const string RulesUpdated = "rules_updated";
@@ -49,6 +57,10 @@ public static class LobbyMessageTypes
     public const string PropertyMortgaged = "property_mortgaged";
     public const string PropertyUnmortgaged = "property_unmortgaged";
     public const string HeldCardUsed = "held_card_used";
+    public const string TradeOfferCreated = "trade_offer_created";
+    public const string TradeOfferAccepted = "trade_offer_accepted";
+    public const string TradeOfferDeclined = "trade_offer_declined";
+    public const string TradeOfferCancelled = "trade_offer_cancelled";
     public const string GameCompleted = "game_completed";
     public const string Error = "error";
 }
@@ -92,6 +104,9 @@ public static class LobbyErrorCodes
     public const string UnsupportedCardAction = "unsupported_card_action";
     public const string GameAlreadyCompleted = "game_already_completed";
     public const string HeldCardNotHeld = "held_card_not_held";
+    public const string TradeOfferActive = "trade_offer_active";
+    public const string TradeOfferNotFound = "trade_offer_not_found";
+    public const string TradeOfferNotForPlayer = "trade_offer_not_for_player";
 }
 
 public sealed record LobbyServerEnvelope(
@@ -330,6 +345,28 @@ public sealed record UseHeldCardResultPayload(
     bool IsLockedUp,
     IReadOnlyList<string> HeldCardIds);
 
+public sealed record TradeOfferResultPayload(
+    PendingTradePayload TradeOffer);
+
+public sealed record TradeAcceptResultPayload(
+    string TradeOfferId,
+    string ProposerPlayerId,
+    string RecipientPlayerId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PropertyOwnershipChangePayload>? PropertyOwnershipChanges = null);
+
+public sealed record TradeDeclineResultPayload(
+    string TradeOfferId,
+    string ProposerPlayerId,
+    string RecipientPlayerId);
+
+public sealed record TradeCancelResultPayload(
+    string TradeOfferId,
+    string ProposerPlayerId,
+    string RecipientPlayerId);
+
 public sealed record GameCompletedPayload(
     string WinnerPlayerId,
     int TurnIndex,
@@ -355,7 +392,8 @@ public sealed record SnapshotPayload(
     SnapshotAuctionPayload? ActiveAuction,
     IReadOnlyList<SnapshotCardDeckPayload> CardDecks,
     SnapshotLoanSharkPayload LoanShark,
-    GameRules Rules);
+    GameRules Rules,
+    IReadOnlyList<PendingTradePayload> PendingTrades);
 
 public sealed record RulesUpdatedPayload(
     string SessionId,
@@ -459,6 +497,19 @@ public sealed record SnapshotCardDeckPayload(
 
 public sealed record SnapshotLoanSharkPayload(
     bool Enabled);
+
+public sealed record PendingTradePayload(
+    string TradeOfferId,
+    long CreatedSequence,
+    string ProposerPlayerId,
+    string RecipientPlayerId,
+    TradeAssetsPayload Offered,
+    TradeAssetsPayload Requested,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record TradeAssetsPayload(
+    int Cash,
+    IReadOnlyList<string> PropertyTileIds);
 
 public sealed record MovementPayload(
     string PlayerId,

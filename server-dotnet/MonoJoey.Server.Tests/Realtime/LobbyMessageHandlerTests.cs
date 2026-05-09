@@ -3660,6 +3660,234 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void CreateTradeOffer_AllowsOneOutgoingOfferPerProposer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        var first = handler.HandleTextMessageResult(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 10),
+            started.FirstContext);
+        var second = handler.HandleTextMessageResult(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_2", "player_1", offeredCash: 5),
+            started.SecondContext);
+        var duplicate = handler.HandleTextMessageResult(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 15),
+            started.FirstContext);
+
+        Assert.Equal("trade_offer_result", first.DirectResponse.Type);
+        Assert.Equal("trade_offer_created", Assert.Single(first.Broadcasts).Type);
+        Assert.Equal(1, first.Broadcast!.Sequence);
+        Assert.Equal("trade_offer_result", second.DirectResponse.Type);
+        Assert.Equal(2, second.Broadcast!.Sequence);
+        var error = Assert.IsType<LobbyErrorPayload>(duplicate.DirectResponse.Payload);
+        Assert.Equal("trade_offer_active", error.Code);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)!.PendingTradeOffers.Count);
+        Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
+    }
+
+    [Fact]
+    public void TradeOffers_AreProjectedInSnapshotAndReconnectBySequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 10),
+            started.FirstContext);
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_2", "player_1", offeredCash: 5),
+            started.SecondContext);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var snapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        using var reconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_1"));
+        var snapshotTrades = AssertResponseType(snapshotResponse, "snapshot_result")
+            .GetProperty("pendingTrades")
+            .EnumerateArray()
+            .ToArray();
+        var reconnectTrades = AssertResponseType(reconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("pendingTrades")
+            .EnumerateArray()
+            .ToArray();
+
+        Assert.Equal(new[] { "trade_1", "trade_2" }, snapshotTrades.Select(trade => trade.GetProperty("tradeOfferId").GetString()).ToArray());
+        Assert.Equal(new[] { 1L, 2L }, snapshotTrades.Select(trade => trade.GetProperty("createdSequence").GetInt64()).ToArray());
+        Assert.Equal("player_1", snapshotTrades[0].GetProperty("proposerPlayerId").GetString());
+        Assert.Equal(10, snapshotTrades[0].GetProperty("offered").GetProperty("cash").GetInt32());
+        Assert.Equal(new[] { "trade_1", "trade_2" }, reconnectTrades.Select(trade => trade.GetProperty("tradeOfferId").GetString()).ToArray());
+    }
+
+    [Fact]
+    public void AcceptTradeOffer_SettlesThroughTradeManagerAndClearsOnlyAcceptedOffer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } });
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(
+                started.Session.SessionId,
+                "player_1",
+                "player_2",
+                offeredCash: 0,
+                offeredProperties: ["property_03"],
+                requestedCash: 60),
+            started.FirstContext);
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_2", "player_1", offeredCash: 5),
+            started.SecondContext);
+
+        var result = handler.HandleTextMessageResult(
+            AcceptTradeOfferMessage(started.Session.SessionId, "player_2", "trade_1"),
+            started.SecondContext);
+        var payload = Assert.IsType<TradeAcceptResultPayload>(result.DirectResponse.Payload);
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("trade_accept_result", result.DirectResponse.Type);
+        Assert.Equal("trade_offer_accepted", Assert.Single(result.Broadcasts).Type);
+        Assert.Equal("trade_1", payload.TradeOfferId);
+        Assert.Equal(new[] { "trade_2" }, session.PendingTradeOffers.Select(offer => offer.TradeOfferId).ToArray());
+        Assert.Equal(new Money(1560), session.GameState.Players[0].Money);
+        Assert.Equal(new Money(1440), session.GameState.Players[1].Money);
+        Assert.DoesNotContain(new TileId("property_03"), session.GameState.Players[0].OwnedPropertyIds);
+        Assert.Contains(new TileId("property_03"), session.GameState.Players[1].OwnedPropertyIds);
+        Assert.Equal(new[] { 60, -60 }, payload.MoneyDeltas?.Select(delta => delta.Delta).ToArray());
+        var ownershipChange = Assert.Single(payload.PropertyOwnershipChanges ?? Array.Empty<PropertyOwnershipChangePayload>());
+        Assert.Equal("property_03", ownershipChange.TileId);
+        Assert.Equal("trade", ownershipChange.Reason);
+    }
+
+    [Fact]
+    public void DeclineAndCancelTradeOffer_ClearOnlyAuthorizedTargetOffer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 10),
+            started.FirstContext);
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(started.Session.SessionId, "player_2", "player_1", offeredCash: 5),
+            started.SecondContext);
+        var beforeState = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        var wrongCancel = handler.HandleTextMessageResult(
+            CancelTradeOfferMessage(started.Session.SessionId, "player_2", "trade_1"),
+            started.SecondContext);
+        var decline = handler.HandleTextMessageResult(
+            DeclineTradeOfferMessage(started.Session.SessionId, "player_2", "trade_1"),
+            started.SecondContext);
+        var cancel = handler.HandleTextMessageResult(
+            CancelTradeOfferMessage(started.Session.SessionId, "player_2", "trade_2"),
+            started.SecondContext);
+        var session = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("trade_offer_not_for_player", Assert.IsType<LobbyErrorPayload>(wrongCancel.DirectResponse.Payload).Code);
+        Assert.Equal("trade_decline_result", decline.DirectResponse.Type);
+        Assert.Equal("trade_offer_declined", Assert.Single(decline.Broadcasts).Type);
+        Assert.Equal("trade_cancel_result", cancel.DirectResponse.Type);
+        Assert.Equal("trade_offer_cancelled", Assert.Single(cancel.Broadcasts).Type);
+        Assert.Empty(session.PendingTradeOffers);
+        Assert.Same(beforeState, session.GameState);
+    }
+
+    [Fact]
+    public void AcceptTradeOffer_RevalidatesStaleOwnershipWithoutMutationOrSequence()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_03") } });
+        _ = handler.HandleTextMessage(
+            CreateTradeOfferMessage(
+                started.Session.SessionId,
+                "player_1",
+                "player_2",
+                offeredCash: 0,
+                offeredProperties: ["property_03"],
+                requestedCash: 60),
+            started.FirstContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { OwnedPropertyIds = new HashSet<TileId>() });
+        var beforeAccept = sessionManager.GetSession(started.Session.SessionId)!;
+
+        var result = handler.HandleTextMessageResult(
+            AcceptTradeOfferMessage(started.Session.SessionId, "player_2", "trade_1"),
+            started.SecondContext);
+        var afterAccept = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("property_not_owned", Assert.IsType<LobbyErrorPayload>(result.DirectResponse.Payload).Code);
+        Assert.Empty(result.Broadcasts);
+        Assert.Same(beforeAccept.GameState, afterAccept.GameState);
+        Assert.Single(afterAccept.PendingTradeOffers);
+        Assert.Equal(beforeAccept.LastEventSequence, afterAccept.LastEventSequence);
+    }
+
+    [Theory]
+    [InlineData("auction")]
+    [InlineData("unresolved_tile")]
+    public void CreateTradeOffer_BlockedByTradeValidationState(string scenario)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = scenario == "auction"
+            ? StartActiveAuction(sessionManager, started.Session.SessionId)
+            : SetCurrentPlayerReadyToExecuteTile(
+                sessionManager,
+                started.Session.SessionId,
+                "player_1",
+                "property_01");
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 10));
+
+        AssertError(response, "invalid_session_state");
+        Assert.Empty(sessionManager.GetSession(started.Session.SessionId)!.PendingTradeOffers);
+        Assert.Equal(beforeSequence, sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence);
+    }
+
+    [Fact]
+    public void TradeLifecycle_CompletedGameRejectsWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = CompleteStartedGame(sessionManager, started.Session.SessionId);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            CreateTradeOfferMessage(started.Session.SessionId, "player_1", "player_2", offeredCash: 10));
+
+        AssertError(response, "game_already_completed");
+        Assert.Empty(sessionManager.GetSession(started.Session.SessionId)!.PendingTradeOffers);
+    }
+
+    [Fact]
     public void MortgageProperty_ValidRequestReturnsResultBroadcastAndSnapshotState()
     {
         var sessionManager = new SessionManager();
@@ -6131,6 +6359,47 @@ public class LobbyMessageHandlerTests
         return $@"{{""type"":""use_held_card"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""cardId"":""{cardId}""}}}}";
     }
 
+    private static string CreateTradeOfferMessage(
+        string sessionId,
+        string playerId,
+        string recipientPlayerId,
+        int offeredCash,
+        string[]? offeredProperties = null,
+        int requestedCash = 0,
+        string[]? requestedProperties = null)
+    {
+        return $@"{{""type"":""create_trade_offer"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""recipientPlayerId"":""{recipientPlayerId}"",""offered"":{{""cash"":{offeredCash},""propertyTileIds"":[{PropertyIdsJson(offeredProperties)}]}},""requested"":{{""cash"":{requestedCash},""propertyTileIds"":[{PropertyIdsJson(requestedProperties)}]}}}}}}";
+    }
+
+    private static string AcceptTradeOfferMessage(string sessionId, string playerId, string tradeOfferId)
+    {
+        return TradeOfferLifecycleMessage("accept_trade_offer", sessionId, playerId, tradeOfferId);
+    }
+
+    private static string DeclineTradeOfferMessage(string sessionId, string playerId, string tradeOfferId)
+    {
+        return TradeOfferLifecycleMessage("decline_trade_offer", sessionId, playerId, tradeOfferId);
+    }
+
+    private static string CancelTradeOfferMessage(string sessionId, string playerId, string tradeOfferId)
+    {
+        return TradeOfferLifecycleMessage("cancel_trade_offer", sessionId, playerId, tradeOfferId);
+    }
+
+    private static string TradeOfferLifecycleMessage(
+        string type,
+        string sessionId,
+        string playerId,
+        string tradeOfferId)
+    {
+        return $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""tradeOfferId"":""{tradeOfferId}""}}}}";
+    }
+
+    private static string PropertyIdsJson(string[]? propertyIds)
+    {
+        return string.Join(",", (propertyIds ?? Array.Empty<string>()).Select(propertyId => $@"""{propertyId}"""));
+    }
+
     private static string GameplayMessage(string type, string sessionId, string playerId)
     {
         return type switch
@@ -6140,6 +6409,10 @@ public class LobbyMessageHandlerTests
             "mortgage_property" => MortgagePropertyMessage(sessionId, playerId, "property_01"),
             "unmortgage_property" => UnmortgagePropertyMessage(sessionId, playerId, "property_01"),
             "use_held_card" => UseHeldCardMessage(sessionId, playerId, "escape_01"),
+            "create_trade_offer" => CreateTradeOfferMessage(sessionId, playerId, "player_2", 10),
+            "accept_trade_offer" => AcceptTradeOfferMessage(sessionId, playerId, "trade_1"),
+            "decline_trade_offer" => DeclineTradeOfferMessage(sessionId, playerId, "trade_1"),
+            "cancel_trade_offer" => CancelTradeOfferMessage(sessionId, playerId, "trade_1"),
             _ => $@"{{""type"":""{type}"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}""}}}}",
         };
     }

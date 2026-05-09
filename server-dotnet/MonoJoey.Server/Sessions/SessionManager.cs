@@ -398,6 +398,75 @@ public sealed class SessionManager
         return new GameStateEventPersistenceResult(updatedSession, sequence);
     }
 
+    public GameStateEventPersistenceResult AddPendingTradeOfferAndAllocateEventSequence(
+        string sessionId,
+        PlayerId proposerPlayerId,
+        PlayerId recipientPlayerId,
+        TradeAssets offered,
+        TradeAssets requested,
+        DateTimeOffset createdAtUtc)
+    {
+        var session = FindSession(sessionId);
+        var sequence = session.LastEventSequence + 1;
+        var offer = new PendingTradeOffer(
+            $"trade_{sequence}",
+            sequence,
+            proposerPlayerId,
+            recipientPlayerId,
+            offered,
+            requested,
+            createdAtUtc);
+        var updatedSession = session with
+        {
+            PendingTradeOffers = session.PendingTradeOffers.Append(offer).ToArray(),
+            LastEventSequence = sequence,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return new GameStateEventPersistenceResult(updatedSession, sequence);
+    }
+
+    public GameStateEventPersistenceResult RemovePendingTradeOfferAndAllocateEventSequence(
+        string sessionId,
+        string tradeOfferId)
+    {
+        var session = FindSession(sessionId);
+        var sequence = session.LastEventSequence + 1;
+        var updatedSession = session with
+        {
+            PendingTradeOffers = session.PendingTradeOffers
+                .Where(offer => !string.Equals(offer.TradeOfferId, tradeOfferId, StringComparison.Ordinal))
+                .ToArray(),
+            LastEventSequence = sequence,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return new GameStateEventPersistenceResult(updatedSession, sequence);
+    }
+
+    public GameStateEventPersistenceResult UpdateGameStateAndRemovePendingTradeOfferAndAllocateEventSequence(
+        string sessionId,
+        GameState gameState,
+        string tradeOfferId)
+    {
+        var session = FindSession(sessionId);
+        var sequence = session.LastEventSequence + 1;
+        var updatedSession = session with
+        {
+            GameState = gameState,
+            PendingTradeOffers = session.PendingTradeOffers
+                .Where(offer => !string.Equals(offer.TradeOfferId, tradeOfferId, StringComparison.Ordinal))
+                .ToArray(),
+            LastEventSequence = sequence,
+        };
+
+        sessions[sessionId] = updatedSession;
+
+        return new GameStateEventPersistenceResult(updatedSession, sequence);
+    }
+
     public GameStateEventPersistenceResult UpdateTerminalGameStateAndAllocateEventSequences(
         string sessionId,
         GameState actionGameState,

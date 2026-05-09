@@ -91,7 +91,8 @@ Current client request type strings are snake_case:
 - Lobby and setup: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`,
   `set_rules`, `start_game`.
 - Gameplay: `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-  `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`.
+  `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`,
+  `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`.
 - Recovery: `get_snapshot`, `reconnect_session`.
 
 Current direct response type strings are:
@@ -99,7 +100,8 @@ Current direct response type strings are:
 - `lobby_state`, `rules_updated`, `game_started`.
 - `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`.
 - `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`,
-  `use_held_card_result`.
+  `use_held_card_result`, `trade_offer_result`, `trade_accept_result`, `trade_decline_result`,
+  `trade_cancel_result`.
 - `snapshot_result`, `reconnect_result`.
 - `error`.
 
@@ -108,7 +110,8 @@ Current broadcast type strings are:
 - Lobby/setup: `lobby_state`, `rules_updated`.
 - Gameplay: `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`,
   `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`,
-  `held_card_used`, `game_completed`.
+  `held_card_used`, `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`,
+  `trade_offer_cancelled`, `game_completed`.
 
 One client request produces exactly one direct response to the sender. Successful mutating gameplay
 requests then produce separate sequenced broadcasts to connected in-game players, including the sender.
@@ -218,6 +221,15 @@ Mortgages:
 - Mortgaged properties remain in `ownedPropertyIds`, set `propertyStates[].data.isMortgaged = true`, and charge no rent.
 - Accepted requests return `mortgage_result` or `unmortgage_result`, emit `property_mortgaged` or `property_unmortgaged`, and include `moneyDeltas` with reason `mortgage` or `unmortgage`.
 
+Trades:
+
+- `create_trade_offer` stores in-memory pending trade state on the server session and does not mutate `GameState`.
+- A player may have one active outgoing offer; a player may receive multiple offers from different proposers.
+- `accept_trade_offer` requires the recipient, revalidates current state, then settles through server `TradeManager` primitives.
+- `decline_trade_offer` requires the recipient. `cancel_trade_offer` requires the proposer.
+- Trade offer order is authoritative by gameplay `sequence` / `createdSequence`; `createdAtUtc` is display/debug metadata only.
+- Accepted trade payloads can include `moneyDeltas` and `propertyOwnershipChanges` with reason `trade`.
+
 Lockup and held escape cards:
 
 - Held escape cards live in `heldCardIds`.
@@ -270,6 +282,7 @@ Current top-level snapshot fields:
 - `cardDecks`
 - `loanShark`
 - `rules`
+- `pendingTrades`
 
 `turn` fields:
 
@@ -362,6 +375,11 @@ Each `cardDecks[]` entry includes `deckId`, `drawPileCardIds`, and `discardPileC
 `rules` is the server's current authoritative rules object for the session. Unity may display it, but must
 not use a local copy to override server outcomes.
 
+`pendingTrades` is always an array. Each entry includes `tradeOfferId`, `createdSequence`,
+`proposerPlayerId`, `recipientPlayerId`, `offered`, `requested`, and informational `createdAtUtc`.
+`offered` and `requested` each include `cash` and `propertyTileIds`. Entries are sorted by
+`createdSequence`. Completed snapshots return an empty array.
+
 Optional helper fields are not required for hydration. Snapshot hydration should rebuild Unity's gameplay
 presentation from snapshot fields, clearing local state for omitted/default server state.
 
@@ -434,6 +452,9 @@ Implemented error codes are snake_case:
 - `unsupported_card_action`
 - `game_already_completed`
 - `held_card_not_held`
+- `trade_offer_active`
+- `trade_offer_not_found`
+- `trade_offer_not_for_player`
 
 Rejected gameplay requests do not mutate `GameState`, do not broadcast, and do not allocate a gameplay
 sequence.
@@ -485,7 +506,7 @@ The following remain future systems and are not part of the current Unity contra
 - Cross-process persistence.
 - Event replay or missed-event catch-up.
 - Matchmaking.
-- Trading, upgrades, asset liquidation, loan repayment, or debt recovery.
+- Upgrades, asset liquidation, loan repayment, or debt recovery.
 - Client-selected repairs.
 - Custom card editing or user-defined runtime cards.
 - Cosmetics, ranked play, moderation, chat, or durable social features.

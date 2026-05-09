@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Deterministic Trading Foundations
-- Completion status: Deterministic trading foundations complete; engine-only atomic player-to-player trade settlement now composes a narrow direct cash transfer primitive with centralized property ownership transfer, with validation rejecting unsafe or invalid trades before mutation.
+- Chunk: Minimal Realtime Trade Lifecycle
+- Completion status: Minimal realtime trade lifecycle complete; server-authoritative create/accept/decline/cancel trade offers now use session pending-offer state, snapshot/reconnect projection, sequence-backed offer IDs, pure create-time validation, and accept-time settlement through existing `TradeManager` primitives.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
@@ -19,18 +19,19 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Deterministic Trading Foundations.
+Minimal Realtime Trade Lifecycle.
 
 Completed:
 
-- Added `PlayerCashTransferManager.TransferBetweenPlayers` and `PlayerCashTransferResult` as the narrow direct player-to-player cash primitive for trade composition.
-- Added `PropertyManager.TransferOwner` as the centralized property ownership transfer primitive; ownership still lives only on `Player.OwnedPropertyIds`.
-- Added `TradeAssets`, `TradeSettlementResult`, `PropertyOwnershipChange`, and `TradeManager.SettleTrade` for atomic engine-only trade settlement.
-- `TradeManager` validates completed games, active auctions, unresolved tile execution, missing/same/bankrupt/eliminated players, negative cash, empty trades, duplicate or overlapping properties, invalid/wrong-owner/duplicate-owned properties, insufficient cash, and money overflow before mutation.
-- Trade settlement composes only `PlayerCashTransferManager` and `PropertyManager.TransferOwner`; it does not manually mutate `Money` or `OwnedPropertyIds`.
-- Property ownership transfer preserves `GameState.PropertyStates` unchanged, so mortgage and damage state remains attached to the tile ID.
-- Added focused cash-transfer, property-transfer, and trade-settlement tests for cash-only trades, property-for-cash, property swaps, gifts, property-state preservation, rejection paths, and unrelated-state preservation.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 744 passed, 0 failed, 0 skipped.
+- Added pure `TradeManager.ValidateTrade` so create-time validation does not invoke settlement.
+- Added `GameSession.PendingTradeOffers` and `PendingTradeOffer` runtime state with one active outgoing offer per proposer.
+- Added `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer` WebSocket handling.
+- `create_trade_offer` validates only; `accept_trade_offer` revalidates then settles through `TradeManager.SettleTrade`, which still composes `PlayerCashTransferManager` and `PropertyManager.TransferOwner`.
+- Successful trade lifecycle actions allocate normal gameplay sequences and broadcast `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, or `trade_offer_cancelled` after the direct response.
+- Trade offer IDs are sequence-backed as `trade_{sequence}`; `createdSequence` is authoritative for ordering, while `createdAtUtc` is informational only.
+- Snapshots and reconnect snapshots include additive `pendingTrades`, sorted by `createdSequence`; completed games project an empty array.
+- Added focused engine, session, and realtime tests for pure validation, pending-offer sequence helpers, multiple proposers, snapshot/reconnect projection, accept settlement, decline/cancel authorization, stale accept rejection, blocked states, and completed-game rejection.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 756 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -38,7 +39,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Custom card editor or custom card creation.
-- Realtime trade endpoints, pending offers, UI, timers, replay, persistence, stats, turn-flow changes, upgrades, asset liquidation, loan repayment, or debt recovery.
+- Trade timers, chat, negotiation rounds, multi-party trades, multiple outgoing offers per proposer, replay redesign, persistence, stats, UI, async workflows, turn-flow changes, upgrades, asset liquidation, loan repayment, or debt recovery.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -58,15 +59,18 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerCashTransferManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerCashTransferResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TradeAssets.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/TradeManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TradeSettlementResult.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlayerCashTransferManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TradeValidationResult.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/PendingTradeOffer.cs`
+- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/TradeManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `docs/MULTIPLAYER_PROTOCOL.md`
+- `docs/UNITY_INTEGRATION_CONTRACT.md`
 - `docs/SESSION_HANDOVER.md`
 
 ## Previous Chunk Files
@@ -161,7 +165,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 744 passed, 0 failed, 0 skipped.
+  - Output summary: 756 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -177,7 +181,7 @@ Not included by explicit user scope:
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - Successful state-changing gameplay requests then emit one or more best-effort ordered broadcast events to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`, `game_completed`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`, `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `use_held_card_result`, `trade_offer_result`, `trade_accept_result`, `trade_decline_result`, `trade_cancel_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`, `held_card_used`, `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, `trade_offer_cancelled`, `game_completed`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -246,7 +250,7 @@ Not included by explicit user scope:
 - `loan_result` is the direct sender response and contains `playerId`, `amount`, strict snake_case `reason`, `money`, `totalBorrowed`, `currentInterestRatePercent`, `nextTurnInterestDue`, and `loanTier` from the persisted player. Accepted loans emit `loan_taken`.
 - Rejected `take_loan` calls return `error` and do not update `GameState`.
 - `get_snapshot` requires a bound in-game session/player connection and returns `invalid_payload`, `invalid_session`, `player_switch_rejected`, `invalid_session_state`, or `player_not_found` before producing a snapshot.
-- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` session status, `gameStatus`, phase, nullable winner, start/end timestamps, turn flags directly from `GameState`, players including inert `statusEffects`, board, nullable active auction, card decks, and loan shark config.
+- `snapshot_result` is sender-only and contains `snapshotVersion = 1`, session/match IDs, `in_game` session status, `gameStatus`, phase, nullable winner, start/end timestamps, turn flags directly from `GameState`, players including inert `statusEffects`, board, nullable active auction, card decks, loan shark config, rules, and pending trades.
 - Completed snapshots have `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and no active auction.
 - Snapshot projection is built only from persisted `GameState` while holding the realtime handler `sessionLock`; it does not call mutating managers and does not call `SessionManager.UpdateGameState`.
 - Snapshot DTOs fully copy scalar values and arrays; domain records, `GameSession.Players`, WebSocket connection IDs, lobby connection metadata, transport IDs, auth tokens, and reconnect secrets are not exposed.
@@ -297,6 +301,12 @@ Not included by explicit user scope:
 - Accepted `mortgage_property` and `unmortgage_property` requests mutate only player money and property state, return direct result payloads, and emit one matching sequenced broadcast.
 - Mortgage/unmortgage requests require a bound in-game connection, an existing non-eliminated player, enabled mortgage rules, no active auction, no unresolved current tile execution, and an owned purchasable priced tile.
 - Snapshot `propertyStates[].data` includes additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged states are projected without changing `snapshotVersion`.
+- `GameSession.PendingTradeOffers` stores in-memory pending trade lifecycle state outside `GameState`; ownership and balances remain only in `GameState`.
+- `create_trade_offer` requires a bound in-game proposer, one active outgoing offer maximum for that proposer, distinct recipient, and assets accepted by pure `TradeManager.ValidateTrade`; it does not mutate `GameState`.
+- `accept_trade_offer` requires the recipient, revalidates current state, settles through `TradeManager.SettleTrade`, removes only the accepted offer, and emits `trade_offer_accepted` with optional `trade` money/ownership helpers.
+- `decline_trade_offer` requires the recipient and `cancel_trade_offer` requires the proposer; each removes only the targeted offer and emits one sequenced broadcast.
+- Trade offer IDs are `trade_{sequence}`; `createdSequence` is authoritative order, while `createdAtUtc` is informational only.
+- Snapshot/reconnect `pendingTrades` is additive and sorted by `createdSequence`; completed snapshots return an empty pending trade array.
 - `PropertyStateManager.ApplyEarthquake` is now used by internal card execution; no client request, randomness, or UI has been added.
 - `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
@@ -438,7 +448,7 @@ Do not implement before its assigned chunk:
 - Automatic card reshuffling.
 - Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
 - Houses/upgrades.
-- Realtime trade endpoints, pending offers, offer expiry, or trade UI.
+- Trade offer expiry, trade timers, trade UI, multi-party trades, negotiation rounds, or multiple outgoing offers per proposer.
 - Taxes/fines money changes.
 - Database persistence.
 - Stats.
@@ -446,4 +456,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Deterministic Trading Foundations is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Minimal Realtime Trade Lifecycle is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

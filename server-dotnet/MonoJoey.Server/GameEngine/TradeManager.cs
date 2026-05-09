@@ -5,7 +5,7 @@ using MonoJoey.Shared.Schemas;
 
 public static class TradeManager
 {
-    public static TradeSettlementResult SettleTrade(
+    public static TradeValidationResult ValidateTrade(
         GameState gameState,
         PlayerId firstPlayerId,
         TradeAssets firstPlayerAssets,
@@ -15,22 +15,56 @@ public static class TradeManager
         firstPlayerAssets = NormalizeAssets(firstPlayerAssets);
         secondPlayerAssets = NormalizeAssets(secondPlayerAssets);
 
+        var validation = ValidateTradeCore(
+            gameState,
+            firstPlayerId,
+            firstPlayerAssets,
+            secondPlayerId,
+            secondPlayerAssets);
+
+        return validation is null
+            ? new TradeValidationResult(
+                TradeSettlementResultKind.Settled,
+                firstPlayerId,
+                secondPlayerId,
+                firstPlayerAssets,
+                secondPlayerAssets,
+                "Trade is valid.")
+            : new TradeValidationResult(
+                validation.Value.Kind,
+                firstPlayerId,
+                secondPlayerId,
+                firstPlayerAssets,
+                secondPlayerAssets,
+                validation.Value.Message);
+    }
+
+    public static TradeSettlementResult SettleTrade(
+        GameState gameState,
+        PlayerId firstPlayerId,
+        TradeAssets firstPlayerAssets,
+        PlayerId secondPlayerId,
+        TradeAssets secondPlayerAssets)
+    {
         var validation = ValidateTrade(
             gameState,
             firstPlayerId,
             firstPlayerAssets,
             secondPlayerId,
             secondPlayerAssets);
-        if (validation is not null)
+        firstPlayerAssets = validation.FirstPlayerAssets;
+        secondPlayerAssets = validation.SecondPlayerAssets;
+
+        if (!validation.TradeValid)
         {
             return Rejected(
-                validation.Value.Kind,
+                validation.ResultKind,
                 gameState,
                 firstPlayerId,
                 firstPlayerAssets,
                 secondPlayerId,
                 secondPlayerAssets,
-                validation.Value.Message);
+                validation.Message);
         }
 
         var currentState = gameState;
@@ -115,7 +149,7 @@ public static class TradeManager
             "Trade settled.");
     }
 
-    private static RequestValidation? ValidateTrade(
+    private static RequestValidation? ValidateTradeCore(
         GameState gameState,
         PlayerId firstPlayerId,
         TradeAssets firstPlayerAssets,

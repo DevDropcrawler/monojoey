@@ -543,6 +543,63 @@ public class SessionManagerTests
     }
 
     [Fact]
+    public void PendingTradeOfferHelpers_UpdateSessionAndSequences()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var offered = new TradeAssets(new Money(25), Array.Empty<TileId>());
+        var requested = new TradeAssets(Money.Zero, Array.Empty<TileId>());
+        var createdAtUtc = DateTimeOffset.Parse("2026-05-09T00:00:00+00:00");
+
+        var addResult = sessionManager.AddPendingTradeOfferAndAllocateEventSequence(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            new PlayerId("player_2"),
+            offered,
+            requested,
+            createdAtUtc);
+        var offer = Assert.Single(addResult.Session.PendingTradeOffers);
+        var removeResult = sessionManager.RemovePendingTradeOfferAndAllocateEventSequence(
+            startedSession.SessionId,
+            offer.TradeOfferId);
+
+        Assert.Equal(1, addResult.Sequence);
+        Assert.Equal("trade_1", offer.TradeOfferId);
+        Assert.Equal(1, offer.CreatedSequence);
+        Assert.Equal(new PlayerId("player_1"), offer.ProposerPlayerId);
+        Assert.Equal(new PlayerId("player_2"), offer.RecipientPlayerId);
+        Assert.Equal(createdAtUtc, offer.CreatedAtUtc);
+        Assert.Equal(2, removeResult.Sequence);
+        Assert.Empty(removeResult.Session.PendingTradeOffers);
+        Assert.Equal(2, sessionManager.GetSession(startedSession.SessionId)?.LastEventSequence);
+    }
+
+    [Fact]
+    public void UpdateGameStateAndRemovePendingTradeOffer_CommitsBothAtomically()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var addResult = sessionManager.AddPendingTradeOfferAndAllocateEventSequence(
+            startedSession.SessionId,
+            new PlayerId("player_1"),
+            new PlayerId("player_2"),
+            new TradeAssets(new Money(25), Array.Empty<TileId>()),
+            new TradeAssets(Money.Zero, Array.Empty<TileId>()),
+            DateTimeOffset.Parse("2026-05-09T00:00:00+00:00"));
+        var updatedGameState = addResult.Session.GameState with { HasRolledThisTurn = true };
+
+        var result = sessionManager.UpdateGameStateAndRemovePendingTradeOfferAndAllocateEventSequence(
+            startedSession.SessionId,
+            updatedGameState,
+            "trade_1");
+
+        Assert.Equal(2, result.Sequence);
+        Assert.Same(updatedGameState, result.Session.GameState);
+        Assert.Empty(result.Session.PendingTradeOffers);
+        Assert.Same(result.Session, sessionManager.GetSession(startedSession.SessionId));
+    }
+
+    [Fact]
     public void UpdateTerminalGameStateAndAllocateEventSequences_CommitsActionAndCompletionAtomically()
     {
         var sessionManager = new SessionManager();

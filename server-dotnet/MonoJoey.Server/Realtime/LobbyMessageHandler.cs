@@ -167,6 +167,10 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.MortgageProperty => HandleMortgageProperty(root, connectionContext),
             LobbyMessageTypes.UnmortgageProperty => HandleUnmortgageProperty(root, connectionContext),
             LobbyMessageTypes.UseHeldCard => HandleUseHeldCard(root, connectionContext),
+            LobbyMessageTypes.CreateTradeOffer => HandleCreateTradeOffer(root, connectionContext),
+            LobbyMessageTypes.AcceptTradeOffer => HandleAcceptTradeOffer(root, connectionContext),
+            LobbyMessageTypes.DeclineTradeOffer => HandleDeclineTradeOffer(root, connectionContext),
+            LobbyMessageTypes.CancelTradeOffer => HandleCancelTradeOffer(root, connectionContext),
             LobbyMessageTypes.GetSnapshot => HandleGetSnapshot(root, connectionContext),
             LobbyMessageTypes.ReconnectSession => HandleReconnectSession(root, connectionContext),
             LobbyMessageTypes.LobbyState or
@@ -181,6 +185,10 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.MortgageResult or
                 LobbyMessageTypes.UnmortgageResult or
                 LobbyMessageTypes.UseHeldCardResult or
+                LobbyMessageTypes.TradeOfferResult or
+                LobbyMessageTypes.TradeAcceptResult or
+                LobbyMessageTypes.TradeDeclineResult or
+                LobbyMessageTypes.TradeCancelResult or
                 LobbyMessageTypes.SnapshotResult or
                 LobbyMessageTypes.ReconnectResult or
                 LobbyMessageTypes.RulesUpdated or
@@ -194,6 +202,10 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.PropertyMortgaged or
                 LobbyMessageTypes.PropertyUnmortgaged or
                 LobbyMessageTypes.HeldCardUsed or
+                LobbyMessageTypes.TradeOfferCreated or
+                LobbyMessageTypes.TradeOfferAccepted or
+                LobbyMessageTypes.TradeOfferDeclined or
+                LobbyMessageTypes.TradeOfferCancelled or
                 LobbyMessageTypes.GameCompleted or
                 LobbyMessageTypes.Error => CreateError(
                 LobbyErrorCodes.UnsupportedMessage,
@@ -1246,6 +1258,294 @@ public sealed class LobbyMessageHandler
         }
     }
 
+    private LobbyMessageHandleResult HandleCreateTradeOffer(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadCreateTradeOfferPayload(
+            root,
+            out var sessionId,
+            out var playerId,
+            out var recipientPlayerId,
+            out var offered,
+            out var requested))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "create_trade_offer requires payload.sessionId, payload.playerId, payload.recipientPlayerId, and valid offered/requested assets.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var proposerId = new PlayerId(playerId);
+            var recipientId = new PlayerId(recipientPlayerId);
+            if (session.PendingTradeOffers.Any(offer => offer.ProposerPlayerId == proposerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.TradeOfferActive,
+                    "Player already has an active outgoing trade offer.");
+            }
+
+            var validation = TradeManager.ValidateTrade(
+                session.GameState,
+                proposerId,
+                offered,
+                recipientId,
+                requested);
+            if (!validation.TradeValid)
+            {
+                return CreateTradeValidationRejectedError(validation);
+            }
+
+            var persistence = sessionManager.AddPendingTradeOfferAndAllocateEventSequence(
+                sessionId,
+                proposerId,
+                recipientId,
+                validation.FirstPlayerAssets,
+                validation.SecondPlayerAssets,
+                DateTimeOffset.UtcNow);
+            var persistedOffer = persistence.Session.PendingTradeOffers.Single(
+                offer => offer.CreatedSequence == persistence.Sequence);
+
+            return CreateBroadcastResult(
+                CreateTradeOfferResult(persistedOffer),
+                LobbyMessageTypes.TradeOfferCreated,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
+    private LobbyMessageHandleResult HandleAcceptTradeOffer(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadTradeOfferLifecyclePayload(root, out var sessionId, out var playerId, out var tradeOfferId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "accept_trade_offer requires payload.sessionId, payload.playerId, and payload.tradeOfferId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var offer = FindPendingTradeOffer(session, tradeOfferId);
+            if (offer is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.TradeOfferNotFound,
+                    "Trade offer was not found.");
+            }
+
+            var requesterId = new PlayerId(playerId);
+            if (offer.RecipientPlayerId != requesterId)
+            {
+                return CreateError(
+                    LobbyErrorCodes.TradeOfferNotForPlayer,
+                    "Only the trade offer recipient can accept it.");
+            }
+
+            var validation = TradeManager.ValidateTrade(
+                session.GameState,
+                offer.ProposerPlayerId,
+                offer.Offered,
+                offer.RecipientPlayerId,
+                offer.Requested);
+            if (!validation.TradeValid)
+            {
+                return CreateTradeValidationRejectedError(validation);
+            }
+
+            var settlement = TradeManager.SettleTrade(
+                session.GameState,
+                offer.ProposerPlayerId,
+                validation.FirstPlayerAssets,
+                offer.RecipientPlayerId,
+                validation.SecondPlayerAssets);
+            if (!settlement.TradeSettled)
+            {
+                return CreateTradeSettlementRejectedError(settlement);
+            }
+
+            var persistence = sessionManager.UpdateGameStateAndRemovePendingTradeOfferAndAllocateEventSequence(
+                sessionId,
+                settlement.GameState,
+                offer.TradeOfferId);
+
+            return CreateBroadcastResult(
+                CreateTradeAcceptResult(offer, session.GameState, persistence.Session.GameState, settlement),
+                LobbyMessageTypes.TradeOfferAccepted,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
+    private LobbyMessageHandleResult HandleDeclineTradeOffer(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadTradeOfferLifecyclePayload(root, out var sessionId, out var playerId, out var tradeOfferId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "decline_trade_offer requires payload.sessionId, payload.playerId, and payload.tradeOfferId.");
+        }
+
+        return HandleRemoveTradeOffer(
+            sessionId,
+            playerId,
+            tradeOfferId,
+            connectionContext,
+            requireRecipient: true,
+            LobbyMessageTypes.TradeDeclineResult,
+            LobbyMessageTypes.TradeOfferDeclined);
+    }
+
+    private LobbyMessageHandleResult HandleCancelTradeOffer(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadTradeOfferLifecyclePayload(root, out var sessionId, out var playerId, out var tradeOfferId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "cancel_trade_offer requires payload.sessionId, payload.playerId, and payload.tradeOfferId.");
+        }
+
+        return HandleRemoveTradeOffer(
+            sessionId,
+            playerId,
+            tradeOfferId,
+            connectionContext,
+            requireRecipient: false,
+            LobbyMessageTypes.TradeCancelResult,
+            LobbyMessageTypes.TradeOfferCancelled);
+    }
+
+    private LobbyMessageHandleResult HandleRemoveTradeOffer(
+        string sessionId,
+        string playerId,
+        string tradeOfferId,
+        LobbyConnectionContext connectionContext,
+        bool requireRecipient,
+        string directResponseType,
+        string broadcastType)
+    {
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var offer = FindPendingTradeOffer(session, tradeOfferId);
+            if (offer is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.TradeOfferNotFound,
+                    "Trade offer was not found.");
+            }
+
+            var requesterId = new PlayerId(playerId);
+            var authorized = requireRecipient
+                ? offer.RecipientPlayerId == requesterId
+                : offer.ProposerPlayerId == requesterId;
+            if (!authorized)
+            {
+                return CreateError(
+                    LobbyErrorCodes.TradeOfferNotForPlayer,
+                    requireRecipient
+                        ? "Only the trade offer recipient can decline it."
+                        : "Only the trade offer proposer can cancel it.");
+            }
+
+            var persistence = sessionManager.RemovePendingTradeOfferAndAllocateEventSequence(
+                sessionId,
+                tradeOfferId);
+
+            return CreateBroadcastResult(
+                CreateTradeRemoveResult(directResponseType, offer),
+                broadcastType,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
     private LobbyServerEnvelope HandleGetSnapshot(
         JsonElement root,
         LobbyConnectionContext connectionContext)
@@ -1281,15 +1581,14 @@ public sealed class LobbyMessageHandler
                     "Session is not in game.");
             }
 
-            var gameState = session.GameState;
-            if (!gameState.Players.Any(gamePlayer => gamePlayer.PlayerId.Value == playerId))
+            if (!session.GameState.Players.Any(gamePlayer => gamePlayer.PlayerId.Value == playerId))
             {
                 return CreateError(
                     LobbyErrorCodes.PlayerNotFound,
                     "Player is not in the game.");
             }
 
-            return CreateSnapshotResult(gameState);
+            return CreateSnapshotResult(session);
         }
     }
 
@@ -2205,6 +2504,89 @@ public sealed class LobbyMessageHandler
         return true;
     }
 
+    private static bool TryReadCreateTradeOfferPayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out string recipientPlayerId,
+        out TradeAssets offered,
+        out TradeAssets requested)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        recipientPlayerId = string.Empty;
+        offered = new TradeAssets(Money.Zero, Array.Empty<TileId>());
+        requested = new TradeAssets(Money.Zero, Array.Empty<TileId>());
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !TryReadString(payload, "recipientPlayerId", out recipientPlayerId) ||
+            !payload.TryGetProperty("offered", out var offeredProperty) ||
+            !payload.TryGetProperty("requested", out var requestedProperty) ||
+            !TryReadTradeAssets(offeredProperty, out offered) ||
+            !TryReadTradeAssets(requestedProperty, out requested))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadTradeOfferLifecyclePayload(
+        JsonElement root,
+        out string sessionId,
+        out string playerId,
+        out string tradeOfferId)
+    {
+        sessionId = string.Empty;
+        playerId = string.Empty;
+        tradeOfferId = string.Empty;
+
+        if (!root.TryGetProperty("payload", out var payload) ||
+            payload.ValueKind != JsonValueKind.Object ||
+            !TryReadString(payload, "sessionId", out sessionId) ||
+            !TryReadString(payload, "playerId", out playerId) ||
+            !TryReadString(payload, "tradeOfferId", out tradeOfferId))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadTradeAssets(JsonElement element, out TradeAssets assets)
+    {
+        assets = new TradeAssets(Money.Zero, Array.Empty<TileId>());
+
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty("cash", out var cashProperty) ||
+            cashProperty.ValueKind != JsonValueKind.Number ||
+            !cashProperty.TryGetInt32(out var cash) ||
+            cash < 0 ||
+            !element.TryGetProperty("propertyTileIds", out var propertyTileIdsProperty) ||
+            propertyTileIdsProperty.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var propertyTileIds = new List<TileId>();
+        foreach (var propertyTileId in propertyTileIdsProperty.EnumerateArray())
+        {
+            if (propertyTileId.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(propertyTileId.GetString()))
+            {
+                return false;
+            }
+
+            propertyTileIds.Add(new TileId(propertyTileId.GetString()!));
+        }
+
+        assets = new TradeAssets(new Money(cash), propertyTileIds);
+        return true;
+    }
+
     private static bool TryReadPropertyMortgagePayload(
         JsonElement root,
         out string sessionId,
@@ -2421,11 +2803,11 @@ public sealed class LobbyMessageHandler
                     .ToArray()));
     }
 
-    private static LobbyServerEnvelope CreateSnapshotResult(GameState gameState)
+    private static LobbyServerEnvelope CreateSnapshotResult(GameSession session)
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.SnapshotResult,
-            CreateSnapshotPayload(gameState));
+            CreateSnapshotPayload(session));
     }
 
     private static LobbyServerEnvelope CreateReconnectResult(GameSession session, string playerId)
@@ -2436,11 +2818,12 @@ public sealed class LobbyMessageHandler
                 session.SessionId,
                 playerId,
                 session.LastEventSequence,
-                CreateSnapshotPayload(session.GameState)));
+                CreateSnapshotPayload(session)));
     }
 
-    private static SnapshotPayload CreateSnapshotPayload(GameState gameState)
+    private static SnapshotPayload CreateSnapshotPayload(GameSession session)
     {
+        var gameState = session.GameState;
         return new SnapshotPayload(
             SnapshotVersion: 1,
             SessionId: gameState.MatchId.Value,
@@ -2473,7 +2856,13 @@ public sealed class LobbyMessageHandler
                 .ToArray(),
             LoanShark: new SnapshotLoanSharkPayload(
                 LoanSharkConfig.FromRules(gameState.Rules.Loans).Enabled),
-            Rules: gameState.Rules);
+            Rules: gameState.Rules,
+            PendingTrades: gameState.Status == GameStatus.Completed
+                ? Array.Empty<PendingTradePayload>()
+                : session.PendingTradeOffers
+                    .OrderBy(offer => offer.CreatedSequence)
+                    .Select(CreatePendingTradePayload)
+                    .ToArray());
     }
 
     private static GameCompletedPayload CreateGameCompletedPayload(GameState gameState)
@@ -2621,6 +3010,28 @@ public sealed class LobbyMessageHandler
             deckState.DeckId,
             deckState.DrawPile.Select(card => card.CardId.Value).ToArray(),
             deckState.DiscardPile.Select(card => card.CardId.Value).ToArray());
+    }
+
+    private static PendingTradePayload CreatePendingTradePayload(PendingTradeOffer offer)
+    {
+        return new PendingTradePayload(
+            offer.TradeOfferId,
+            offer.CreatedSequence,
+            offer.ProposerPlayerId.Value,
+            offer.RecipientPlayerId.Value,
+            CreateTradeAssetsPayload(offer.Offered),
+            CreateTradeAssetsPayload(offer.Requested),
+            offer.CreatedAtUtc);
+    }
+
+    private static TradeAssetsPayload CreateTradeAssetsPayload(TradeAssets assets)
+    {
+        return new TradeAssetsPayload(
+            assets.Cash.Amount,
+            assets.PropertyTileIds
+                .Select(tileId => tileId.Value)
+                .OrderBy(tileId => tileId, StringComparer.Ordinal)
+                .ToArray());
     }
 
     private static LobbyMessageHandleResult CreateBroadcastResult(
@@ -3095,6 +3506,46 @@ public sealed class LobbyMessageHandler
                 player.HeldCardIds.Select(heldCardId => heldCardId.Value).OrderBy(heldCardId => heldCardId).ToArray()));
     }
 
+    private static LobbyServerEnvelope CreateTradeOfferResult(PendingTradeOffer offer)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.TradeOfferResult,
+            new TradeOfferResultPayload(CreatePendingTradePayload(offer)));
+    }
+
+    private static LobbyServerEnvelope CreateTradeAcceptResult(
+        PendingTradeOffer offer,
+        GameState previousGameState,
+        GameState gameState,
+        TradeSettlementResult settlement)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.TradeAcceptResult,
+            new TradeAcceptResultPayload(
+                offer.TradeOfferId,
+                offer.ProposerPlayerId.Value,
+                offer.RecipientPlayerId.Value,
+                CreateMoneyDeltasFromDiff(previousGameState, gameState, "trade"),
+                CreateTradeOwnershipChanges(settlement)));
+    }
+
+    private static LobbyServerEnvelope CreateTradeRemoveResult(
+        string responseType,
+        PendingTradeOffer offer)
+    {
+        var payload = responseType == LobbyMessageTypes.TradeDeclineResult
+            ? new TradeDeclineResultPayload(
+                offer.TradeOfferId,
+                offer.ProposerPlayerId.Value,
+                offer.RecipientPlayerId.Value)
+            : (object)new TradeCancelResultPayload(
+                offer.TradeOfferId,
+                offer.ProposerPlayerId.Value,
+                offer.RecipientPlayerId.Value);
+
+        return new LobbyServerEnvelope(responseType, payload);
+    }
+
     private static LobbyServerEnvelope CreateMortgageResult(MortgageResult mortgageResult)
     {
         return new LobbyServerEnvelope(
@@ -3237,6 +3688,64 @@ public sealed class LobbyMessageHandler
             _ => CreateError(
                 LobbyErrorCodes.InvalidSessionState,
                 unmortgageResult.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateTradeValidationRejectedError(TradeValidationResult validation)
+    {
+        return validation.ResultKind switch
+        {
+            TradeSettlementResultKind.GameNotInProgress => CreateGameAlreadyCompletedError(),
+            TradeSettlementResultKind.ActiveAuction or
+                TradeSettlementResultKind.UnresolvedTileExecution => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                validation.Message),
+            TradeSettlementResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                validation.Message),
+            TradeSettlementResultKind.PlayerBankrupt or
+                TradeSettlementResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                validation.Message),
+            TradeSettlementResultKind.PropertyNotOwnedByOfferingPlayer => CreateError(
+                LobbyErrorCodes.PropertyNotOwned,
+                validation.Message),
+            TradeSettlementResultKind.InsufficientCash or
+                TradeSettlementResultKind.UnsafeMoneyBalance => CreateError(
+                LobbyErrorCodes.InsufficientCash,
+                validation.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                validation.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateTradeSettlementRejectedError(TradeSettlementResult settlement)
+    {
+        return settlement.ResultKind switch
+        {
+            TradeSettlementResultKind.GameNotInProgress => CreateGameAlreadyCompletedError(),
+            TradeSettlementResultKind.ActiveAuction or
+                TradeSettlementResultKind.UnresolvedTileExecution => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                settlement.Message),
+            TradeSettlementResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                settlement.Message),
+            TradeSettlementResultKind.PlayerBankrupt or
+                TradeSettlementResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                settlement.Message),
+            TradeSettlementResultKind.PropertyNotOwnedByOfferingPlayer => CreateError(
+                LobbyErrorCodes.PropertyNotOwned,
+                settlement.Message),
+            TradeSettlementResultKind.InsufficientCash or
+                TradeSettlementResultKind.UnsafeMoneyBalance => CreateError(
+                LobbyErrorCodes.InsufficientCash,
+                settlement.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                settlement.Message),
         };
     }
 
@@ -3509,6 +4018,23 @@ public sealed class LobbyMessageHandler
         };
     }
 
+    private static IReadOnlyList<PropertyOwnershipChangePayload>? CreateTradeOwnershipChanges(
+        TradeSettlementResult settlement)
+    {
+        if (settlement.OwnershipChanges.Count == 0)
+        {
+            return null;
+        }
+
+        return settlement.OwnershipChanges
+            .Select(change => new PropertyOwnershipChangePayload(
+                change.PropertyTileId.Value,
+                change.PreviousOwnerId.Value,
+                change.NewOwnerId.Value,
+                "trade"))
+            .ToArray();
+    }
+
     private static IReadOnlyList<PlayerEliminationPayload>? CreateAuctionPlayerEliminations(
         AuctionFinalizationResult finalizationResult,
         GameState gameState)
@@ -3704,6 +4230,12 @@ public sealed class LobbyMessageHandler
         }
 
         return null;
+    }
+
+    private static PendingTradeOffer? FindPendingTradeOffer(GameSession session, string tradeOfferId)
+    {
+        return session.PendingTradeOffers.FirstOrDefault(
+            offer => string.Equals(offer.TradeOfferId, tradeOfferId, StringComparison.Ordinal));
     }
 
     private static int GetPropertyDamagePercent(GameState gameState, TileId tileId)

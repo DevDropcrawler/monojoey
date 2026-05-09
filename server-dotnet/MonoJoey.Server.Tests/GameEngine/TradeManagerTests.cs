@@ -10,6 +10,50 @@ public class TradeManagerTests
     private static readonly PlayerId SecondPlayerId = new("player_2");
 
     [Fact]
+    public void ValidateTrade_ReturnsValidResultWithoutMutation()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", 100, "property_01"),
+            CreatePlayer("player_2", 50));
+
+        var result = TradeManager.ValidateTrade(
+            gameState,
+            FirstPlayerId,
+            Assets(properties: "property_01"),
+            SecondPlayerId,
+            Assets(cash: 25));
+
+        Assert.True(result.TradeValid);
+        Assert.Equal(TradeSettlementResultKind.Settled, result.ResultKind);
+        Assert.Equal(FirstPlayerId, result.FirstPlayerId);
+        Assert.Equal(SecondPlayerId, result.SecondPlayerId);
+        Assert.Equal(new Money(0), result.FirstPlayerAssets.Cash);
+        Assert.Equal(new Money(25), result.SecondPlayerAssets.Cash);
+        Assert.Contains(new TileId("property_01"), gameState.Players[0].OwnedPropertyIds);
+        Assert.Equal(new Money(100), gameState.Players[0].Money);
+        Assert.Equal(new Money(50), gameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void ValidateTrade_ReturnsRejectedResultWithoutMutation()
+    {
+        var gameState = CreateGameState(CreatePlayer("player_1", 100), CreatePlayer("player_2", 50));
+
+        var result = TradeManager.ValidateTrade(
+            gameState,
+            FirstPlayerId,
+            Assets(cash: 101),
+            SecondPlayerId,
+            Assets());
+
+        Assert.False(result.TradeValid);
+        Assert.Equal(TradeSettlementResultKind.InsufficientCash, result.ResultKind);
+        Assert.Same(gameState.Players, gameState.Players);
+        Assert.Equal(new Money(100), gameState.Players[0].Money);
+        Assert.Equal(new Money(50), gameState.Players[1].Money);
+    }
+
+    [Fact]
     public void SettleTrade_SettlesCashOnlyTrade()
     {
         var gameState = CreateGameState(CreatePlayer("player_1", 100), CreatePlayer("player_2", 50));
