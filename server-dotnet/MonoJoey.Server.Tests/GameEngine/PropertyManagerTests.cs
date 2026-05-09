@@ -56,6 +56,50 @@ public class PropertyManagerTests
     }
 
     [Fact]
+    public void TransferOwner_MovesOwnedPropertyToNewOwner()
+    {
+        var propertyTileId = new TileId("property_01");
+        var fromOwnerId = new PlayerId("player_1");
+        var toOwnerId = new PlayerId("player_2");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", 1500, "property_01"),
+            CreatePlayer("player_2", "start"));
+
+        var result = PropertyManager.TransferOwner(gameState, propertyTileId, fromOwnerId, toOwnerId);
+
+        Assert.DoesNotContain(propertyTileId, result.Players[0].OwnedPropertyIds);
+        Assert.Contains(propertyTileId, result.Players[1].OwnedPropertyIds);
+        Assert.Contains(propertyTileId, gameState.Players[0].OwnedPropertyIds);
+        Assert.Empty(gameState.Players[1].OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void TransferOwner_PreservesPropertyStateReference()
+    {
+        var propertyTileId = new TileId("property_03");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [propertyTileId] = new(propertyTileId, new PropertyStateData(40, isMortgaged: true)),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", 1500, "property_03"),
+            CreatePlayer("player_2", "start")) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = PropertyManager.TransferOwner(
+            gameState,
+            propertyTileId,
+            new PlayerId("player_1"),
+            new PlayerId("player_2"));
+
+        Assert.Same(propertyStates, result.PropertyStates);
+        Assert.True(result.PropertyStates[propertyTileId].Data.IsMortgaged);
+        Assert.Equal(40, result.PropertyStates[propertyTileId].Data.DamagePercent);
+    }
+
+    [Fact]
     public void PayRentForCurrentTile_ChargesRentToLandingPlayer()
     {
         var propertyTileId = new TileId("property_01");
@@ -296,6 +340,42 @@ public class PropertyManagerTests
             () => PropertyManager.BuyProperty(gameState, new PlayerId("player_1"), new TileId("property_01")));
 
         Assert.Equal("Property must be unowned before ownership can be assigned.", exception.Message);
+    }
+
+    [Fact]
+    public void TransferOwner_RejectsWrongOwner()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start"),
+            CreatePlayer("player_2", "start", 1500, "property_01"));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => PropertyManager.TransferOwner(
+                gameState,
+                new TileId("property_01"),
+                new PlayerId("player_1"),
+                new PlayerId("player_2")));
+
+        Assert.Equal(
+            "Property must be owned by the previous owner before ownership can be transferred.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void TransferOwner_RejectsDuplicateExistingOwnership()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", 1500, "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01"));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => PropertyManager.TransferOwner(
+                gameState,
+                new TileId("property_01"),
+                new PlayerId("player_1"),
+                new PlayerId("player_2")));
+
+        Assert.Equal("Property cannot be owned by multiple players.", exception.Message);
     }
 
     [Fact]

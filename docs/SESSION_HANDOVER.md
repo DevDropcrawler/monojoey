@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Classic Mortgage Foundations
-- Completion status: Classic mortgage foundations complete; server-authoritative mortgage/unmortgage behavior now exists for owned purchasable properties with runtime state in `PropertyStateData.IsMortgaged`, additive economy rules, realtime request/result/broadcast messages, snapshot projection, and rent suppression for mortgaged properties.
+- Chunk: Deterministic Trading Foundations
+- Completion status: Deterministic trading foundations complete; engine-only atomic player-to-player trade settlement now composes a narrow direct cash transfer primitive with centralized property ownership transfer, with validation rejecting unsafe or invalid trades before mutation.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
@@ -19,22 +19,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Classic Mortgage Foundations.
+Deterministic Trading Foundations.
 
 Completed:
 
-- Added `PropertyStateData.IsMortgaged` as additive runtime per-property state while preserving earthquake `DamagePercent`.
-- Added economy rules `mortgagesEnabled`, `mortgageValuePercent`, and `unmortgageInterestPercent` with defaults `true`, `50`, and `10`; `GameRules.Version` remains `1`.
-- Added `MortgageManager`, `MortgageResult`, and `UnmortgageResult` for server-authoritative mortgage transitions.
-- Mortgage value derives from board price: `floor(price * mortgageValuePercent / 100)`.
-- Unmortgage cost derives from mortgage value plus `floor(mortgageValue * unmortgageInterestPercent / 100)`.
-- Mortgaged owned properties charge no rent and emit no rent money deltas.
-- Automatic earthquake repair now preserves a clean mortgaged property-state entry instead of deleting it.
-- Added realtime requests `mortgage_property` and `unmortgage_property`, direct responses `mortgage_result` and `unmortgage_result`, and broadcasts `property_mortgaged` and `property_unmortgaged`.
-- Snapshot version remains `1`; `propertyStates[].data` now includes additive `isMortgaged`.
-- Snapshot projection omits only clean unmortgaged properties; damaged or mortgaged properties are projected.
-- Added focused engine, rules, snapshot, and realtime tests for success, rejection, rent suppression, damage preservation, defaults, validation, and broadcast behavior.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 709 passed, 0 failed, 0 skipped.
+- Added `PlayerCashTransferManager.TransferBetweenPlayers` and `PlayerCashTransferResult` as the narrow direct player-to-player cash primitive for trade composition.
+- Added `PropertyManager.TransferOwner` as the centralized property ownership transfer primitive; ownership still lives only on `Player.OwnedPropertyIds`.
+- Added `TradeAssets`, `TradeSettlementResult`, `PropertyOwnershipChange`, and `TradeManager.SettleTrade` for atomic engine-only trade settlement.
+- `TradeManager` validates completed games, active auctions, unresolved tile execution, missing/same/bankrupt/eliminated players, negative cash, empty trades, duplicate or overlapping properties, invalid/wrong-owner/duplicate-owned properties, insufficient cash, and money overflow before mutation.
+- Trade settlement composes only `PlayerCashTransferManager` and `PropertyManager.TransferOwner`; it does not manually mutate `Money` or `OwnedPropertyIds`.
+- Property ownership transfer preserves `GameState.PropertyStates` unchanged, so mortgage and damage state remains attached to the tile ID.
+- Added focused cash-transfer, property-transfer, and trade-settlement tests for cash-only trades, property-for-cash, property swaps, gifts, property-state preservation, rejection paths, and unrelated-state preservation.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 744 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -42,7 +38,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Custom card editor or custom card creation.
-- Trading, upgrades, asset liquidation, loan repayment, or debt recovery.
+- Realtime trade endpoints, pending offers, UI, timers, replay, persistence, stats, turn-flow changes, upgrades, asset liquidation, loan repayment, or debt recovery.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -62,24 +58,15 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRules.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesPresets.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/GameRulesResolver.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MortgageManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MortgageResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerCashTransferManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerCashTransferResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/PropertyManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyStateManager.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/GameRulesResolverTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/MortgageManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TradeAssets.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TradeManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TradeSettlementResult.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PlayerCashTransferManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/PropertyStateManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `docs/GAME_RULES_SPEC.md`
-- `docs/MULTIPLAYER_PROTOCOL.md`
-- `docs/UNITY_INTEGRATION_CONTRACT.md`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TradeManagerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Previous Chunk Files
@@ -174,7 +161,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 709 passed, 0 failed, 0 skipped.
+  - Output summary: 744 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -451,7 +438,7 @@ Do not implement before its assigned chunk:
 - Automatic card reshuffling.
 - Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
 - Houses/upgrades.
-- Trading.
+- Realtime trade endpoints, pending offers, offer expiry, or trade UI.
 - Taxes/fines money changes.
 - Database persistence.
 - Stats.
@@ -459,4 +446,4 @@ Do not implement before its assigned chunk:
 
 ## Fresh-Session Recommendation
 
-Yes. Classic Mortgage Foundations is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.
+Yes. Deterministic Trading Foundations is complete, and a fresh session should continue from this handover before starting the next assigned Phase 5 chunk.

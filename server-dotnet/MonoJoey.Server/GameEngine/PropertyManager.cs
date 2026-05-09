@@ -44,6 +44,40 @@ public static class PropertyManager
         return new PropertyPurchaseResult(gameState with { Players = players }, buyerId, propertyTileId, price);
     }
 
+    public static GameState TransferOwner(
+        GameState gameState,
+        TileId propertyTileId,
+        PlayerId fromOwnerId,
+        PlayerId toOwnerId)
+    {
+        _ = FindPurchasableTile(gameState.Board, propertyTileId);
+        var fromOwnerIndex = FindPlayerIndex(
+            gameState.Players,
+            fromOwnerId,
+            "Previous property owner must exist in the game player list.");
+        var toOwnerIndex = FindPlayerIndex(
+            gameState.Players,
+            toOwnerId,
+            "New property owner must exist in the game player list.");
+
+        if (fromOwnerId == toOwnerId)
+        {
+            throw new InvalidOperationException("Property ownership transfer requires distinct players.");
+        }
+
+        var currentOwnerIndex = FindPropertyOwnerIndex(gameState.Players, propertyTileId);
+        if (currentOwnerIndex is null || currentOwnerIndex.Value != fromOwnerIndex)
+        {
+            throw new InvalidOperationException("Property must be owned by the previous owner before ownership can be transferred.");
+        }
+
+        var players = gameState.Players.ToArray();
+        players[fromOwnerIndex] = RemoveOwnedProperty(players[fromOwnerIndex], propertyTileId);
+        players[toOwnerIndex] = AddOwnedProperty(players[toOwnerIndex], propertyTileId);
+
+        return gameState with { Players = players };
+    }
+
     public static RentPaymentResult PayRentForCurrentTile(GameState gameState, PlayerId landingPlayerId)
     {
         var landingPlayerIndex = FindPlayerIndex(
@@ -146,6 +180,14 @@ public static class PropertyManager
     {
         var ownedPropertyIds = player.OwnedPropertyIds.ToHashSet();
         ownedPropertyIds.Add(propertyTileId);
+
+        return player with { OwnedPropertyIds = ownedPropertyIds };
+    }
+
+    private static Player RemoveOwnedProperty(Player player, TileId propertyTileId)
+    {
+        var ownedPropertyIds = player.OwnedPropertyIds.ToHashSet();
+        ownedPropertyIds.Remove(propertyTileId);
 
         return player with { OwnedPropertyIds = ownedPropertyIds };
     }
