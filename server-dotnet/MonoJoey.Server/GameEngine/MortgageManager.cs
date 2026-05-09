@@ -57,7 +57,10 @@ public static class MortgageManager
         {
             [propertyTileId] = new(
                 propertyTileId,
-                new PropertyStateData(currentData.DamagePercent, isMortgaged: true)),
+                new PropertyStateData(
+                    currentData.DamagePercent,
+                    isMortgaged: true,
+                    upgradeLevel: currentData.UpgradeLevel)),
         };
         var updatedGameState = gameState with
         {
@@ -140,11 +143,14 @@ public static class MortgageManager
         };
 
         var propertyStates = new Dictionary<TileId, PropertyState>(gameState.PropertyStates);
-        if (currentData.DamagePercent > 0)
+        if (currentData.DamagePercent > 0 || currentData.UpgradeLevel > 0)
         {
             propertyStates[propertyTileId] = new PropertyState(
                 propertyTileId,
-                new PropertyStateData(currentData.DamagePercent, isMortgaged: false));
+                new PropertyStateData(
+                    currentData.DamagePercent,
+                    isMortgaged: false,
+                    upgradeLevel: currentData.UpgradeLevel));
         }
         else
         {

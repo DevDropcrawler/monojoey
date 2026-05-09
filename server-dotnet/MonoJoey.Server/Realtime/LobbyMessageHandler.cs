@@ -2843,7 +2843,8 @@ public sealed class LobbyMessageHandler
             PropertyStates: gameState.PropertyStates
                 .Where(propertyState =>
                     propertyState.Value.Data.DamagePercent > 0 ||
-                    propertyState.Value.Data.IsMortgaged)
+                    propertyState.Value.Data.IsMortgaged ||
+                    propertyState.Value.Data.UpgradeLevel > 0)
                 .OrderBy(propertyState => propertyState.Value.TileId.Value, StringComparer.Ordinal)
                 .Select(propertyState => CreateSnapshotPropertyState(propertyState.Value))
                 .ToArray(),
@@ -2979,7 +2980,8 @@ public sealed class LobbyMessageHandler
             propertyState.TileId.Value,
             new SnapshotPropertyStateDataPayload(
                 propertyState.Data.DamagePercent,
-                propertyState.Data.IsMortgaged));
+                propertyState.Data.IsMortgaged,
+                propertyState.Data.UpgradeLevel));
     }
 
     private static SnapshotAuctionPayload CreateSnapshotAuction(AuctionState auctionState)

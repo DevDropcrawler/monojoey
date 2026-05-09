@@ -42,6 +42,27 @@ public class MortgageManagerTests
         Assert.Equal(25, result.GameState.PropertyStates[propertyTileId].Data.DamagePercent);
     }
 
+    [Fact]
+    public void MortgageProperty_PreservesUpgradeLevel()
+    {
+        var propertyTileId = new TileId("property_03");
+        var gameState = CreateGameState(CreatePlayer("player_1", "start", 1500, "property_03")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(
+                    propertyTileId,
+                    new PropertyStateData(upgradeLevel: 4)),
+            },
+        };
+
+        var result = MortgageManager.MortgageProperty(gameState, new PlayerId("player_1"), propertyTileId);
+
+        Assert.True(result.MortgageAccepted);
+        Assert.True(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
+        Assert.Equal(4, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
+    }
+
     [Theory]
     [InlineData("property_02", MortgageResultKind.PropertyNotOwned)]
     [InlineData("free_space_01", MortgageResultKind.InvalidProperty)]
@@ -153,6 +174,28 @@ public class MortgageManagerTests
         Assert.True(result.UnmortgageAccepted);
         Assert.False(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
         Assert.Equal(40, result.GameState.PropertyStates[propertyTileId].Data.DamagePercent);
+    }
+
+    [Fact]
+    public void UnmortgageProperty_PreservesUpgradeLevelOnCleanProperty()
+    {
+        var propertyTileId = new TileId("property_03");
+        var gameState = CreateGameState(CreatePlayer("player_1", "start", 1500, "property_03")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(
+                    propertyTileId,
+                    new PropertyStateData(isMortgaged: true, upgradeLevel: 2)),
+            },
+        };
+
+        var result = MortgageManager.UnmortgageProperty(gameState, new PlayerId("player_1"), propertyTileId);
+
+        Assert.True(result.UnmortgageAccepted);
+        Assert.False(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
+        Assert.Equal(0, result.GameState.PropertyStates[propertyTileId].Data.DamagePercent);
+        Assert.Equal(2, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
     }
 
     [Fact]

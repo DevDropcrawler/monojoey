@@ -79,7 +79,7 @@ public class PropertyManagerTests
         var propertyTileId = new TileId("property_03");
         var propertyStates = new Dictionary<TileId, PropertyState>
         {
-            [propertyTileId] = new(propertyTileId, new PropertyStateData(40, isMortgaged: true)),
+            [propertyTileId] = new(propertyTileId, new PropertyStateData(40, isMortgaged: true, upgradeLevel: 2)),
         };
         var gameState = CreateGameState(
             CreatePlayer("player_1", "start", 1500, "property_03"),
@@ -97,6 +97,7 @@ public class PropertyManagerTests
         Assert.Same(propertyStates, result.PropertyStates);
         Assert.True(result.PropertyStates[propertyTileId].Data.IsMortgaged);
         Assert.Equal(40, result.PropertyStates[propertyTileId].Data.DamagePercent);
+        Assert.Equal(2, result.PropertyStates[propertyTileId].Data.UpgradeLevel);
     }
 
     [Fact]
@@ -114,6 +115,36 @@ public class PropertyManagerTests
         Assert.Equal(new Money(2), result.RentDue);
         Assert.Equal(new Money(2), result.RentPaid);
         Assert.Equal(new Money(1498), result.GameState.Players[0].Money);
+    }
+
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(1, 10)]
+    [InlineData(2, 30)]
+    [InlineData(3, 90)]
+    [InlineData(4, 160)]
+    [InlineData(5, 250)]
+    public void PayRentForCurrentTile_UsesRentTierForUpgradeLevel(int upgradeLevel, int expectedRent)
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(
+                    propertyTileId,
+                    new PropertyStateData(upgradeLevel: upgradeLevel)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(expectedRent), result.RentDue);
+        Assert.Equal(new Money(1500 - expectedRent), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1500 + expectedRent), result.GameState.Players[1].Money);
     }
 
     [Fact]
@@ -138,6 +169,52 @@ public class PropertyManagerTests
         Assert.Equal(new Money(1499), result.GameState.Players[0].Money);
         Assert.Equal(new Money(1501), result.GameState.Players[1].Money);
         Assert.Same(propertyStates, result.GameState.PropertyStates);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_ReducesSelectedUpgradeTierForDamagedProperty()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(
+                    propertyTileId,
+                    new PropertyStateData(50, upgradeLevel: 3)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.True(result.RentCharged);
+        Assert.Equal(new Money(45), result.RentDue);
+        Assert.Equal(new Money(1455), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1545), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_RejectsUpgradeLevelWithoutRentTier()
+    {
+        var utilityTileId = new TileId("utility_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "utility_01"),
+            CreatePlayer("player_2", "start", 1500, "utility_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [utilityTileId] = new(
+                    utilityTileId,
+                    new PropertyStateData(upgradeLevel: 1)),
+            },
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1")));
+
+        Assert.Equal("Property rent table must include rent for the current upgrade level.", exception.Message);
     }
 
     [Fact]
@@ -206,6 +283,31 @@ public class PropertyManagerTests
         Assert.Equal(new PlayerId("player_2"), result.OwnerId);
         Assert.Equal(new Money(0), result.RentDue);
         Assert.Equal(new Money(0), result.RentPaid);
+        Assert.Equal(new Money(1500), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(1500), result.GameState.Players[1].Money);
+    }
+
+    [Fact]
+    public void PayRentForCurrentTile_DoesNotChargeRentForMortgagedUpgradedProperty()
+    {
+        var propertyTileId = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", 1500, "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(
+                    propertyTileId,
+                    new PropertyStateData(isMortgaged: true, upgradeLevel: 5)),
+            },
+        };
+
+        var result = PropertyManager.PayRentForCurrentTile(gameState, new PlayerId("player_1"));
+
+        Assert.False(result.RentCharged);
+        Assert.Equal(new PlayerId("player_2"), result.OwnerId);
+        Assert.Equal(new Money(0), result.RentDue);
         Assert.Equal(new Money(1500), result.GameState.Players[0].Money);
         Assert.Equal(new Money(1500), result.GameState.Players[1].Money);
     }

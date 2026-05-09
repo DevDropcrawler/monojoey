@@ -66,6 +66,28 @@ public class PropertyStateManagerTests
     }
 
     [Fact]
+    public void ApplyEarthquake_PreservesUpgradeLevel()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(upgradeLevel: 2)),
+            },
+        };
+
+        var result = PropertyStateManager.ApplyEarthquake(
+            gameState,
+            new[] { "property_01" },
+            damagePercent: 40);
+
+        Assert.Equal(40, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(2, result.PropertyStates[property01].Data.UpgradeLevel);
+    }
+
+    [Fact]
     public void ApplyEarthquake_UsesMaxDamageAndDoesNotRepair()
     {
         var property01 = new TileId("property_01");
@@ -171,6 +193,29 @@ public class PropertyStateManagerTests
 
         Assert.True(result.PropertyStates[property01].Data.IsMortgaged);
         Assert.Equal(0, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(new Money(1497), result.Players[0].Money);
+    }
+
+    [Fact]
+    public void RepairDamagedOwnedProperties_PreservesUpgradeLevelWhenFullyRepaired()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "start", "property_01")) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(5, upgradeLevel: 3)),
+            },
+        };
+
+        var result = PropertyStateManager.RepairDamagedOwnedProperties(
+            gameState,
+            new PlayerId("player_1"));
+
+        Assert.False(result.PropertyStates[property01].Data.IsMortgaged);
+        Assert.Equal(0, result.PropertyStates[property01].Data.DamagePercent);
+        Assert.Equal(3, result.PropertyStates[property01].Data.UpgradeLevel);
         Assert.Equal(new Money(1497), result.Players[0].Money);
     }
 

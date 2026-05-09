@@ -8,7 +8,7 @@ public sealed record PropertyState(
 
 public sealed record PropertyStateData
 {
-    public PropertyStateData(int damagePercent = 0, bool isMortgaged = false)
+    public PropertyStateData(int damagePercent = 0, bool isMortgaged = false, int upgradeLevel = 0)
     {
         if (damagePercent is < 0 or > 100)
         {
@@ -17,11 +17,21 @@ public sealed record PropertyStateData
                 "Damage percent must be between 0 and 100.");
         }
 
+        if (upgradeLevel is < 0 or > 5)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(upgradeLevel),
+                "Upgrade level must be between 0 and 5.");
+        }
+
         DamagePercent = damagePercent;
         IsMortgaged = isMortgaged;
+        UpgradeLevel = upgradeLevel;
     }
 
     public int DamagePercent { get; }
 
     public bool IsMortgaged { get; }
+
+    public int UpgradeLevel { get; }
 }

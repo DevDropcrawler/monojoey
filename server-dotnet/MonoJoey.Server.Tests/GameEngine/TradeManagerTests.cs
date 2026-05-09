@@ -147,7 +147,7 @@ public class TradeManagerTests
         var propertyTileId = new TileId("property_03");
         var propertyStates = new Dictionary<TileId, PropertyState>
         {
-            [propertyTileId] = new(propertyTileId, new PropertyStateData(35, isMortgaged: true)),
+            [propertyTileId] = new(propertyTileId, new PropertyStateData(35, isMortgaged: true, upgradeLevel: 3)),
         };
         var gameState = CreateGameState(
             CreatePlayer("player_1", 100, "property_03"),
@@ -168,6 +168,7 @@ public class TradeManagerTests
         Assert.Same(propertyStates, result.GameState.PropertyStates);
         Assert.Equal(35, result.GameState.PropertyStates[propertyTileId].Data.DamagePercent);
         Assert.True(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
+        Assert.Equal(3, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
     }
 
     [Theory]

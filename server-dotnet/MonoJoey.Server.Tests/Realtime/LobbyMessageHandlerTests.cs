@@ -4355,6 +4355,38 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void GetSnapshot_ProjectsCleanUpgradedPropertyStateEntries()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [new TileId("property_01")] = new(
+                        new TileId("property_01"),
+                        new PropertyStateData(upgradeLevel: 4)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "snapshot_result");
+        var propertyState = Assert.Single(payload.GetProperty("propertyStates").EnumerateArray());
+
+        Assert.Equal("property_01", propertyState.GetProperty("tileId").GetString());
+        Assert.Equal(0, propertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.False(propertyState.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+        Assert.Equal(4, propertyState.GetProperty("data").GetProperty("upgradeLevel").GetInt32());
+    }
+
+    [Fact]
     public void GetSnapshot_ProjectsEmptyStatusEffectsAsArray()
     {
         var sessionManager = new SessionManager();
@@ -4496,8 +4528,9 @@ public class LobbyMessageHandlerTests
         Assert.NotNull(roundTrip.Data);
         Assert.Equal(50, roundTrip.Data.DamagePercent);
         Assert.False(roundTrip.Data.IsMortgaged);
+        Assert.Equal(0, roundTrip.Data.UpgradeLevel);
         Assert.Equal(
-            @"{""damagePercent"":50,""isMortgaged"":false}",
+            @"{""damagePercent"":50,""isMortgaged"":false,""upgradeLevel"":0}",
             JsonSerializer.Serialize(roundTrip.Data, jsonOptions));
     }
 
@@ -4513,6 +4546,7 @@ public class LobbyMessageHandlerTests
         Assert.NotNull(roundTrip);
         Assert.Equal(50, roundTrip.DamagePercent);
         Assert.False(roundTrip.IsMortgaged);
+        Assert.Equal(0, roundTrip.UpgradeLevel);
     }
 
     [Fact]

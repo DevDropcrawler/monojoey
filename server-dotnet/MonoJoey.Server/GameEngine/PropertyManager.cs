@@ -149,10 +149,11 @@ public static class PropertyManager
 
     private static Money CalculateRent(Tile tile, GameState gameState)
     {
-        var baseRent = tile.RentTable.Count > 0 ? tile.RentTable[0] : PlaceholderRent;
-        var damagePercent = gameState.PropertyStates.TryGetValue(tile.TileId, out var propertyState)
-            ? propertyState.Data.DamagePercent
-            : 0;
+        var propertyStateData = gameState.PropertyStates.TryGetValue(tile.TileId, out var propertyState)
+            ? propertyState.Data
+            : new PropertyStateData();
+        var baseRent = GetRentForUpgradeLevel(tile, propertyStateData.UpgradeLevel);
+        var damagePercent = propertyStateData.DamagePercent;
 
         if (damagePercent <= 0)
         {
@@ -168,6 +169,21 @@ public static class PropertyManager
         var reduced = (int)Math.Floor(baseRent.Amount * multiplier);
 
         return new Money(Math.Max(1, reduced));
+    }
+
+    private static Money GetRentForUpgradeLevel(Tile tile, int upgradeLevel)
+    {
+        if (tile.RentTable.Count > upgradeLevel)
+        {
+            return tile.RentTable[upgradeLevel];
+        }
+
+        if (upgradeLevel == 0)
+        {
+            return PlaceholderRent;
+        }
+
+        throw new InvalidOperationException("Property rent table must include rent for the current upgrade level.");
     }
 
     private static bool IsMortgaged(Tile tile, GameState gameState)

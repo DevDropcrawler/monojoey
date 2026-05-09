@@ -59,7 +59,10 @@ public static class PropertyStateManager
 
             propertyStates[tileId] = new PropertyState(
                 tileId,
-                new PropertyStateData(nextDamagePercent, existingState?.Data.IsMortgaged ?? false));
+                new PropertyStateData(
+                    nextDamagePercent,
+                    existingState?.Data.IsMortgaged ?? false,
+                    existingState?.Data.UpgradeLevel ?? 0));
             changed = true;
         }
 
@@ -124,11 +127,14 @@ public static class PropertyStateManager
             var nextDamagePercent = damagePercent - repairedPercent;
             if (nextDamagePercent <= 0)
             {
-                if (propertyState.Data.IsMortgaged)
+                if (propertyState.Data.IsMortgaged || propertyState.Data.UpgradeLevel > 0)
                 {
                     propertyStates[tileId] = propertyState with
                     {
-                        Data = new PropertyStateData(damagePercent: 0, isMortgaged: true),
+                        Data = new PropertyStateData(
+                            0,
+                            propertyState.Data.IsMortgaged,
+                            propertyState.Data.UpgradeLevel),
                     };
                 }
                 else
@@ -140,7 +146,10 @@ public static class PropertyStateManager
             {
                 propertyStates[tileId] = propertyState with
                 {
-                    Data = new PropertyStateData(nextDamagePercent, propertyState.Data.IsMortgaged),
+                    Data = new PropertyStateData(
+                        nextDamagePercent,
+                        propertyState.Data.IsMortgaged,
+                        propertyState.Data.UpgradeLevel),
                 };
             }
 

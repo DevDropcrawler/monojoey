@@ -469,7 +469,8 @@ public sealed record SnapshotPropertyStatePayload(
 
 public sealed record SnapshotPropertyStateDataPayload(
     int DamagePercent,
-    bool IsMortgaged = false);
+    bool IsMortgaged = false,
+    int UpgradeLevel = 0);
 
 public sealed record SnapshotAuctionPayload(
     string PropertyTileId,
