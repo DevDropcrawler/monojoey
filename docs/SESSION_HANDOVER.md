@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Minimal Realtime Trade Lifecycle
-- Completion status: Minimal realtime trade lifecycle complete; server-authoritative create/accept/decline/cancel trade offers now use session pending-offer state, snapshot/reconnect projection, sequence-backed offer IDs, pure create-time validation, and accept-time settlement through existing `TradeManager` primitives.
+- Chunk: Engine-Only Solvency/Liquidation Foundation
+- Completion status: Engine-only solvency analysis foundation complete; payment obligations, deterministic raiseable-cash calculation, and pure solvency analysis now exist without changing realtime, session, bankruptcy, ownership, or liquidation execution behavior.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `489d52b`
 - Last commit before this chunk: `489d52b`
@@ -19,19 +19,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Minimal Realtime Trade Lifecycle.
+Engine-Only Solvency/Liquidation Foundation.
 
 Completed:
 
-- Added pure `TradeManager.ValidateTrade` so create-time validation does not invoke settlement.
-- Added `GameSession.PendingTradeOffers` and `PendingTradeOffer` runtime state with one active outgoing offer per proposer.
-- Added `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer` WebSocket handling.
-- `create_trade_offer` validates only; `accept_trade_offer` revalidates then settles through `TradeManager.SettleTrade`, which still composes `PlayerCashTransferManager` and `PropertyManager.TransferOwner`.
-- Successful trade lifecycle actions allocate normal gameplay sequences and broadcast `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, or `trade_offer_cancelled` after the direct response.
-- Trade offer IDs are sequence-backed as `trade_{sequence}`; `createdSequence` is authoritative for ordering, while `createdAtUtc` is informational only.
-- Snapshots and reconnect snapshots include additive `pendingTrades`, sorted by `createdSequence`; completed games project an empty array.
-- Added focused engine, session, and realtime tests for pure validation, pending-offer sequence helpers, multiple proposers, snapshot/reconnect projection, accept settlement, decline/cancel authorization, stale accept rejection, blocked states, completed-game rejection, and buy-only realtime property upgrades.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 826 passed, 0 failed, 0 skipped.
+- Added `PaymentObligation` primitives for currently implemented payment obligations only: rent, tax, card payment, auction payment, fine, and loan interest.
+- Added creditor modeling for bank obligations vs player-creditor obligations.
+- Added pure `SolvencyAnalyzer.Analyze` and `CalculateRaiseableCash` helpers that do not mutate `GameState`.
+- Added deterministic raiseable-cash items for upgrade sale value and mortgage value, ordered by board index/tile ID with upgrade-sale before mortgage on the same tile.
+- Shared mortgage, unmortgage-interest, and upgrade-sale refund formulas through `EconomyRulesCalculator`; `MortgageManager` now uses the shared mortgage formulas.
+- Added read-only property/player lookup helpers to `PropertyRuleHelpers`.
+- Added tests for obligation enum scope, cash solvency, asset solvency, insolvency shortfall, invalid debtors/obligations, mortgage exclusions, configured value formulas, upgrade liquidation value, deterministic ordering, and non-mutation.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 847 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -56,21 +55,20 @@ Not included by explicit user scope:
 - Consecutive-doubles lockup behavior.
 - Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
+- Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
+- Realtime liquidation requests, UI, auto-liquidation, forced property transfer, auction liquidation, or any rewrite of the hard-elimination flow.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/TradeManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TradeValidationResult.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/GameSession.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/PendingTradeOffer.cs`
-- `server-dotnet/MonoJoey.Server/Sessions/SessionManager.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TradeManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Sessions/SessionManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `docs/MULTIPLAYER_PROTOCOL.md`
-- `docs/UNITY_INTEGRATION_CONTRACT.md`
+- `server-dotnet/MonoJoey.Server/GameEngine/EconomyRulesCalculator.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/MortgageManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PaymentObligation.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PropertyRuleHelpers.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/RaiseableCashResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/SolvencyAnalysisResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/SolvencyAnalyzer.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/EconomyRulesCalculatorTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/SolvencyAnalyzerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
 ## Previous Chunk Files
@@ -165,7 +163,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 756 passed, 0 failed, 0 skipped.
+  - Output summary: 847 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -314,6 +312,8 @@ Not included by explicit user scope:
 - `PropertyStateManager.ApplyEarthquake` is now used by internal card execution; no client request, randomness, or UI has been added.
 - `PropertyStateManager.RepairDamagedOwnedProperties` is invoked automatically at selected-player turn start only; there is no client-selected repair target or repair request message.
 - Bankruptcy is hard elimination only; balances are not auto-corrected, no assets are liquidated, and no debt recovery is attempted.
+- Solvency analysis is engine-only and pure; it calculates cash/asset capacity but does not auto-liquidate, settle obligations, transfer property, alter bankruptcy, allocate sequences, or create pending state.
+- `PaymentObligationKind` intentionally includes only currently implemented payment obligations: rent, tax, card payment, auction payment, fine, and loan interest.
 - Loan interest is deducted only at turn start through `LoanManager.StartTurnInterestCheck`; it is not compounded, repaid, or otherwise collected.
 - Default loan rules produce the runtime ladder 20%, 30%, 50%, then +10 percentage points per loan tier capped at 100%; the `rules.loans` fields are the source for `LoanSharkConfig`.
 - No protected Monopoly wording, branding, board names, card wording, artwork, or final token assumptions were introduced.
@@ -414,11 +414,12 @@ Not included by explicit user scope:
 
 ## Next Recommended Chunk
 
-Phase 5 follow-up - choose the next narrow networking/session slice only if explicitly requested.
+Phase 5 follow-up - choose the next narrow networking/session or liquidation slice only if explicitly requested.
 
 Possible next scopes:
 
 - Resolve the `GameRules.Loans` rate-field/default mismatch in a separate schema-correction phase if that becomes the assigned chunk.
+- Add a manual raise-cash/liquidation action only as a separate chunk; reuse `SolvencyAnalyzer` and existing mortgage/upgrade mutators without creating duplicate ownership or economy authority.
 - Bind authenticated/identified connections to `PlayerConnection` only when that chunk is explicitly assigned.
 - Add broader lobby broadcasts for join/leave/ready if/when a wider client synchronization chunk is assigned.
 - Add auction retry handling, unsupported tile-effect execution, or broader turn-action WebSocket slices only if explicitly assigned.

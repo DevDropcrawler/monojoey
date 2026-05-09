@@ -35,6 +35,39 @@ public static class PropertyRuleHelpers
             propertyState.Data.UpgradeLevel > 0;
     }
 
+    public static Tile? FindTile(Board board, TileId tileId)
+    {
+        return board.Tiles.FirstOrDefault(tile => tile.TileId == tileId);
+    }
+
+    public static Player? FindPlayer(IReadOnlyList<Player> players, PlayerId playerId)
+    {
+        return players.FirstOrDefault(player => player.PlayerId == playerId);
+    }
+
+    public static PlayerId? FindPropertyOwnerId(IReadOnlyList<Player> players, TileId propertyTileId)
+    {
+        PlayerId? ownerId = null;
+        var ownerCount = 0;
+        foreach (var player in players)
+        {
+            if (!player.OwnedPropertyIds.Contains(propertyTileId))
+            {
+                continue;
+            }
+
+            ownerId = player.PlayerId;
+            ownerCount++;
+        }
+
+        if (ownerCount > 1)
+        {
+            throw new InvalidOperationException("Property cannot be owned by multiple players.");
+        }
+
+        return ownerId;
+    }
+
     public static PropertyStateData GetPropertyStateData(GameState gameState, TileId tileId)
     {
         return gameState.PropertyStates.TryGetValue(tileId, out var propertyState)

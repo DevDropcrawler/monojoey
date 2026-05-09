@@ -46,7 +46,7 @@ public static class MortgageManager
                 "Property is already mortgaged.");
         }
 
-        var mortgageValue = CalculateMortgageValue(tile.Price!.Value, gameState.Rules.Economy);
+        var mortgageValue = EconomyRulesCalculator.CalculateMortgageValue(tile.Price!.Value, gameState.Rules.Economy);
         if (player.Money.Amount > int.MaxValue - mortgageValue.Amount)
         {
             return MortgageRejected(
@@ -120,8 +120,8 @@ public static class MortgageManager
                 "Property is not mortgaged.");
         }
 
-        var mortgageValue = CalculateMortgageValue(tile.Price!.Value, gameState.Rules.Economy);
-        var unmortgageInterest = CalculateUnmortgageInterest(mortgageValue, gameState.Rules.Economy);
+        var mortgageValue = EconomyRulesCalculator.CalculateMortgageValue(tile.Price!.Value, gameState.Rules.Economy);
+        var unmortgageInterest = EconomyRulesCalculator.CalculateUnmortgageInterest(mortgageValue, gameState.Rules.Economy);
         if (mortgageValue.Amount > int.MaxValue - unmortgageInterest.Amount)
         {
             return UnmortgageRejected(
@@ -286,16 +286,6 @@ public static class MortgageManager
             gameState.HasRolledThisTurn &&
             gameState.HasResolvedTileThisTurn &&
             !gameState.HasExecutedTileThisTurn;
-    }
-
-    private static Money CalculateMortgageValue(Money price, EconomyRules rules)
-    {
-        return new Money((int)Math.Floor(price.Amount * rules.MortgageValuePercent / 100m));
-    }
-
-    private static Money CalculateUnmortgageInterest(Money mortgageValue, EconomyRules rules)
-    {
-        return new Money((int)Math.Floor(mortgageValue.Amount * rules.UnmortgageInterestPercent / 100m));
     }
 
     private static PropertyStateData GetPropertyStateData(GameState gameState, TileId tileId)
