@@ -1,0 +1,414 @@
+namespace MonoJoey.Server.GameEngine;
+
+using MonoJoey.Shared.Protocol;
+using MonoJoey.Shared.Schemas;
+
+public static class LiquidationExecutionManager
+{
+    public static LiquidationExecutionResult ExecutePaymentObligation(
+        GameState gameState,
+        PaymentObligation obligation)
+    {
+        var validation = ValidateRequest(gameState, obligation);
+        if (validation is not null)
+        {
+            return Rejected(validation.Value.Kind, gameState, obligation, validation.Value.Message);
+        }
+
+        var workingState = gameState;
+        var steps = new List<LiquidationStepResult>();
+        var debtorId = obligation.DebtorPlayerId;
+        var debtor = PropertyRuleHelpers.FindPlayer(workingState.Players, debtorId)
+            ?? throw new InvalidOperationException("Validated liquidation debtor must exist.");
+
+        while (debtor.Money.Amount < obligation.Amount.Amount)
+        {
+            var upgradeCandidate = FindNextUpgradeSaleCandidate(workingState, debtor);
+            if (upgradeCandidate is not null)
+            {
+                var sale = PropertyUpgradeManager.SellUpgrade(workingState, debtorId, upgradeCandidate.TileId);
+                if (!sale.UpgradeSold)
+                {
+                    return Rejected(
+                        sale.ResultKind == PropertyUpgradeResultKind.UnsafeMoneyBalance
+                            ? LiquidationExecutionResultKind.UnsafeMoneyBalance
+                            : LiquidationExecutionResultKind.UnsupportedPayment,
+                        gameState,
+                        obligation,
+                        sale.Message);
+                }
+
+                workingState = sale.GameState;
+                steps.Add(new LiquidationStepResult(
+                    LiquidationStepKind.UpgradeSale,
+                    upgradeCandidate.TileId,
+                    sale.RefundAmount,
+                    sale.Money,
+                    sale.UpgradeLevel,
+                    PropertyRuleHelpers.GetPropertyStateData(workingState, upgradeCandidate.TileId).IsMortgaged));
+                debtor = PropertyRuleHelpers.FindPlayer(workingState.Players, debtorId)
+                    ?? throw new InvalidOperationException("Liquidation debtor disappeared after upgrade sale.");
+                continue;
+            }
+
+            var mortgageCandidate = FindNextMortgageCandidate(workingState, debtor);
+            if (mortgageCandidate is not null)
+            {
+                var mortgage = MortgageManager.MortgageProperty(workingState, debtorId, mortgageCandidate.TileId);
+                if (!mortgage.MortgageAccepted)
+                {
+                    return Rejected(
+                        mortgage.ResultKind == MortgageResultKind.UnsafeMoneyBalance
+                            ? LiquidationExecutionResultKind.UnsafeMoneyBalance
+                            : LiquidationExecutionResultKind.UnsupportedPayment,
+                        gameState,
+                        obligation,
+                        mortgage.Message);
+                }
+
+                workingState = mortgage.GameState;
+                steps.Add(new LiquidationStepResult(
+                    LiquidationStepKind.Mortgage,
+                    mortgageCandidate.TileId,
+                    mortgage.MortgageValue,
+                    mortgage.Money,
+                    PropertyRuleHelpers.GetPropertyStateData(workingState, mortgageCandidate.TileId).UpgradeLevel,
+                    mortgage.IsMortgaged));
+                debtor = PropertyRuleHelpers.FindPlayer(workingState.Players, debtorId)
+                    ?? throw new InvalidOperationException("Liquidation debtor disappeared after mortgage.");
+                continue;
+            }
+
+            return Rejected(
+                LiquidationExecutionResultKind.Insolvent,
+                gameState,
+                obligation,
+                "Payment obligation cannot be satisfied from cash and legal liquidation.");
+        }
+
+        return obligation.Creditor.Kind switch
+        {
+            PaymentObligationCreditorKind.Bank => PayBank(gameState, workingState, obligation, steps),
+            PaymentObligationCreditorKind.Player => PayPlayer(gameState, workingState, obligation, steps),
+            _ => Rejected(
+                LiquidationExecutionResultKind.InvalidObligation,
+                gameState,
+                obligation,
+                "Payment obligation creditor kind is not supported."),
+        };
+    }
+
+    private static LiquidationExecutionResult PayBank(
+        GameState originalState,
+        GameState workingState,
+        PaymentObligation obligation,
+        List<LiquidationStepResult> steps)
+    {
+        var debtorIndex = FindPlayerIndex(workingState.Players, obligation.DebtorPlayerId)
+            ?? throw new InvalidOperationException("Validated liquidation debtor must exist.");
+        var debtor = workingState.Players[debtorIndex];
+        if (debtor.Money.Amount < obligation.Amount.Amount)
+        {
+            return Rejected(
+                LiquidationExecutionResultKind.Insolvent,
+                originalState,
+                obligation,
+                "Payment obligation cannot be satisfied from cash and legal liquidation.");
+        }
+
+        var players = workingState.Players.ToArray();
+        players[debtorIndex] = debtor with
+        {
+            Money = new Money(debtor.Money.Amount - obligation.Amount.Amount),
+        };
+
+        var paidState = workingState with { Players = players };
+        steps.Add(new LiquidationStepResult(
+            LiquidationStepKind.BankPayment,
+            PropertyTileId: null,
+            obligation.Amount,
+            players[debtorIndex].Money,
+            UpgradeLevel: null,
+            IsMortgaged: null));
+
+        return new LiquidationExecutionResult(
+            LiquidationExecutionResultKind.PaymentExecuted,
+            paidState,
+            obligation,
+            steps.ToArray(),
+            obligation.Amount,
+            players[debtorIndex].Money,
+            CreditorBalance: null,
+            "Payment obligation paid to bank.");
+    }
+
+    private static LiquidationExecutionResult PayPlayer(
+        GameState originalState,
+        GameState workingState,
+        PaymentObligation obligation,
+        List<LiquidationStepResult> steps)
+    {
+        var creditorId = obligation.Creditor.PlayerId
+            ?? throw new InvalidOperationException("Validated player creditor must exist.");
+        var transfer = PlayerCashTransferManager.TransferBetweenPlayers(
+            workingState,
+            obligation.DebtorPlayerId,
+            creditorId,
+            obligation.Amount);
+        if (!transfer.TransferAccepted)
+        {
+            return Rejected(
+                transfer.ResultKind == PlayerCashTransferResultKind.UnsafeMoneyBalance
+                    ? LiquidationExecutionResultKind.UnsafeMoneyBalance
+                    : LiquidationExecutionResultKind.UnsupportedPayment,
+                originalState,
+                obligation,
+                transfer.Message);
+        }
+
+        steps.Add(new LiquidationStepResult(
+            LiquidationStepKind.PlayerPayment,
+            PropertyTileId: null,
+            obligation.Amount,
+            transfer.FromPlayerBalance,
+            UpgradeLevel: null,
+            IsMortgaged: null));
+
+        return new LiquidationExecutionResult(
+            LiquidationExecutionResultKind.PaymentExecuted,
+            transfer.GameState,
+            obligation,
+            steps.ToArray(),
+            obligation.Amount,
+            transfer.FromPlayerBalance,
+            transfer.ToPlayerBalance,
+            "Payment obligation paid to player.");
+    }
+
+    private static RequestValidation? ValidateRequest(GameState gameState, PaymentObligation obligation)
+    {
+        var obligationValidation = ValidateObligation(obligation);
+        if (obligationValidation is not null)
+        {
+            return obligationValidation;
+        }
+
+        if (gameState.Status != GameStatus.InProgress || gameState.Phase == GamePhase.Completed)
+        {
+            return new RequestValidation(LiquidationExecutionResultKind.GameNotInProgress, "Game is not in progress.");
+        }
+
+        if (gameState.ActiveAuctionState is not null)
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.ActiveAuction,
+                "Payment liquidation is blocked during active auctions.");
+        }
+
+        if (HasUnresolvedTileExecution(gameState))
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.UnresolvedTileExecution,
+                "Payment liquidation is blocked while the current tile is awaiting execution.");
+        }
+
+        var debtor = PropertyRuleHelpers.FindPlayer(gameState.Players, obligation.DebtorPlayerId);
+        if (debtor is null)
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.DebtorNotInGame,
+                "Payment obligation debtor is not in the game.");
+        }
+
+        if (debtor.IsBankrupt)
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.DebtorBankrupt,
+                "Bankrupt players cannot satisfy payment obligations.");
+        }
+
+        if (debtor.IsEliminated)
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.DebtorEliminated,
+                "Eliminated players cannot satisfy payment obligations.");
+        }
+
+        if (obligation.Creditor.Kind == PaymentObligationCreditorKind.Player)
+        {
+            if (obligation.Creditor.PlayerId is not { } creditorPlayerId)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.InvalidObligation,
+                    "Player creditor obligations must include a creditor player.");
+            }
+
+            var creditor = PropertyRuleHelpers.FindPlayer(gameState.Players, creditorPlayerId);
+            if (creditor is null)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.CreditorNotInGame,
+                    "Payment obligation creditor is not in the game.");
+            }
+
+            if (creditor.IsBankrupt)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.CreditorBankrupt,
+                    "Bankrupt players cannot receive payment obligations.");
+            }
+
+            if (creditor.IsEliminated)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.CreditorEliminated,
+                    "Eliminated players cannot receive payment obligations.");
+            }
+        }
+
+        return null;
+    }
+
+    private static RequestValidation? ValidateObligation(PaymentObligation obligation)
+    {
+        if (obligation.Amount.Amount <= 0)
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.InvalidObligation,
+                "Payment obligation amount must be positive.");
+        }
+
+        if (!Enum.IsDefined(obligation.Kind))
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.InvalidObligation,
+                "Payment obligation kind is not supported.");
+        }
+
+        if (!Enum.IsDefined(obligation.Creditor.Kind))
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.InvalidObligation,
+                "Payment obligation creditor kind is not supported.");
+        }
+
+        if (obligation.Creditor.Kind == PaymentObligationCreditorKind.Player)
+        {
+            if (obligation.Creditor.PlayerId is null)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.InvalidObligation,
+                    "Player creditor obligations must include a creditor player.");
+            }
+
+            if (obligation.Creditor.PlayerId == obligation.DebtorPlayerId)
+            {
+                return new RequestValidation(
+                    LiquidationExecutionResultKind.UnsupportedPayment,
+                    "Payment obligation debtor and creditor must be distinct players.");
+            }
+        }
+
+        return null;
+    }
+
+    private static Tile? FindNextUpgradeSaleCandidate(GameState gameState, Player debtor)
+    {
+        return gameState.Board.Tiles
+            .Where(tile => IsLegalUpgradeSaleCandidate(gameState, debtor, tile))
+            .OrderBy(tile => tile.Index)
+            .ThenBy(tile => tile.TileId.Value, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static bool IsLegalUpgradeSaleCandidate(GameState gameState, Player debtor, Tile tile)
+    {
+        if (!gameState.Rules.Economy.UpgradesEnabled ||
+            !debtor.OwnedPropertyIds.Contains(tile.TileId) ||
+            !PropertyRuleHelpers.IsBuildableProperty(tile) ||
+            PropertyRuleHelpers.GetPropertyStateData(gameState, tile.TileId).UpgradeLevel <= 0)
+        {
+            return false;
+        }
+
+        var groupTiles = PropertyRuleHelpers.GetBuildableGroupTiles(gameState.Board, tile);
+        if (groupTiles.Count < 2 ||
+            groupTiles.Any(groupTile => !debtor.OwnedPropertyIds.Contains(groupTile.TileId)) ||
+            groupTiles.Any(groupTile => PropertyRuleHelpers.GetPropertyStateData(gameState, groupTile.TileId).IsMortgaged))
+        {
+            return false;
+        }
+
+        var currentUpgradeLevel = PropertyRuleHelpers.GetPropertyStateData(gameState, tile.TileId).UpgradeLevel;
+        var groupMaxUpgradeLevel = groupTiles
+            .Select(groupTile => PropertyRuleHelpers.GetPropertyStateData(gameState, groupTile.TileId).UpgradeLevel)
+            .Max();
+        return currentUpgradeLevel == groupMaxUpgradeLevel;
+    }
+
+    private static Tile? FindNextMortgageCandidate(GameState gameState, Player debtor)
+    {
+        if (!gameState.Rules.Economy.MortgagesEnabled)
+        {
+            return null;
+        }
+
+        return gameState.Board.Tiles
+            .Where(tile => debtor.OwnedPropertyIds.Contains(tile.TileId))
+            .Where(tile => tile.IsPurchasable && tile.Price is not null)
+            .Where(tile =>
+            {
+                var data = PropertyRuleHelpers.GetPropertyStateData(gameState, tile.TileId);
+                return data.UpgradeLevel == 0 && !data.IsMortgaged;
+            })
+            .OrderBy(tile => tile.Index)
+            .ThenBy(tile => tile.TileId.Value, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static LiquidationExecutionResult Rejected(
+        LiquidationExecutionResultKind kind,
+        GameState gameState,
+        PaymentObligation obligation,
+        string message)
+    {
+        var debtor = PropertyRuleHelpers.FindPlayer(gameState.Players, obligation.DebtorPlayerId);
+        var creditorBalance = obligation.Creditor.Kind == PaymentObligationCreditorKind.Player &&
+            obligation.Creditor.PlayerId is not null
+                ? PropertyRuleHelpers.FindPlayer(gameState.Players, obligation.Creditor.PlayerId.Value)?.Money
+                : null;
+
+        return new LiquidationExecutionResult(
+            kind,
+            gameState,
+            obligation,
+            Array.Empty<LiquidationStepResult>(),
+            Money.Zero,
+            debtor?.Money ?? Money.Zero,
+            creditorBalance,
+            message);
+    }
+
+    private static bool HasUnresolvedTileExecution(GameState gameState)
+    {
+        return gameState.CurrentTurnPlayerId is not null &&
+            gameState.HasRolledThisTurn &&
+            gameState.HasResolvedTileThisTurn &&
+            !gameState.HasExecutedTileThisTurn;
+    }
+
+    private static int? FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)
+    {
+        for (var index = 0; index < players.Count; index++)
+        {
+            if (players[index].PlayerId == playerId)
+            {
+                return index;
+            }
+        }
+
+        return null;
+    }
+
+    private readonly record struct RequestValidation(LiquidationExecutionResultKind Kind, string Message);
+}
