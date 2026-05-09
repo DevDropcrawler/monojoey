@@ -91,15 +91,15 @@ Current client request type strings are snake_case:
 - Lobby and setup: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`,
   `set_rules`, `start_game`.
 - Gameplay: `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-  `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`,
-  `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`.
+  `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `upgrade_property`,
+  `use_held_card`, `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`.
 - Recovery: `get_snapshot`, `reconnect_session`.
 
 Current direct response type strings are:
 
 - `lobby_state`, `rules_updated`, `game_started`.
 - `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`.
-- `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`,
+- `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `upgrade_result`,
   `use_held_card_result`, `trade_offer_result`, `trade_accept_result`, `trade_decline_result`,
   `trade_cancel_result`.
 - `snapshot_result`, `reconnect_result`.
@@ -110,8 +110,8 @@ Current broadcast type strings are:
 - Lobby/setup: `lobby_state`, `rules_updated`.
 - Gameplay: `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`,
   `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`,
-  `held_card_used`, `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`,
-  `trade_offer_cancelled`, `game_completed`.
+  `property_upgraded`, `held_card_used`, `trade_offer_created`, `trade_offer_accepted`,
+  `trade_offer_declined`, `trade_offer_cancelled`, `game_completed`.
 
 One client request produces exactly one direct response to the sender. Successful mutating gameplay
 requests then produce separate sequenced broadcasts to connected in-game players, including the sender.
@@ -220,6 +220,15 @@ Mortgages:
 - Unmortgage cost is mortgage value plus `rules.economy.unmortgageInterestPercent` interest.
 - Mortgaged properties remain in `ownedPropertyIds`, set `propertyStates[].data.isMortgaged = true`, and charge no rent.
 - Accepted requests return `mortgage_result` or `unmortgage_result`, emit `property_mortgaged` or `property_unmortgaged`, and include `moneyDeltas` with reason `mortgage` or `unmortgage`.
+
+Property upgrades:
+
+- `upgrade_property` is a server-authoritative buy-only request. Sell/downgrade remains deferred.
+- Payload shape is `{ sessionId, playerId, propertyTileId }`.
+- The requester must be the bound in-game connection, upgrades must be enabled, the game must be in progress, and the player must exist and not be bankrupt or eliminated.
+- The requester must own the full buildable group, no group property may be mortgaged, no auction may be active, and the current turn may not be between tile resolution and tile execution.
+- Accepted requests return `upgrade_result`, emit `property_upgraded`, deduct `upgradeCost`, persist `propertyStates[].data.upgradeLevel`, and include one `moneyDeltas` entry with reason `property_upgrade`.
+- Rejected requests return only `error`; they do not mutate state, broadcast, or allocate a sequence.
 
 Trades:
 
@@ -348,8 +357,9 @@ Each `board.tiles[]` entry includes:
 - `ownerPlayerId`
 
 `propertyStates` is always an array in the current projection. Each entry includes `tileId`,
-`data.damagePercent`, and additive `data.isMortgaged`. Current snapshots project damaged or mortgaged
-states only; an omitted tile means default undamaged and unmortgaged state for that tile.
+`data.damagePercent`, and additive `data.isMortgaged` and `data.upgradeLevel`. Current snapshots project
+damaged, mortgaged, or upgraded states only; an omitted tile means default undamaged, unmortgaged, and
+unupgraded state for that tile. Upgrade projection does not change `snapshotVersion`.
 
 `activeAuction` is null when no auction exists or the match is completed. When present, it includes:
 
@@ -442,6 +452,7 @@ Implemented error codes are snake_case:
 - `loan_mode_disabled`
 - `loan_reason_blocked`
 - `mortgage_mode_disabled`
+- `upgrade_mode_disabled`
 - `property_not_owned`
 - `property_already_mortgaged`
 - `property_not_mortgaged`

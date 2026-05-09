@@ -21,6 +21,7 @@ public static class LobbyMessageTypes
     public const string TakeLoan = "take_loan";
     public const string MortgageProperty = "mortgage_property";
     public const string UnmortgageProperty = "unmortgage_property";
+    public const string UpgradeProperty = "upgrade_property";
     public const string UseHeldCard = "use_held_card";
     public const string CreateTradeOffer = "create_trade_offer";
     public const string AcceptTradeOffer = "accept_trade_offer";
@@ -39,6 +40,7 @@ public static class LobbyMessageTypes
     public const string LoanResult = "loan_result";
     public const string MortgageResult = "mortgage_result";
     public const string UnmortgageResult = "unmortgage_result";
+    public const string UpgradeResult = "upgrade_result";
     public const string UseHeldCardResult = "use_held_card_result";
     public const string TradeOfferResult = "trade_offer_result";
     public const string TradeAcceptResult = "trade_accept_result";
@@ -56,6 +58,7 @@ public static class LobbyMessageTypes
     public const string LoanTaken = "loan_taken";
     public const string PropertyMortgaged = "property_mortgaged";
     public const string PropertyUnmortgaged = "property_unmortgaged";
+    public const string PropertyUpgraded = "property_upgraded";
     public const string HeldCardUsed = "held_card_used";
     public const string TradeOfferCreated = "trade_offer_created";
     public const string TradeOfferAccepted = "trade_offer_accepted";
@@ -94,6 +97,7 @@ public static class LobbyErrorCodes
     public const string LoanModeDisabled = "loan_mode_disabled";
     public const string LoanReasonBlocked = "loan_reason_blocked";
     public const string MortgageModeDisabled = "mortgage_mode_disabled";
+    public const string UpgradeModeDisabled = "upgrade_mode_disabled";
     public const string PropertyNotOwned = "property_not_owned";
     public const string PropertyAlreadyMortgaged = "property_already_mortgaged";
     public const string PropertyNotMortgaged = "property_not_mortgaged";
@@ -336,6 +340,15 @@ public sealed record UnmortgageResultPayload(
     int UnmortgageCost,
     int Money,
     bool IsMortgaged,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
+
+public sealed record UpgradeResultPayload(
+    string PlayerId,
+    string PropertyTileId,
+    int UpgradeLevel,
+    int UpgradeCost,
+    int Money,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
 

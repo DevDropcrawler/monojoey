@@ -30,8 +30,8 @@ Completed:
 - Successful trade lifecycle actions allocate normal gameplay sequences and broadcast `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, or `trade_offer_cancelled` after the direct response.
 - Trade offer IDs are sequence-backed as `trade_{sequence}`; `createdSequence` is authoritative for ordering, while `createdAtUtc` is informational only.
 - Snapshots and reconnect snapshots include additive `pendingTrades`, sorted by `createdSequence`; completed games project an empty array.
-- Added focused engine, session, and realtime tests for pure validation, pending-offer sequence helpers, multiple proposers, snapshot/reconnect projection, accept settlement, decline/cancel authorization, stale accept rejection, blocked states, and completed-game rejection.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 756 passed, 0 failed, 0 skipped.
+- Added focused engine, session, and realtime tests for pure validation, pending-offer sequence helpers, multiple proposers, snapshot/reconnect projection, accept settlement, decline/cancel authorization, stale accept rejection, blocked states, completed-game rejection, and buy-only realtime property upgrades.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 826 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -39,7 +39,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Custom card editor or custom card creation.
-- Trade timers, chat, negotiation rounds, multi-party trades, multiple outgoing offers per proposer, replay redesign, persistence, stats, UI, async workflows, turn-flow changes, upgrades, asset liquidation, loan repayment, or debt recovery.
+- Trade timers, chat, negotiation rounds, multi-party trades, multiple outgoing offers per proposer, replay redesign, persistence, stats, UI, async workflows, turn-flow changes, upgrade sell/downgrade, asset liquidation, loan repayment, or debt recovery.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -181,7 +181,7 @@ Not included by explicit user scope:
 - `/ws` handles complete text messages as one JSON lobby/gameplay request each and sends one direct response to the sender.
 - Successful state-changing gameplay requests then emit one or more best-effort ordered broadcast events to connected in-game players in the same session, including the sender. The direct response is sent first.
 - `/ws` rejects binary messages with an `invalid_message` error response.
-- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `use_held_card`, `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `use_held_card_result`, `trade_offer_result`, `trade_accept_result`, `trade_decline_result`, `trade_cancel_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`, `held_card_used`, `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, `trade_offer_cancelled`, `game_completed`, and `error`.
+- Wire message types are server-local snake-case strings for this chunk: `create_lobby`, `join_lobby`, `leave_lobby`, `set_profile`, `set_ready`, `start_game`, `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `upgrade_property`, `use_held_card`, `create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, `cancel_trade_offer`, `get_snapshot`, `reconnect_session`, `lobby_state`, `game_started`, `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`, `auction_result`, `loan_result`, `mortgage_result`, `unmortgage_result`, `upgrade_result`, `use_held_card_result`, `trade_offer_result`, `trade_accept_result`, `trade_decline_result`, `trade_cancel_result`, `snapshot_result`, `reconnect_result`, `dice_rolled`, `tile_resolved`, `tile_executed`, `turn_ended`, `bid_accepted`, `auction_finalized`, `loan_taken`, `property_mortgaged`, `property_unmortgaged`, `property_upgraded`, `held_card_used`, `trade_offer_created`, `trade_offer_accepted`, `trade_offer_declined`, `trade_offer_cancelled`, `game_completed`, and `error`.
 - `create_lobby` returns an empty lobby state and does not automatically join the creator.
 - `join_lobby` binds the WebSocket connection to the joined `playerId`; later attempts by that same socket to use a different `playerId` return `player_switch_rejected`.
 - `leave_lobby` requires the WebSocket connection to be bound to the leaving `playerId`.
@@ -300,7 +300,11 @@ Not included by explicit user scope:
 - Unmortgage cost derives from mortgage value plus active `GameState.Rules.Economy.UnmortgageInterestPercent`.
 - Accepted `mortgage_property` and `unmortgage_property` requests mutate only player money and property state, return direct result payloads, and emit one matching sequenced broadcast.
 - Mortgage/unmortgage requests require a bound in-game connection, an existing non-eliminated player, enabled mortgage rules, no active auction, no unresolved current tile execution, and an owned purchasable priced tile.
-- Snapshot `propertyStates[].data` includes additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged states are projected without changing `snapshotVersion`.
+- Snapshot `propertyStates[].data` includes additive `isMortgaged` and `upgradeLevel`; clean unmortgaged unupgraded properties are omitted, while damaged, mortgaged, or upgraded states are projected without changing `snapshotVersion`.
+- `upgrade_property` is a bound in-game buy-only request shaped as `{ sessionId, playerId, propertyTileId }`; it calls only `PropertyUpgradeManager.BuyUpgrade`.
+- Accepted `upgrade_property` requests deduct `upgradeCost`, persist `PropertyStateData.UpgradeLevel`, return `upgrade_result`, emit `property_upgraded`, allocate one gameplay sequence, and include one `moneyDeltas` entry with reason `property_upgrade`.
+- Rejected `upgrade_property` requests return direct `error`, do not mutate `GameState`, do not broadcast, and do not allocate sequence. Error mapping includes `upgrade_mode_disabled`, `player_not_found`, `player_eliminated`, `invalid_session_state`, `invalid_payload`, `property_not_owned`, `insufficient_cash`, and `game_already_completed`.
+- Realtime upgrade sell/downgrade remains deferred.
 - `GameSession.PendingTradeOffers` stores in-memory pending trade lifecycle state outside `GameState`; ownership and balances remain only in `GameState`.
 - `create_trade_offer` requires a bound in-game proposer, one active outgoing offer maximum for that proposer, distinct recipient, and assets accepted by pure `TradeManager.ValidateTrade`; it does not mutate `GameState`.
 - `accept_trade_offer` requires the recipient, revalidates current state, settles through `TradeManager.SettleTrade`, removes only the accepted offer, and emits `trade_offer_accepted` with optional `trade` money/ownership helpers.
@@ -447,7 +451,7 @@ Do not implement before its assigned chunk:
 - Asset liquidation.
 - Automatic card reshuffling.
 - Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
-- Houses/upgrades.
+- Upgrade sell/downgrade and house UI.
 - Trade offer expiry, trade timers, trade UI, multi-party trades, negotiation rounds, or multiple outgoing offers per proposer.
 - Taxes/fines money changes.
 - Database persistence.

@@ -10,6 +10,8 @@ using MonoJoey.Shared.Schemas;
 
 public class LobbyMessageHandlerTests
 {
+    private const string UpgradeRulesJson = @"""economy"":{""upgradesEnabled"":true}";
+
     [Fact]
     public void CreateLobby_ReturnsLobbyState()
     {
@@ -730,6 +732,7 @@ public class LobbyMessageHandlerTests
     [InlineData("place_bid")]
     [InlineData("finalize_auction")]
     [InlineData("take_loan")]
+    [InlineData("upgrade_property")]
     [InlineData("use_held_card")]
     public void CompletedGame_RejectsGameplayMutationsBeforeMutation(string messageType)
     {
@@ -4038,6 +4041,139 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void UpgradeProperty_ValidRequestReturnsResultBroadcastAndSnapshotState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler, UpgradeRulesJson);
+        _ = GivePlayerBuildableGroup(sessionManager, started.Session.SessionId, "player_1");
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        var result = handler.HandleTextMessageResult(
+            UpgradePropertyMessage(started.Session.SessionId, "player_1", "property_01"),
+            started.FirstContext);
+        var payload = Assert.IsType<UpgradeResultPayload>(result.DirectResponse.Payload);
+        var broadcast = Assert.Single(result.Broadcasts);
+        var afterUpgrade = sessionManager.GetSession(started.Session.SessionId)!;
+
+        Assert.Equal("upgrade_result", result.DirectResponse.Type);
+        Assert.Equal("property_upgraded", broadcast.Type);
+        Assert.Same(payload, broadcast.Payload);
+        Assert.Equal(beforeSequence + 1, broadcast.Sequence);
+        Assert.Equal(beforeSequence + 1, afterUpgrade.LastEventSequence);
+        Assert.Equal(new[] { "connection_1", "connection_2" }, result.BroadcastConnectionIds);
+        Assert.Equal("player_1", payload.PlayerId);
+        Assert.Equal("property_01", payload.PropertyTileId);
+        Assert.Equal(1, payload.UpgradeLevel);
+        Assert.Equal(50, payload.UpgradeCost);
+        Assert.Equal(1450, payload.Money);
+        var moneyDelta = Assert.Single(payload.MoneyDeltas ?? Array.Empty<MoneyDeltaPayload>());
+        Assert.Equal("player_1", moneyDelta.PlayerId);
+        Assert.Equal(-50, moneyDelta.Delta);
+        Assert.Equal(1450, moneyDelta.Balance);
+        Assert.Equal("property_upgrade", moneyDelta.Reason);
+        Assert.Equal("property_01", moneyDelta.TileId);
+        Assert.Equal(1450, afterUpgrade.GameState.Players[0].Money.Amount);
+        Assert.Equal(1, afterUpgrade.GameState.PropertyStates[new TileId("property_01")].Data.UpgradeLevel);
+
+        using var snapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        var snapshot = AssertResponseType(snapshotResponse, "snapshot_result");
+        var propertyState = Assert.Single(snapshot.GetProperty("propertyStates").EnumerateArray());
+        Assert.Equal(1, snapshot.GetProperty("snapshotVersion").GetInt32());
+        Assert.Equal("property_01", propertyState.GetProperty("tileId").GetString());
+        Assert.Equal(0, propertyState.GetProperty("data").GetProperty("damagePercent").GetInt32());
+        Assert.False(propertyState.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+        Assert.Equal(1, propertyState.GetProperty("data").GetProperty("upgradeLevel").GetInt32());
+    }
+
+    [Fact]
+    public void UpgradeProperty_WrongPlayerContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler, UpgradeRulesJson);
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            UpgradePropertyMessage(started.Session.SessionId, "player_1", "property_01"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void UpgradeProperty_UnboundContextReturnsPlayerSwitchRejected()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler, UpgradeRulesJson);
+        var unboundContext = new LobbyConnectionContext("connection_unbound");
+
+        using var response = Handle(
+            handler,
+            unboundContext,
+            UpgradePropertyMessage(started.Session.SessionId, "player_1", "property_01"));
+
+        AssertError(response, "player_switch_rejected");
+    }
+
+    [Fact]
+    public void UpgradeProperty_LobbySessionReturnsInvalidSessionState()
+    {
+        var sessionManager = new SessionManager();
+        var session = sessionManager.CreateSession();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var context = new LobbyConnectionContext("connection_1");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), context);
+
+        using var response = Handle(handler, context, UpgradePropertyMessage(session.SessionId, "player_1", "property_01"));
+
+        AssertError(response, "invalid_session_state");
+    }
+
+    [Theory]
+    [InlineData("upgrades_disabled", "upgrade_mode_disabled")]
+    [InlineData("player_not_found", "player_not_found")]
+    [InlineData("player_bankrupt", "player_eliminated")]
+    [InlineData("player_eliminated", "player_eliminated")]
+    [InlineData("invalid_property", "invalid_payload")]
+    [InlineData("property_not_owned", "property_not_owned")]
+    [InlineData("incomplete_group", "invalid_payload")]
+    [InlineData("mortgaged_group", "invalid_session_state")]
+    [InlineData("uneven_upgrade", "invalid_session_state")]
+    [InlineData("maximum_upgrade", "invalid_session_state")]
+    [InlineData("insufficient_cash", "insufficient_cash")]
+    [InlineData("active_auction", "invalid_session_state")]
+    [InlineData("unresolved_tile", "invalid_session_state")]
+    [InlineData("unavailable_rent_tier", "invalid_payload")]
+    public void UpgradeProperty_RejectionsReturnErrorWithoutMutationBroadcastOrSequence(
+        string scenario,
+        string expectedCode)
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler, UpgradeRulesJson);
+        var propertyTileId = ConfigureUpgradeRejectionScenario(sessionManager, started.Session.SessionId, scenario);
+        var beforeRequest = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var beforeSequence = sessionManager.GetSession(started.Session.SessionId)!.LastEventSequence;
+
+        var result = handler.HandleTextMessageResult(
+            UpgradePropertyMessage(started.Session.SessionId, "player_1", propertyTileId),
+            started.FirstContext);
+        var afterSession = sessionManager.GetSession(started.Session.SessionId)!;
+        var errorPayload = Assert.IsType<LobbyErrorPayload>(result.DirectResponse.Payload);
+
+        Assert.Equal("error", result.DirectResponse.Type);
+        Assert.Equal(expectedCode, errorPayload.Code);
+        Assert.Empty(result.Broadcasts);
+        Assert.Same(beforeRequest, afterSession.GameState);
+        Assert.Equal(beforeSequence, afterSession.LastEventSequence);
+    }
+
+    [Fact]
     public void UseHeldCard_ClearsLockupConsumesHeldEscapeAndBroadcasts()
     {
         var sessionManager = new SessionManager();
@@ -5926,8 +6062,10 @@ public class LobbyMessageHandlerTests
     [Theory]
     [InlineData("mortgage_result")]
     [InlineData("unmortgage_result")]
+    [InlineData("upgrade_result")]
     [InlineData("property_mortgaged")]
     [InlineData("property_unmortgaged")]
+    [InlineData("property_upgraded")]
     public void ClientSentMortgageServerMessagesReturnUnsupportedMessage(string type)
     {
         var handler = new LobbyMessageHandler(new SessionManager());
@@ -5987,6 +6125,9 @@ public class LobbyMessageHandlerTests
     [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""playerId"":""player_1"",""propertyTileId"":""property_01""}}")]
     [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""sessionId"":""session_1"",""propertyTileId"":""property_01""}}")]
     [InlineData(@"{""type"":""unmortgage_property"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1""}}")]
+    [InlineData(@"{""type"":""upgrade_property"",""payload"":{""playerId"":""player_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""upgrade_property"",""payload"":{""sessionId"":""session_1"",""propertyTileId"":""property_01""}}")]
+    [InlineData(@"{""type"":""upgrade_property"",""payload"":{""sessionId"":""session_1"",""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""playerId"":""player_1""}}")]
     [InlineData(@"{""type"":""get_snapshot"",""payload"":{""sessionId"":""session_1""}}")]
     [InlineData(@"{""type"":""reconnect_session"",""payload"":{""playerId"":""player_1""}}")]
@@ -6207,6 +6348,168 @@ public class LobbyMessageHandlerTests
             gameState => PlayerStatusEffectManager.ApplySlimer(gameState, new PlayerId(playerId), sourceId));
     }
 
+    private static GameSession GivePlayerBuildableGroup(
+        SessionManager sessionManager,
+        string sessionId,
+        string playerId)
+    {
+        return UpdateEnginePlayer(
+            sessionManager,
+            sessionId,
+            playerId,
+            player => player with
+            {
+                OwnedPropertyIds = new HashSet<TileId>
+                {
+                    new("property_01"),
+                    new("property_02"),
+                },
+            });
+    }
+
+    private static string ConfigureUpgradeRejectionScenario(
+        SessionManager sessionManager,
+        string sessionId,
+        string scenario)
+    {
+        _ = GivePlayerBuildableGroup(sessionManager, sessionId, "player_1");
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+
+        _ = scenario switch
+        {
+            "upgrades_disabled" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    Rules = gameState.Rules with
+                    {
+                        Economy = gameState.Rules.Economy with { UpgradesEnabled = false },
+                    },
+                }),
+            "player_not_found" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    Players = gameState.Players
+                        .Where(player => player.PlayerId.Value != "player_1")
+                        .ToArray(),
+                }),
+            "player_bankrupt" => UpdateEnginePlayer(
+                sessionManager,
+                sessionId,
+                "player_1",
+                player => player with { IsBankrupt = true }),
+            "player_eliminated" => UpdateEnginePlayer(
+                sessionManager,
+                sessionId,
+                "player_1",
+                player => player with { IsEliminated = true }),
+            "incomplete_group" => UpdateEnginePlayer(
+                sessionManager,
+                sessionId,
+                "player_1",
+                player => player with { OwnedPropertyIds = new HashSet<TileId> { property01 } }),
+            "mortgaged_group" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    PropertyStates = new Dictionary<TileId, PropertyState>
+                    {
+                        [property02] = new(property02, new PropertyStateData(isMortgaged: true)),
+                    },
+                }),
+            "uneven_upgrade" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    PropertyStates = new Dictionary<TileId, PropertyState>
+                    {
+                        [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                    },
+                }),
+            "maximum_upgrade" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    PropertyStates = new Dictionary<TileId, PropertyState>
+                    {
+                        [property01] = new(property01, new PropertyStateData(upgradeLevel: 5)),
+                        [property02] = new(property02, new PropertyStateData(upgradeLevel: 5)),
+                    },
+                }),
+            "insufficient_cash" => UpdateEnginePlayer(
+                sessionManager,
+                sessionId,
+                "player_1",
+                player => player with { Money = new Money(49) }),
+            "active_auction" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState => gameState with
+                {
+                    ActiveAuctionState = new AuctionState(
+                        property01,
+                        new PlayerId("player_1"),
+                        AuctionStatus.AwaitingInitialBid,
+                        Money.Zero,
+                        new Money(1),
+                        InitialPreBidSeconds: 9,
+                        BidResetSeconds: 3,
+                        Array.Empty<AuctionBid>(),
+                        HighestBid: null,
+                        HighestBidderId: null,
+                        CountdownDurationSeconds: 9,
+                        TimerEndsAtUtc: DateTimeOffset.Parse("2026-04-26T00:00:09+00:00")),
+                }),
+            "unresolved_tile" => SetCurrentPlayerReadyToExecuteTile(sessionManager, sessionId, "player_1", "property_01"),
+            "unavailable_rent_tier" => UpdateGameState(
+                sessionManager,
+                sessionId,
+                gameState =>
+                {
+                    var tiles = gameState.Board.Tiles
+                        .Select(tile => tile.TileId == property01
+                            ? tile with
+                            {
+                                RentTable = new[]
+                                {
+                                    new Money(2),
+                                    new Money(10),
+                                    new Money(30),
+                                    new Money(90),
+                                    new Money(160),
+                                },
+                            }
+                            : tile)
+                        .ToArray();
+
+                    return gameState with
+                    {
+                        Board = gameState.Board with { Tiles = tiles },
+                        PropertyStates = new Dictionary<TileId, PropertyState>
+                        {
+                            [property01] = new(property01, new PropertyStateData(upgradeLevel: 4)),
+                            [property02] = new(property02, new PropertyStateData(upgradeLevel: 4)),
+                        },
+                    };
+                }),
+            _ => sessionManager.GetSession(sessionId)!,
+        };
+
+        return scenario switch
+        {
+            "invalid_property" => "missing_property",
+            "property_not_owned" => "property_03",
+            _ => "property_01",
+        };
+    }
+
     private static GameSession UpdateGameState(
         SessionManager sessionManager,
         string sessionId,
@@ -6388,6 +6691,11 @@ public class LobbyMessageHandlerTests
         return $@"{{""type"":""unmortgage_property"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""propertyTileId"":""{propertyTileId}""}}}}";
     }
 
+    private static string UpgradePropertyMessage(string sessionId, string playerId, string propertyTileId)
+    {
+        return $@"{{""type"":""upgrade_property"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""propertyTileId"":""{propertyTileId}""}}}}";
+    }
+
     private static string UseHeldCardMessage(string sessionId, string playerId, string cardId)
     {
         return $@"{{""type"":""use_held_card"",""payload"":{{""sessionId"":""{sessionId}"",""playerId"":""{playerId}"",""cardId"":""{cardId}""}}}}";
@@ -6442,6 +6750,7 @@ public class LobbyMessageHandlerTests
             "take_loan" => TakeLoanMessage(sessionId, playerId, 10, "rent_payment"),
             "mortgage_property" => MortgagePropertyMessage(sessionId, playerId, "property_01"),
             "unmortgage_property" => UnmortgagePropertyMessage(sessionId, playerId, "property_01"),
+            "upgrade_property" => UpgradePropertyMessage(sessionId, playerId, "property_01"),
             "use_held_card" => UseHeldCardMessage(sessionId, playerId, "escape_01"),
             "create_trade_offer" => CreateTradeOfferMessage(sessionId, playerId, "player_2", 10),
             "accept_trade_offer" => AcceptTradeOfferMessage(sessionId, playerId, "trade_1"),

@@ -71,6 +71,7 @@ Current broadcast event types:
 - `loan_taken` for accepted `take_loan`
 - `property_mortgaged` for accepted `mortgage_property`
 - `property_unmortgaged` for accepted `unmortgage_property`
+- `property_upgraded` for accepted `upgrade_property`
 - `trade_offer_created` for accepted `create_trade_offer`
 - `trade_offer_accepted` for accepted `accept_trade_offer`
 - `trade_offer_declined` for accepted `decline_trade_offer`
@@ -79,8 +80,8 @@ Current broadcast event types:
 
 Completed games keep session status `in_game` so `get_snapshot` and `reconnect_session` remain available.
 Gameplay mutations (`roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`,
-`finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `create_trade_offer`,
-`accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer`) are rejected with
+`finalize_auction`, `take_loan`, `mortgage_property`, `unmortgage_property`, `upgrade_property`,
+`create_trade_offer`, `accept_trade_offer`, `decline_trade_offer`, and `cancel_trade_offer`) are rejected with
 `game_already_completed` once `gameStatus` is `completed`.
 
 ## Additive Unity helper payloads
@@ -172,6 +173,7 @@ Gameplay:
 - `TakeLoanRequest`
 - `MortgagePropertyRequest`
 - `UnmortgagePropertyRequest`
+- `UpgradePropertyRequest`
 - `CreateTradeOfferRequest`
 - `AcceptTradeOfferRequest`
 - `DeclineTradeOfferRequest`
@@ -408,6 +410,51 @@ Unmortgage cost is `mortgageValue + floor(mortgageValue * unmortgageInterestPerc
 
 Rejected mortgage and unmortgage requests return the standard `error` envelope and do not mutate `GameState`.
 
+### Upgrade property
+
+```json
+{
+  "type": "upgrade_property",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_1",
+    "propertyTileId": "property_01"
+  }
+}
+```
+
+Realtime upgrades are buy-only. The server calls `PropertyUpgradeManager.BuyUpgrade`; sell/downgrade is not exposed over WebSocket in this slice.
+
+Server validates:
+
+- Upgrades are enabled by `rules.economy.upgradesEnabled`.
+- Sender connection is bound to the same in-game session/player.
+- Player exists in `GameState.Players` and is not bankrupt or eliminated.
+- Game is in progress and not completed.
+- No auction is active.
+- The current turn is not between tile resolution and tile execution.
+- `propertyTileId` is a string, exists on the board, is buildable, is owned by the requester, the requester owns the full buildable group, no group property is mortgaged, the next rent tier exists, upgrades remain even across the group, and the player has enough cash.
+
+Accepted upgrades return one direct `upgrade_result` and emit one `property_upgraded` broadcast with the same payload. The action allocates one gameplay sequence, deducts the tile `upgradeCost`, and persists `propertyStates[].data.upgradeLevel` without changing `snapshotVersion`.
+
+```json
+{
+  "type": "upgrade_result",
+  "payload": {
+    "playerId": "player_1",
+    "propertyTileId": "property_01",
+    "upgradeLevel": 1,
+    "upgradeCost": 50,
+    "money": 1450,
+    "moneyDeltas": [
+      { "playerId": "player_1", "delta": -50, "balance": 1450, "reason": "property_upgrade", "tileId": "property_01" }
+    ]
+  }
+}
+```
+
+Rejected upgrade requests return the standard `error` envelope, do not mutate `GameState`, do not broadcast, and do not allocate a sequence. Error codes include `upgrade_mode_disabled`, `player_not_found`, `player_eliminated`, `invalid_session_state`, `invalid_payload`, `property_not_owned`, `insufficient_cash`, and `game_already_completed`.
+
 ### Realtime trades
 
 `create_trade_offer` creates one pending outgoing offer for the proposing player. Pending trade state is
@@ -564,7 +611,7 @@ Accepted snapshots return one direct `snapshot_result` response:
 }
 ```
 
-Snapshot DTOs are explicit wire records copied from persisted `GameState` and session runtime state while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, property states, and board tiles are sorted deterministically. Pending trades are sorted by `createdSequence`; timestamps are informational only. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. `propertyStates[].data` includes `damagePercent` and additive `isMortgaged`; clean unmortgaged properties are omitted, while damaged or mortgaged properties are projected without a snapshot version bump. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and an empty `pendingTrades` array. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
+Snapshot DTOs are explicit wire records copied from persisted `GameState` and session runtime state while holding the realtime handler session lock. Players preserve persisted order. Owned property IDs, held card IDs, card decks, property states, and board tiles are sorted deterministically. Pending trades are sorted by `createdSequence`; timestamps are informational only. Player `statusEffects` are projected in persisted list order and serialize as `[]` when empty. `propertyStates[].data` includes `damagePercent` and additive `isMortgaged` and `upgradeLevel`; clean unmortgaged unupgraded properties are omitted, while damaged, mortgaged, or upgraded properties are projected without a snapshot version bump. Active auction is `null` when no auction exists or the match is completed. Completed snapshots include `gameStatus = "completed"`, `phase = "completed"`, `winnerPlayerId`, `endedAtUtc`, and an empty `pendingTrades` array. The snapshot intentionally excludes WebSocket connection IDs, lobby connection metadata, transport IDs, auth material, and reconnect secrets.
 
 ### Game completed
 

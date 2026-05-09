@@ -166,6 +166,7 @@ public sealed class LobbyMessageHandler
             LobbyMessageTypes.TakeLoan => HandleTakeLoan(root, connectionContext),
             LobbyMessageTypes.MortgageProperty => HandleMortgageProperty(root, connectionContext),
             LobbyMessageTypes.UnmortgageProperty => HandleUnmortgageProperty(root, connectionContext),
+            LobbyMessageTypes.UpgradeProperty => HandleUpgradeProperty(root, connectionContext),
             LobbyMessageTypes.UseHeldCard => HandleUseHeldCard(root, connectionContext),
             LobbyMessageTypes.CreateTradeOffer => HandleCreateTradeOffer(root, connectionContext),
             LobbyMessageTypes.AcceptTradeOffer => HandleAcceptTradeOffer(root, connectionContext),
@@ -184,6 +185,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.LoanResult or
                 LobbyMessageTypes.MortgageResult or
                 LobbyMessageTypes.UnmortgageResult or
+                LobbyMessageTypes.UpgradeResult or
                 LobbyMessageTypes.UseHeldCardResult or
                 LobbyMessageTypes.TradeOfferResult or
                 LobbyMessageTypes.TradeAcceptResult or
@@ -201,6 +203,7 @@ public sealed class LobbyMessageHandler
                 LobbyMessageTypes.LoanTaken or
                 LobbyMessageTypes.PropertyMortgaged or
                 LobbyMessageTypes.PropertyUnmortgaged or
+                LobbyMessageTypes.PropertyUpgraded or
                 LobbyMessageTypes.HeldCardUsed or
                 LobbyMessageTypes.TradeOfferCreated or
                 LobbyMessageTypes.TradeOfferAccepted or
@@ -1253,6 +1256,72 @@ public sealed class LobbyMessageHandler
             return CreateBroadcastResult(
                 CreateUnmortgageResult(persistedResult),
                 LobbyMessageTypes.PropertyUnmortgaged,
+                persistence.Session,
+                persistence.Sequence);
+        }
+    }
+
+    private LobbyMessageHandleResult HandleUpgradeProperty(
+        JsonElement root,
+        LobbyConnectionContext connectionContext)
+    {
+        if (!TryReadPropertyMortgagePayload(root, out var sessionId, out var playerId, out var propertyTileId))
+        {
+            return CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                "upgrade_property requires payload.sessionId, payload.playerId, and payload.propertyTileId.");
+        }
+
+        lock (sessionLock)
+        {
+            var session = sessionManager.GetSession(sessionId);
+            if (session is null)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSession,
+                    "Session not found.");
+            }
+
+            if (!IsCurrentInGamePlayerConnection(connectionContext, session, sessionId, playerId))
+            {
+                return CreateError(
+                    LobbyErrorCodes.PlayerSwitchRejected,
+                    "This connection is not bound to that session and playerId.");
+            }
+
+            if (session.Status != GameSessionStatus.InGame)
+            {
+                return CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    "Session is not in game.");
+            }
+
+            if (session.GameState.Status == GameStatus.Completed)
+            {
+                return CreateGameAlreadyCompletedError();
+            }
+
+            var upgradeResult = PropertyUpgradeManager.BuyUpgrade(
+                session.GameState,
+                new PlayerId(playerId),
+                new TileId(propertyTileId));
+            if (!upgradeResult.UpgradeBought)
+            {
+                return CreateUpgradeRejectedError(upgradeResult, session.GameState.Status);
+            }
+
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, upgradeResult.GameState);
+            var persistedPlayer = persistence.Session.GameState.Players.First(player =>
+                player.PlayerId == upgradeResult.PlayerId);
+            var persistedResult = upgradeResult with
+            {
+                GameState = persistence.Session.GameState,
+                Money = persistedPlayer.Money,
+            };
+
+            return CreateBroadcastResult(
+                CreateUpgradeResult(persistedResult),
+                LobbyMessageTypes.PropertyUpgraded,
                 persistence.Session,
                 persistence.Sequence);
         }
@@ -3592,6 +3661,27 @@ public sealed class LobbyMessageHandler
                 }));
     }
 
+    private static LobbyServerEnvelope CreateUpgradeResult(PropertyUpgradeResult upgradeResult)
+    {
+        return new LobbyServerEnvelope(
+            LobbyMessageTypes.UpgradeResult,
+            new UpgradeResultPayload(
+                upgradeResult.PlayerId.Value,
+                upgradeResult.PropertyTileId.Value,
+                upgradeResult.UpgradeLevel,
+                upgradeResult.UpgradeCost.Amount,
+                upgradeResult.Money.Amount,
+                new[]
+                {
+                    new MoneyDeltaPayload(
+                        upgradeResult.PlayerId.Value,
+                        -upgradeResult.UpgradeCost.Amount,
+                        upgradeResult.Money.Amount,
+                        "property_upgrade",
+                        TileId: upgradeResult.PropertyTileId.Value),
+                }));
+    }
+
     private static LobbyServerEnvelope CreateBidRejectedError(AuctionBidResult bidResult)
     {
         return bidResult.ResultKind switch
@@ -3690,6 +3780,45 @@ public sealed class LobbyMessageHandler
             _ => CreateError(
                 LobbyErrorCodes.InvalidSessionState,
                 unmortgageResult.Message),
+        };
+    }
+
+    private static LobbyServerEnvelope CreateUpgradeRejectedError(
+        PropertyUpgradeResult upgradeResult,
+        GameStatus gameStatus)
+    {
+        return upgradeResult.ResultKind switch
+        {
+            PropertyUpgradeResultKind.UpgradesDisabled => CreateError(
+                LobbyErrorCodes.UpgradeModeDisabled,
+                upgradeResult.Message),
+            PropertyUpgradeResultKind.PlayerNotInGame => CreateError(
+                LobbyErrorCodes.PlayerNotFound,
+                upgradeResult.Message),
+            PropertyUpgradeResultKind.PlayerBankrupt or
+                PropertyUpgradeResultKind.PlayerEliminated => CreateError(
+                LobbyErrorCodes.PlayerEliminated,
+                upgradeResult.Message),
+            PropertyUpgradeResultKind.GameNotInProgress => gameStatus == GameStatus.Completed
+                ? CreateGameAlreadyCompletedError()
+                : CreateError(
+                    LobbyErrorCodes.InvalidSessionState,
+                    upgradeResult.Message),
+            PropertyUpgradeResultKind.InvalidProperty or
+                PropertyUpgradeResultKind.IncompleteGroupOwnership or
+                PropertyUpgradeResultKind.RentTierUnavailable => CreateError(
+                LobbyErrorCodes.InvalidPayload,
+                upgradeResult.Message),
+            PropertyUpgradeResultKind.PropertyNotOwned => CreateError(
+                LobbyErrorCodes.PropertyNotOwned,
+                upgradeResult.Message),
+            PropertyUpgradeResultKind.InsufficientCash or
+                PropertyUpgradeResultKind.UnsafeMoneyBalance => CreateError(
+                LobbyErrorCodes.InsufficientCash,
+                upgradeResult.Message),
+            _ => CreateError(
+                LobbyErrorCodes.InvalidSessionState,
+                upgradeResult.Message),
         };
     }
 
