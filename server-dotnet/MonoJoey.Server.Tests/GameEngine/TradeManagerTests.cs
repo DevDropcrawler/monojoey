@@ -142,12 +142,12 @@ public class TradeManagerTests
     }
 
     [Fact]
-    public void SettleTrade_AllowsOneSidedPropertyGiftAndPreservesPropertyStates()
+    public void SettleTrade_AllowsOneSidedPropertyGiftAndPreservesNonUpgradePropertyStates()
     {
         var propertyTileId = new TileId("property_03");
         var propertyStates = new Dictionary<TileId, PropertyState>
         {
-            [propertyTileId] = new(propertyTileId, new PropertyStateData(35, isMortgaged: true, upgradeLevel: 3)),
+            [propertyTileId] = new(propertyTileId, new PropertyStateData(35, isMortgaged: true)),
         };
         var gameState = CreateGameState(
             CreatePlayer("player_1", 100, "property_03"),
@@ -168,7 +168,32 @@ public class TradeManagerTests
         Assert.Same(propertyStates, result.GameState.PropertyStates);
         Assert.Equal(35, result.GameState.PropertyStates[propertyTileId].Data.DamagePercent);
         Assert.True(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
-        Assert.Equal(3, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
+        Assert.Equal(0, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
+    }
+
+    [Fact]
+    public void SettleTrade_RejectsUpgradedOfferedProperty()
+    {
+        var propertyTileId = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", 100, "property_03"),
+            CreatePlayer("player_2", 50)) with
+        {
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [propertyTileId] = new(propertyTileId, new PropertyStateData(upgradeLevel: 1)),
+            },
+        };
+
+        var result = TradeManager.SettleTrade(
+            gameState,
+            FirstPlayerId,
+            Assets(properties: "property_03"),
+            SecondPlayerId,
+            Assets());
+
+        Assert.Equal(TradeSettlementResultKind.PropertyHasUpgrades, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
     }
 
     [Theory]

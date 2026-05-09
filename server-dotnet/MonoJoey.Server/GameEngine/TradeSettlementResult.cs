@@ -36,6 +36,7 @@ public enum TradeSettlementResultKind
     DuplicateProperty,
     PropertyOfferedByBothSides,
     InvalidProperty,
+    PropertyHasUpgrades,
     PropertyOwnedByMultiplePlayers,
     PropertyNotOwnedByOfferingPlayer,
     InsufficientCash,

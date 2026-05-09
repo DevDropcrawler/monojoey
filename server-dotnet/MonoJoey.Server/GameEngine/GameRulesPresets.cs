@@ -19,7 +19,8 @@ public static class GameRulesPresets
             UpgradesEnabled: false,
             MortgagesEnabled: true,
             MortgageValuePercent: 50,
-            UnmortgageInterestPercent: 10),
+            UnmortgageInterestPercent: 10,
+            UpgradeSellRefundPercent: 50),
         Auction: new AuctionRules(
             MandatoryAuctionsEnabled: true,
             InitialTimerSeconds: 9,

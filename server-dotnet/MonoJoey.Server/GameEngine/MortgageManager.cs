@@ -26,6 +26,16 @@ public static class MortgageManager
         var tile = FindTile(gameState.Board, propertyTileId)
             ?? throw new InvalidOperationException("Validated mortgage property must exist.");
         var currentData = GetPropertyStateData(gameState, propertyTileId);
+        if (currentData.UpgradeLevel > 0)
+        {
+            return MortgageRejected(
+                MortgageResultKind.PropertyHasUpgrades,
+                gameState,
+                playerId,
+                propertyTileId,
+                "Upgraded properties cannot be mortgaged.");
+        }
+
         if (currentData.IsMortgaged)
         {
             return MortgageRejected(

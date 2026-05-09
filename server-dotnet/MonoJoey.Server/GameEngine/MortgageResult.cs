@@ -27,6 +27,7 @@ public enum MortgageResultKind
     InvalidProperty,
     PropertyNotOwned,
     AlreadyMortgaged,
+    PropertyHasUpgrades,
     UnsafeMoneyBalance,
 }
 

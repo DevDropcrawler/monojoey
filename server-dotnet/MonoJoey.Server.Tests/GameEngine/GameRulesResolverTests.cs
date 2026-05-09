@@ -25,6 +25,7 @@ public class GameRulesResolverTests
         Assert.True(rules.Economy.MortgagesEnabled);
         Assert.Equal(50, rules.Economy.MortgageValuePercent);
         Assert.Equal(10, rules.Economy.UnmortgageInterestPercent);
+        Assert.Equal(50, rules.Economy.UpgradeSellRefundPercent);
         Assert.True(rules.Auction.MandatoryAuctionsEnabled);
         Assert.Equal(9, rules.Auction.InitialTimerSeconds);
         Assert.Equal(3, rules.Auction.BidResetTimerSeconds);
@@ -68,7 +69,8 @@ public class GameRulesResolverTests
                     ""luxuryTaxAmount"": 25,
                     ""mortgagesEnabled"": false,
                     ""mortgageValuePercent"": 40,
-                    ""unmortgageInterestPercent"": 20
+                    ""unmortgageInterestPercent"": 20,
+                    ""upgradeSellRefundPercent"": 25
                 },
                 ""auction"": {
                     ""initialTimerSeconds"": 12,
@@ -95,6 +97,7 @@ public class GameRulesResolverTests
         Assert.False(rules.Economy.MortgagesEnabled);
         Assert.Equal(40, rules.Economy.MortgageValuePercent);
         Assert.Equal(20, rules.Economy.UnmortgageInterestPercent);
+        Assert.Equal(25, rules.Economy.UpgradeSellRefundPercent);
         Assert.Equal(new[] { "chance", "table" }, rules.Cards.DecksEnabled);
     }
 
@@ -217,6 +220,9 @@ public class GameRulesResolverTests
     [InlineData(@"{""economy"":{""unmortgageInterestPercent"":-1}}")]
     [InlineData(@"{""economy"":{""unmortgageInterestPercent"":101}}")]
     [InlineData(@"{""economy"":{""unmortgageInterestPercent"":10.5}}")]
+    [InlineData(@"{""economy"":{""upgradeSellRefundPercent"":-1}}")]
+    [InlineData(@"{""economy"":{""upgradeSellRefundPercent"":101}}")]
+    [InlineData(@"{""economy"":{""upgradeSellRefundPercent"":50.5}}")]
     [InlineData(@"{""jail"":{""enabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""escapeCardsEnabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""fineAmount"":-1}}")]

@@ -41,7 +41,8 @@ public sealed record EconomyRules(
     bool UpgradesEnabled,
     bool MortgagesEnabled,
     int MortgageValuePercent,
-    int UnmortgageInterestPercent)
+    int UnmortgageInterestPercent,
+    int UpgradeSellRefundPercent)
 {
     public EconomyRules DeepCopy()
     {
@@ -54,7 +55,8 @@ public sealed record EconomyRules(
             UpgradesEnabled,
             MortgagesEnabled,
             MortgageValuePercent,
-            UnmortgageInterestPercent);
+            UnmortgageInterestPercent,
+            UpgradeSellRefundPercent);
     }
 }
 

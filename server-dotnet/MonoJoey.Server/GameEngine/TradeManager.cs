@@ -258,6 +258,13 @@ public static class TradeManager
                 return new RequestValidation(TradeSettlementResultKind.InvalidProperty, "Trade property must be a purchasable board tile.");
             }
 
+            if (PropertyRuleHelpers.HasUpgrades(gameState, propertyTileId))
+            {
+                return new RequestValidation(
+                    TradeSettlementResultKind.PropertyHasUpgrades,
+                    "Upgraded properties cannot be traded.");
+            }
+
             var owner = FindPropertyOwner(gameState.Players, propertyTileId);
             if (owner.OwnedByMultiplePlayers)
             {

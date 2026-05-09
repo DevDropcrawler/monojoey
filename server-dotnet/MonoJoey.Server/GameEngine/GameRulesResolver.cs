@@ -136,6 +136,7 @@ public static class GameRulesResolver
             "mortgagesEnabled",
             "mortgageValuePercent",
             "unmortgageInterestPercent",
+            "upgradeSellRefundPercent",
         });
 
         return baseline with
@@ -151,6 +152,8 @@ public static class GameRulesResolver
                 baseline.MortgageValuePercent,
             UnmortgageInterestPercent = ReadOptionalAtMostInt(group, "unmortgageInterestPercent", 0, 100) ??
                 baseline.UnmortgageInterestPercent,
+            UpgradeSellRefundPercent = ReadOptionalAtMostInt(group, "upgradeSellRefundPercent", 0, 100) ??
+                baseline.UpgradeSellRefundPercent,
         };
     }
 
@@ -453,6 +456,7 @@ public static class GameRulesResolver
             rules.Economy.LuxuryTaxAmount < 0 ||
             rules.Economy.MortgageValuePercent is < 0 or > 100 ||
             rules.Economy.UnmortgageInterestPercent is < 0 or > 100 ||
+            rules.Economy.UpgradeSellRefundPercent is < 0 or > 100 ||
             rules.Auction.InitialTimerSeconds <= 0 ||
             rules.Auction.BidResetTimerSeconds <= 0 ||
             rules.Auction.MinimumBidIncrement <= 0 ||

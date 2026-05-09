@@ -43,7 +43,7 @@ public class MortgageManagerTests
     }
 
     [Fact]
-    public void MortgageProperty_PreservesUpgradeLevel()
+    public void MortgageProperty_RejectsUpgradedProperty()
     {
         var propertyTileId = new TileId("property_03");
         var gameState = CreateGameState(CreatePlayer("player_1", "start", 1500, "property_03")) with
@@ -58,9 +58,8 @@ public class MortgageManagerTests
 
         var result = MortgageManager.MortgageProperty(gameState, new PlayerId("player_1"), propertyTileId);
 
-        Assert.True(result.MortgageAccepted);
-        Assert.True(result.GameState.PropertyStates[propertyTileId].Data.IsMortgaged);
-        Assert.Equal(4, result.GameState.PropertyStates[propertyTileId].Data.UpgradeLevel);
+        Assert.Equal(MortgageResultKind.PropertyHasUpgrades, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
     }
 
     [Theory]
