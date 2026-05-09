@@ -569,6 +569,7 @@ public class LobbyMessageHandlerTests
         Assert.Equal(6, payload.GetProperty("total").GetInt32());
         Assert.Equal("property_02", payload.GetProperty("newPosition").GetString());
         Assert.Equal(3, movement.GetProperty("stepCount").GetInt32());
+        Assert.Equal(1, sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].TurnState.ConsecutiveDoublesCount);
         Assert.Equal("error", repeatRoll.DirectResponse.Type);
         Assert.Null(repeatRoll.Broadcast);
         var repeatPayload = Assert.IsType<LobbyErrorPayload>(repeatRoll.DirectResponse.Payload);
@@ -4189,6 +4190,7 @@ public class LobbyMessageHandlerTests
                 CurrentTileId = new TileId("lockup_01"),
                 IsLockedUp = true,
                 HeldCardIds = new HashSet<CardId> { escapeId },
+                TurnState = new PlayerTurnState(1, 1, 1),
             });
 
         var result = handler.HandleTextMessageResult(
@@ -4204,6 +4206,10 @@ public class LobbyMessageHandlerTests
         Assert.Empty(payload.HeldCardIds);
         Assert.False(afterUse.Players[0].IsLockedUp);
         Assert.DoesNotContain(escapeId, afterUse.Players[0].HeldCardIds);
+        Assert.Equal(0, afterUse.Players[0].TurnState.JailTurnCount);
+        Assert.Equal(0, afterUse.Players[0].TurnState.JailRollAttemptCount);
+        Assert.Equal(0, afterUse.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.Equal("held_escape", afterUse.Players[0].TurnState.LastJailReleaseReason);
         Assert.Equal("held_card_used", Assert.Single(result.Broadcasts).Type);
     }
 
@@ -4277,6 +4283,11 @@ public class LobbyMessageHandlerTests
                         {
                             Money = new Money(1234),
                             CurrentTileId = new TileId("property_01"),
+                            TurnState = new PlayerTurnState(
+                                JailTurnCount: 2,
+                                JailRollAttemptCount: 1,
+                                ConsecutiveDoublesCount: 2,
+                                LastJailReleaseReason: "held_escape"),
                             OwnedPropertyIds = new HashSet<TileId>
                             {
                                 new("property_02"),
@@ -4391,6 +4402,10 @@ public class LobbyMessageHandlerTests
         Assert.Equal(3, statusData.GetProperty("remainingTurns").GetInt32());
         Assert.Equal("source_card_1", statusData.GetProperty("sourceId").GetString());
         Assert.Equal(1234, firstPlayer.GetProperty("money").GetInt32());
+        Assert.Equal(2, firstPlayer.GetProperty("jailTurnCount").GetInt32());
+        Assert.Equal(1, firstPlayer.GetProperty("jailRollAttemptCount").GetInt32());
+        Assert.Equal(2, firstPlayer.GetProperty("consecutiveDoublesCount").GetInt32());
+        Assert.Equal("held_escape", firstPlayer.GetProperty("lastJailReleaseReason").GetString());
         Assert.True(firstPlayer.GetProperty("isLockedUp").GetBoolean());
         Assert.Equal(300, firstPlayer.GetProperty("loan").GetProperty("totalBorrowed").GetInt32());
         Assert.Equal(15, firstPlayer.GetProperty("loan").GetProperty("currentInterestRatePercent").GetInt32());
@@ -4875,7 +4890,21 @@ public class LobbyMessageHandlerTests
         var started = StartReadyGame(sessionManager, handler);
         var currentSession = sessionManager.UpdateGameStateAndAllocateEventSequence(
             started.Session.SessionId,
-            started.Session.GameState with { HasRolledThisTurn = true }).Session;
+            started.Session.GameState with
+            {
+                HasRolledThisTurn = true,
+                Players = started.Session.GameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            TurnState = new PlayerTurnState(
+                                JailTurnCount: 1,
+                                JailRollAttemptCount: 1,
+                                ConsecutiveDoublesCount: 2),
+                        }
+                        : player)
+                    .ToArray(),
+            }).Session;
         var reconnectContext = new LobbyConnectionContext("connection_reconnect");
 
         using var response = Handle(handler, reconnectContext, ReconnectMessage(started.Session.SessionId, "player_1"));
@@ -4888,6 +4917,12 @@ public class LobbyMessageHandlerTests
         Assert.Equal(currentSession.LastEventSequence, payload.GetProperty("lastEventSequence").GetInt64());
         Assert.Equal(1, snapshot.GetProperty("snapshotVersion").GetInt32());
         Assert.True(snapshot.GetProperty("turn").GetProperty("hasRolledThisTurn").GetBoolean());
+        var reconnectedPlayer = snapshot.GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        Assert.Equal(1, reconnectedPlayer.GetProperty("jailTurnCount").GetInt32());
+        Assert.Equal(1, reconnectedPlayer.GetProperty("jailRollAttemptCount").GetInt32());
+        Assert.Equal(2, reconnectedPlayer.GetProperty("consecutiveDoublesCount").GetInt32());
         Assert.Equal("connection_reconnect", sessionManager.GetSession(started.Session.SessionId)?.Players[0].ConnectionId);
         Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.Players.Count);
         Assert.Equal(2, sessionManager.GetSession(started.Session.SessionId)?.GameState.Players.Count);

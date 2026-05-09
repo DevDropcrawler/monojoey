@@ -199,6 +199,12 @@ public class TurnManagerTests
             HasResolvedTileThisTurn = true,
             HasExecutedTileThisTurn = true,
             ActiveAuctionState = CreateAuctionState(),
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("start"), turnState: new PlayerTurnState(0, 0, 2)),
+                CreatePlayer("player_2", new TileId("start"), turnState: new PlayerTurnState(0, 0, 1)),
+                CreatePlayer("player_3", new TileId("start")),
+            },
         };
 
         var next = TurnManager.AdvanceToNextTurn(gameState);
@@ -210,6 +216,8 @@ public class TurnManagerTests
         Assert.False(next.HasResolvedTileThisTurn);
         Assert.False(next.HasExecutedTileThisTurn);
         Assert.Null(next.ActiveAuctionState);
+        Assert.Equal(0, next.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.Equal(1, next.Players[1].TurnState.ConsecutiveDoublesCount);
     }
 
     [Fact]
@@ -538,7 +546,8 @@ public class TurnManagerTests
         int money = 1500,
         PlayerLoanState? loanState = null,
         bool isLockedUp = false,
-        IEnumerable<string>? ownedPropertyIds = null)
+        IEnumerable<string>? ownedPropertyIds = null,
+        PlayerTurnState? turnState = null)
     {
         return new Player(
             new PlayerId(playerId),
@@ -554,6 +563,7 @@ public class TurnManagerTests
         {
             LoanState = loanState,
             IsLockedUp = isLockedUp,
+            TurnState = turnState ?? PlayerTurnState.Empty,
         };
     }
 

@@ -60,15 +60,17 @@ public static class TurnManager
             return StartFirstTurn(gameState);
         }
 
-        var currentIndex = FindCurrentPlayerIndex(gameState.Players, gameState.CurrentTurnPlayerId.Value);
-        var nextIndex = FindNextActivePlayerIndex(gameState.Players, currentIndex);
+        var currentTurnPlayerId = gameState.CurrentTurnPlayerId.Value;
+        var resetGameState = PlayerTurnStateManager.ResetConsecutiveDoubles(gameState, currentTurnPlayerId);
+        var currentIndex = FindCurrentPlayerIndex(resetGameState.Players, currentTurnPlayerId);
+        var nextIndex = FindNextActivePlayerIndex(resetGameState.Players, currentIndex);
 
-        var nextPlayerId = gameState.Players[nextIndex].PlayerId;
-        var nextGameState = gameState with
+        var nextPlayerId = resetGameState.Players[nextIndex].PlayerId;
+        var nextGameState = resetGameState with
         {
             CurrentTurnPlayerId = nextPlayerId,
             Phase = GamePhase.AwaitingRoll,
-            TurnNumber = gameState.TurnNumber + 1,
+            TurnNumber = resetGameState.TurnNumber + 1,
             HasRolledThisTurn = false,
             HasResolvedTileThisTurn = false,
             HasExecutedTileThisTurn = false,

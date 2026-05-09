@@ -436,6 +436,10 @@ public sealed record SnapshotPlayerPayload(
     IReadOnlyList<string> HeldCardIds,
     IReadOnlyList<SnapshotPlayerStatusEffectPayload> StatusEffects,
     SnapshotPlayerLoanPayload Loan,
+    int JailTurnCount,
+    int JailRollAttemptCount,
+    int ConsecutiveDoublesCount,
+    string? LastJailReleaseReason,
     bool IsBankrupt,
     bool IsEliminated,
     bool IsLockedUp);

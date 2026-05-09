@@ -10,12 +10,24 @@ public class LockupManagerTests
     public void SendToLockup_MovesPlayerToLockupAndMarksLocked()
     {
         var playerId = new PlayerId("player_1");
-        var gameState = CreateGameState(CreatePlayer(playerId.Value, "property_03"));
+        var gameState = CreateGameState(
+            CreatePlayer(
+                playerId.Value,
+                "property_03",
+                turnState: new PlayerTurnState(
+                    JailTurnCount: 2,
+                    JailRollAttemptCount: 1,
+                    ConsecutiveDoublesCount: 2,
+                    LastJailReleaseReason: "held_escape")));
 
         var result = LockupManager.SendToLockup(gameState, playerId);
 
         Assert.Equal("lockup_01", result.Players[0].CurrentTileId.Value);
         Assert.True(result.Players[0].IsLockedUp);
+        Assert.Equal(0, result.Players[0].TurnState.JailTurnCount);
+        Assert.Equal(0, result.Players[0].TurnState.JailRollAttemptCount);
+        Assert.Equal(0, result.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.Null(result.Players[0].TurnState.LastJailReleaseReason);
     }
 
     [Fact]
@@ -49,13 +61,25 @@ public class LockupManagerTests
         var playerId = new PlayerId("player_1");
         var escapeId = new CardId("escape_01");
         var gameState = CreateGameState(
-            CreatePlayer(playerId.Value, "lockup_01", heldCardIds: new[] { escapeId }, isLockedUp: true));
+            CreatePlayer(
+                playerId.Value,
+                "lockup_01",
+                heldCardIds: new[] { escapeId },
+                isLockedUp: true,
+                turnState: new PlayerTurnState(
+                    JailTurnCount: 1,
+                    JailRollAttemptCount: 1,
+                    ConsecutiveDoublesCount: 1)));
 
         var result = LockupManager.UseGetOutOfLockupEscape(gameState, playerId, escapeId);
 
         Assert.Equal(LockupEscapeUseResultKind.ClearedLockup, result.Kind);
         Assert.False(result.GameState.Players[0].IsLockedUp);
         Assert.DoesNotContain(escapeId, result.GameState.Players[0].HeldCardIds);
+        Assert.Equal(0, result.GameState.Players[0].TurnState.JailTurnCount);
+        Assert.Equal(0, result.GameState.Players[0].TurnState.JailRollAttemptCount);
+        Assert.Equal(0, result.GameState.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.Equal("held_escape", result.GameState.Players[0].TurnState.LastJailReleaseReason);
     }
 
     [Fact]
@@ -129,7 +153,8 @@ public class LockupManagerTests
         int money = 1500,
         IEnumerable<CardId>? heldCardIds = null,
         bool isLockedUp = false,
-        bool isEliminated = false)
+        bool isEliminated = false,
+        PlayerTurnState? turnState = null)
     {
         return new Player(
             new PlayerId(playerId),
@@ -144,6 +169,7 @@ public class LockupManagerTests
             IsEliminated: isEliminated)
         {
             IsLockedUp = isLockedUp,
+            TurnState = turnState ?? PlayerTurnState.Empty,
         };
     }
 }

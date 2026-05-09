@@ -18,5 +18,7 @@ public sealed record Player(
 
     public IReadOnlyList<PlayerStatusEffect> StatusEffects { get; init; } = Array.Empty<PlayerStatusEffect>();
 
+    public PlayerTurnState TurnState { get; init; } = PlayerTurnState.Empty;
+
     public bool IsLockedUp { get; init; }
 }

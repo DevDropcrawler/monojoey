@@ -17,6 +17,13 @@ public static class LockupManager
         {
             CurrentTileId = LockupTileId,
             IsLockedUp = true,
+            TurnState = players[playerIndex].TurnState with
+            {
+                JailTurnCount = 0,
+                JailRollAttemptCount = 0,
+                ConsecutiveDoublesCount = 0,
+                LastJailReleaseReason = null,
+            },
         };
 
         return gameState with { Players = players };
@@ -70,6 +77,13 @@ public static class LockupManager
         {
             HeldCardIds = heldCardIds,
             IsLockedUp = false,
+            TurnState = player.TurnState with
+            {
+                JailTurnCount = 0,
+                JailRollAttemptCount = 0,
+                ConsecutiveDoublesCount = 0,
+                LastJailReleaseReason = "held_escape",
+            },
         };
 
         return new LockupEscapeUseResult(

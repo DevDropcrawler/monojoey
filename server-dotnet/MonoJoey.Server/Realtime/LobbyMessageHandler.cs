@@ -320,7 +320,11 @@ public sealed class LobbyMessageHandler
             var statusGameState = isSlimed && dice.FirstDie == 6
                 ? PlayerStatusEffectManager.RemoveSlimer(rewardedGameState, player.PlayerId)
                 : rewardedGameState;
-            var updatedGameState = statusGameState with
+            var turnStateGameState = PlayerTurnStateManager.ApplyDiceRoll(
+                statusGameState,
+                player.PlayerId,
+                dice.IsDouble);
+            var updatedGameState = turnStateGameState with
             {
                 HasRolledThisTurn = true,
                 HasResolvedTileThisTurn = false,
@@ -2988,6 +2992,10 @@ public sealed class LobbyMessageHandler
                 .Select(CreateSnapshotStatusEffect)
                 .ToArray(),
             CreateSnapshotLoan(player.LoanState),
+            player.TurnState.JailTurnCount,
+            player.TurnState.JailRollAttemptCount,
+            player.TurnState.ConsecutiveDoublesCount,
+            player.TurnState.LastJailReleaseReason,
             player.IsBankrupt,
             player.IsEliminated,
             player.IsLockedUp);

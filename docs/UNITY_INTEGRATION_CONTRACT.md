@@ -313,6 +313,10 @@ Each `players[]` entry includes:
 - `heldCardIds`
 - `statusEffects`
 - `loan`
+- `jailTurnCount`
+- `jailRollAttemptCount`
+- `consecutiveDoublesCount`
+- `lastJailReleaseReason`
 - `isBankrupt`
 - `isEliminated`
 - `isLockedUp`
