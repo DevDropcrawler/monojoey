@@ -242,11 +242,11 @@ Trades:
 Lockup and held escape cards:
 
 - Held escape cards live in `heldCardIds`.
-- Card execution can grant a held escape card through card metadata and player state.
+- Card execution can grant a held escape card through card metadata and player state when `rules.jail.escapeCardsEnabled` is true.
 - The implemented wire request is `use_held_card`.
 - The direct response is `use_held_card_result`.
 - The broadcast is `held_card_used`.
-- Valid use clears lockup state and consumes the held card. Invalid use returns `error` without mutation.
+- Valid use clears lockup state and consumes the held card. Invalid use, including disabled escape cards, returns `error` without mutation.
 
 Slimer:
 
@@ -467,6 +467,7 @@ Implemented error codes are snake_case:
 - `unsupported_card_action`
 - `game_already_completed`
 - `held_card_not_held`
+- `held_cards_disabled`
 - `trade_offer_active`
 - `trade_offer_not_found`
 - `trade_offer_not_for_player`

@@ -19,8 +19,10 @@ public class SessionRulesTests
         Assert.Equal(9, session.DraftRules.Auction.InitialTimerSeconds);
         Assert.True(session.DraftRules.Jail.Enabled);
         Assert.True(session.DraftRules.Jail.EscapeCardsEnabled);
+        Assert.True(session.DraftRules.Jail.PayToExitEnabled);
         Assert.Equal(50, session.DraftRules.Jail.FineAmount);
         Assert.Equal(3, session.DraftRules.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", session.DraftRules.Jail.MaxTurnFailureAction);
         Assert.False(session.DraftRules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(3, session.DraftRules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.Equal(CardDeckPresetIds.ClassicIsh, session.DraftRules.Cards.DeckPresetId);
@@ -43,8 +45,10 @@ public class SessionRulesTests
             Jail = GameRulesPresets.MonoJoeyDefault.Jail with
             {
                 EscapeCardsEnabled = false,
+                PayToExitEnabled = false,
                 FineAmount = 75,
                 MaxTurns = 4,
+                MaxTurnFailureAction = "payFineAndRelease",
             },
             Dice = GameRulesPresets.MonoJoeyDefault.Dice with
             {
@@ -74,8 +78,10 @@ public class SessionRulesTests
         Assert.NotSame(startedSession.DraftRules.Future, startedSession.GameState.Rules.Future);
         Assert.Equal(12, startedSession.GameState.Rules.Auction.InitialTimerSeconds);
         Assert.False(startedSession.GameState.Rules.Jail.EscapeCardsEnabled);
+        Assert.False(startedSession.GameState.Rules.Jail.PayToExitEnabled);
         Assert.Equal(75, startedSession.GameState.Rules.Jail.FineAmount);
         Assert.Equal(4, startedSession.GameState.Rules.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", startedSession.GameState.Rules.Jail.MaxTurnFailureAction);
         Assert.True(startedSession.GameState.Rules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(2, startedSession.GameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.Equal(CardDeckPresetIds.Chaos, startedSession.GameState.Rules.Cards.DeckPresetId);
@@ -104,8 +110,10 @@ public class SessionRulesTests
         Assert.NotSame(firstDeckRead, secondDeckRead);
         Assert.True(copy.Jail.Enabled);
         Assert.True(copy.Jail.EscapeCardsEnabled);
+        Assert.True(copy.Jail.PayToExitEnabled);
         Assert.Equal(50, copy.Jail.FineAmount);
         Assert.Equal(3, copy.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", copy.Jail.MaxTurnFailureAction);
 
         var mutableDeckRead = Assert.IsType<string[]>(firstDeckRead);
         mutableDeckRead[0] = "mutated";

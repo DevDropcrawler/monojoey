@@ -34,6 +34,11 @@ public static class LockupManager
         PlayerId playerId,
         CardId escapeId)
     {
+        if (!gameState.Rules.Jail.EscapeCardsEnabled)
+        {
+            return gameState;
+        }
+
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         var player = gameState.Players[playerIndex];
 
@@ -56,6 +61,11 @@ public static class LockupManager
         PlayerId playerId,
         CardId escapeId)
     {
+        if (!gameState.Rules.Jail.EscapeCardsEnabled)
+        {
+            return new LockupEscapeUseResult(gameState, LockupEscapeUseResultKind.EscapeCardsDisabled);
+        }
+
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         var player = gameState.Players[playerIndex];
 
@@ -69,26 +79,98 @@ public static class LockupManager
             return new LockupEscapeUseResult(gameState, LockupEscapeUseResultKind.EscapeNotHeld);
         }
 
-        var heldCardIds = player.HeldCardIds.ToHashSet();
+        var releasedGameState = ReleaseFromLockup(gameState, playerId, "held_escape");
+        var releasedPlayers = releasedGameState.Players.ToArray();
+        var releasedPlayer = releasedPlayers[playerIndex];
+        var heldCardIds = releasedPlayer.HeldCardIds.ToHashSet();
         heldCardIds.Remove(escapeId);
+        releasedPlayers[playerIndex] = releasedPlayer with { HeldCardIds = heldCardIds };
+
+        return new LockupEscapeUseResult(
+            releasedGameState with { Players = releasedPlayers },
+            LockupEscapeUseResultKind.ClearedLockup);
+    }
+
+    public static GameState ReleaseFromLockup(
+        GameState gameState,
+        PlayerId playerId,
+        string releaseReason)
+    {
+        if (string.IsNullOrWhiteSpace(releaseReason))
+        {
+            throw new ArgumentException("Lockup release reason must be non-empty.", nameof(releaseReason));
+        }
+
+        var playerIndex = FindPlayerIndex(gameState.Players, playerId);
+        var player = gameState.Players[playerIndex];
+        if (!player.IsLockedUp)
+        {
+            return gameState;
+        }
 
         var players = gameState.Players.ToArray();
         players[playerIndex] = player with
         {
-            HeldCardIds = heldCardIds,
             IsLockedUp = false,
             TurnState = player.TurnState with
             {
                 JailTurnCount = 0,
                 JailRollAttemptCount = 0,
                 ConsecutiveDoublesCount = 0,
-                LastJailReleaseReason = "held_escape",
+                LastJailReleaseReason = releaseReason,
             },
         };
 
-        return new LockupEscapeUseResult(
-            gameState with { Players = players },
-            LockupEscapeUseResultKind.ClearedLockup);
+        return gameState with { Players = players };
+    }
+
+    public static bool CanPayFineToExit(GameState gameState, PlayerId playerId)
+    {
+        var player = gameState.Players[FindPlayerIndex(gameState.Players, playerId)];
+
+        return gameState.Rules.Jail.PayToExitEnabled &&
+            player.IsLockedUp &&
+            player.Money.Amount >= gameState.Rules.Jail.FineAmount;
+    }
+
+    public static LockupFinePaymentResult PayFineAndRelease(GameState gameState, PlayerId playerId)
+    {
+        var fineAmount = new Money(gameState.Rules.Jail.FineAmount);
+        var playerIndex = FindPlayerIndex(gameState.Players, playerId);
+        var player = gameState.Players[playerIndex];
+
+        if (!player.IsLockedUp)
+        {
+            return new LockupFinePaymentResult(
+                gameState,
+                LockupFinePaymentResultKind.PlayerNotLockedUp,
+                fineAmount);
+        }
+
+        if (!gameState.Rules.Jail.PayToExitEnabled)
+        {
+            return new LockupFinePaymentResult(
+                gameState,
+                LockupFinePaymentResultKind.PayToExitDisabled,
+                fineAmount);
+        }
+
+        if (player.Money.Amount < fineAmount.Amount)
+        {
+            return new LockupFinePaymentResult(
+                gameState,
+                LockupFinePaymentResultKind.InsufficientCash,
+                fineAmount);
+        }
+
+        var players = gameState.Players.ToArray();
+        players[playerIndex] = player with { Money = new Money(player.Money.Amount - fineAmount.Amount) };
+        var paidGameState = gameState with { Players = players };
+
+        return new LockupFinePaymentResult(
+            ReleaseFromLockup(paidGameState, playerId, "paid_fine"),
+            LockupFinePaymentResultKind.PaidAndReleased,
+            fineAmount);
     }
 
     private static int FindPlayerIndex(IReadOnlyList<Player> players, PlayerId playerId)

@@ -53,7 +53,7 @@ Not included by explicit user scope:
 - Unity client.
 - Extra turns on doubles.
 - Consecutive-doubles lockup behavior.
-- Disabled-jail behavior, fine payment, escape logic changes, max-turn aging, or release behavior.
+- Jail roll behavior, realtime fine payment, max-turn aging, forced release behavior, doubles release, or extra turns.
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
 - Realtime liquidation requests, UI, auto-liquidation, forced property transfer, auction liquidation, or any rewrite of the hard-elimination flow.
@@ -138,6 +138,8 @@ Not included by explicit user scope:
 - `server-dotnet/MonoJoey.Server/GameEngine/IDiceRoller.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResult.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupEscapeUseResultKind.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupFinePaymentResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupFinePaymentResultKind.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanSharkConfig.cs`
 - `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
@@ -287,8 +289,9 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; WebSocket card execution returns `invalid_card` before persisting any draw, discard, execution flag, or player mutation.
 - `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged, and WebSocket card execution pre-filters those actions as `unsupported_card_action` before calling it.
 - Lockup uses the placeholder `lockup_01` tile ID only; there is no advanced jail location selection or custom board lookup beyond requiring that tile to exist.
-- `JailRules.FineAmount` and `JailRules.MaxTurns` are serialized configuration only; gameplay does not read them yet.
+- `JailRules.PayToExitEnabled`, `JailRules.FineAmount`, `JailRules.MaxTurns`, and `JailRules.MaxTurnFailureAction` are serialized configuration. Fine-payment helpers exist for future wiring, but there is no realtime pay-fine request, max-turn aging, or forced release behavior yet.
 - Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
+- When `JailRules.EscapeCardsEnabled` is false, card execution does not grant held escape cards and `use_held_card` returns `held_cards_disabled` without mutation.
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
 - Property rent uses the first rent table value, or a placeholder `10` for purchasable tiles without a rent table, then reduces it by persisted `PropertyStateData.DamagePercent`.
 - Damaged rent uses decimal floor math; fully damaged properties charge `0`, while damaged-but-not-destroyed properties charge at least `1`.
@@ -378,8 +381,8 @@ Not included by explicit user scope:
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic, with `rules.loans.minimumInterestPayment` applied only when it is higher than the calculated interest.
 - Start-of-turn loan interest uses the same interest calculation and is skipped entirely when `rules.loans.loanSharkEnabled` is false.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` derive `LoanSharkConfig` from `GameState.Rules.Loans` and call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
-- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` skip players whose `IsLockedUp` flag is true.
-- `TurnManager.GetCurrentPlayer` rejects a locked current player with `Locked up players cannot take normal turns.`
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` can select locked active players when `GameState.Rules.Jail.Enabled` is true, so later jail turns are not stranded.
+- Chunk 1 still rejects locked-player `roll_dice`, `resolve_tile`, `execute_tile`, and pre-execution `end_turn` through existing `player_locked` request-layer behavior.
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
 - Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
@@ -395,7 +398,7 @@ Not included by explicit user scope:
 - Slimer and Earthquake card execution uses deck-only gating for this phase: if an enabled deck contains the card and it is drawn, the card executes; `FutureRules.SlimerEnabled` and `FutureRules.EarthquakeEnabled` are not checked at draw time.
 - Supported WebSocket card actions are currently `MoveToStart`, `MoveToTile`, `MoveSteps`, `MoveToNearestTransport`, `MoveToNearestUtility`, `ReceiveMoney`, `PayMoney`, `ReceiveMoneyFromEveryPlayer`, `PayMoneyToEveryPlayer`, `RepairOwnedProperties`, `ApplySlimer`, `ApplyEarthquake`, `GoToLockup`, and `GetOutOfLockup`.
 - No resolved card actions are intentionally left unsupported in the current enum set; unknown future enum values still fall through as unsupported or unchanged depending on the boundary.
-- Successful non-held cards are appended to that deck's discard pile; successful held escape cards stay only in `Player.HeldCardIds` until a later explicit use path consumes them.
+- Successful non-held cards are appended to that deck's discard pile; successful enabled held escape cards stay only in `Player.HeldCardIds` until a later explicit use path consumes them.
 - Missing required parameters for parameterized card actions resolve as `InvalidCard` instead of throwing.
 - `CardResolver.ResolveCard(player, card)` maps `CardActionKind` plus card parameters into `CardResolutionResult` only.
 - `CardResolver.ResolveCard(player, card)` does not accept `GameState`, does not mutate player state, and does not execute the resolved effect.
@@ -409,7 +412,7 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.ApplySlimer` applies Slimer to the resolved player through `PlayerStatusEffectManager.ApplySlimer` and stores the card ID as the status source.
 - `CardResolutionActionKind.ApplyEarthquake` applies damage only from explicit card parameter tile IDs and damage percent through `PropertyStateManager.ApplyEarthquake`; the property manager handles dedupe, ordinal ordering, owned-property filtering, and max-damage behavior.
 - `CardResolutionActionKind.GoToLockup` directly moves the resolved player to `lockup_01` and marks `IsLockedUp = true`; it does not use `MovementManager` and does not create pass-start money.
-- `CardResolutionActionKind.GetOutOfLockup` grants the resolved card ID into `HeldCardIds`; actual escape consumption is performed explicitly through `LockupManager.UseGetOutOfLockupEscape`.
+- `CardResolutionActionKind.GetOutOfLockup` grants the resolved card ID into `HeldCardIds` only when `JailRules.EscapeCardsEnabled` is true; actual escape consumption is performed explicitly through `LockupManager.UseGetOutOfLockupEscape`.
 - `CardEffectExecutor` does not draw, discard, reshuffle, advance turns, resolve landing tiles, start auctions, consume lockup escapes, or interact with loans.
 
 ## Next Recommended Chunk

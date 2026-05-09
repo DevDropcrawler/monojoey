@@ -56,6 +56,25 @@ public class LockupManagerTests
     }
 
     [Fact]
+    public void GrantGetOutOfLockupEscape_WhenEscapeCardsAreDisabledIsNoOp()
+    {
+        var playerId = new PlayerId("player_1");
+        var escapeId = new CardId("escape_01");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "start")) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Jail = GameRulesPresets.MonoJoeyDefault.Jail with { EscapeCardsEnabled = false },
+            },
+        };
+
+        var result = LockupManager.GrantGetOutOfLockupEscape(gameState, playerId, escapeId);
+
+        Assert.Same(gameState, result);
+        Assert.DoesNotContain(escapeId, result.Players[0].HeldCardIds);
+    }
+
+    [Fact]
     public void UseGetOutOfLockupEscape_ClearsLockupAndConsumesHeldEscape()
     {
         var playerId = new PlayerId("player_1");
@@ -80,6 +99,98 @@ public class LockupManagerTests
         Assert.Equal(0, result.GameState.Players[0].TurnState.JailRollAttemptCount);
         Assert.Equal(0, result.GameState.Players[0].TurnState.ConsecutiveDoublesCount);
         Assert.Equal("held_escape", result.GameState.Players[0].TurnState.LastJailReleaseReason);
+    }
+
+    [Fact]
+    public void UseGetOutOfLockupEscape_WhenEscapeCardsAreDisabledIsClearNoOp()
+    {
+        var playerId = new PlayerId("player_1");
+        var escapeId = new CardId("escape_01");
+        var gameState = CreateGameState(
+            CreatePlayer(
+                playerId.Value,
+                "lockup_01",
+                heldCardIds: new[] { escapeId },
+                isLockedUp: true)) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Jail = GameRulesPresets.MonoJoeyDefault.Jail with { EscapeCardsEnabled = false },
+            },
+        };
+
+        var result = LockupManager.UseGetOutOfLockupEscape(gameState, playerId, escapeId);
+
+        Assert.Equal(LockupEscapeUseResultKind.EscapeCardsDisabled, result.Kind);
+        Assert.Same(gameState, result.GameState);
+        Assert.True(result.GameState.Players[0].IsLockedUp);
+        Assert.Contains(escapeId, result.GameState.Players[0].HeldCardIds);
+    }
+
+    [Fact]
+    public void ReleaseFromLockup_ClearsLockupAndStoresExplicitReason()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(
+            CreatePlayer(
+                playerId.Value,
+                "lockup_01",
+                isLockedUp: true,
+                turnState: new PlayerTurnState(
+                    JailTurnCount: 2,
+                    JailRollAttemptCount: 2,
+                    ConsecutiveDoublesCount: 1)));
+
+        var result = LockupManager.ReleaseFromLockup(gameState, playerId, "paid_fine");
+
+        Assert.False(result.Players[0].IsLockedUp);
+        Assert.Equal(0, result.Players[0].TurnState.JailTurnCount);
+        Assert.Equal(0, result.Players[0].TurnState.JailRollAttemptCount);
+        Assert.Equal(0, result.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.Equal("paid_fine", result.Players[0].TurnState.LastJailReleaseReason);
+    }
+
+    [Fact]
+    public void PayFineAndRelease_WhenEligibleDeductsFineAndClearsLockup()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(
+            CreatePlayer(playerId.Value, "lockup_01", money: 100, isLockedUp: true));
+
+        var result = LockupManager.PayFineAndRelease(gameState, playerId);
+
+        Assert.Equal(LockupFinePaymentResultKind.PaidAndReleased, result.Kind);
+        Assert.Equal(new Money(50), result.FineAmount);
+        Assert.Equal(new Money(50), result.GameState.Players[0].Money);
+        Assert.False(result.GameState.Players[0].IsLockedUp);
+        Assert.Equal("paid_fine", result.GameState.Players[0].TurnState.LastJailReleaseReason);
+        Assert.True(LockupManager.CanPayFineToExit(gameState, playerId));
+    }
+
+    [Fact]
+    public void PayFineAndRelease_WhenDisabledOrInsufficientCashIsClearNoOp()
+    {
+        var playerId = new PlayerId("player_1");
+        var disabledGameState = CreateGameState(
+            CreatePlayer(playerId.Value, "lockup_01", money: 100, isLockedUp: true)) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Jail = GameRulesPresets.MonoJoeyDefault.Jail with { PayToExitEnabled = false },
+            },
+        };
+        var brokeGameState = CreateGameState(
+            CreatePlayer(playerId.Value, "lockup_01", money: 10, isLockedUp: true));
+
+        var disabledResult = LockupManager.PayFineAndRelease(disabledGameState, playerId);
+        var brokeResult = LockupManager.PayFineAndRelease(brokeGameState, playerId);
+
+        Assert.Equal(LockupFinePaymentResultKind.PayToExitDisabled, disabledResult.Kind);
+        Assert.Same(disabledGameState, disabledResult.GameState);
+        Assert.False(LockupManager.CanPayFineToExit(disabledGameState, playerId));
+        Assert.Equal(LockupFinePaymentResultKind.InsufficientCash, brokeResult.Kind);
+        Assert.Same(brokeGameState, brokeResult.GameState);
+        Assert.False(LockupManager.CanPayFineToExit(brokeGameState, playerId));
     }
 
     [Fact]

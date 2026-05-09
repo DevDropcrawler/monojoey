@@ -4,5 +4,6 @@ public enum LockupEscapeUseResultKind
 {
     ClearedLockup,
     PlayerNotLockedUp,
-    EscapeNotHeld
+    EscapeNotHeld,
+    EscapeCardsDisabled
 }

@@ -33,8 +33,10 @@ public class GameRulesResolverTests
         Assert.Equal(0, rules.Auction.StartingBid);
         Assert.True(rules.Jail.Enabled);
         Assert.True(rules.Jail.EscapeCardsEnabled);
+        Assert.True(rules.Jail.PayToExitEnabled);
         Assert.Equal(50, rules.Jail.FineAmount);
         Assert.Equal(3, rules.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", rules.Jail.MaxTurnFailureAction);
         Assert.Equal(2, rules.Dice.DiceCount);
         Assert.Equal(6, rules.Dice.SidesPerDie);
         Assert.False(rules.Dice.DoublesExtraTurnEnabled);
@@ -159,8 +161,10 @@ public class GameRulesResolverTests
                 ""jail"": {
                     ""enabled"": false,
                     ""escapeCardsEnabled"": false,
+                    ""payToExitEnabled"": false,
                     ""fineAmount"": 75,
-                    ""maxTurns"": 4
+                    ""maxTurns"": 4,
+                    ""maxTurnFailureAction"": ""payFineAndRelease""
                 }
             }");
 
@@ -169,8 +173,22 @@ public class GameRulesResolverTests
         Assert.Equal("custom", rules.PresetId);
         Assert.False(rules.Jail.Enabled);
         Assert.False(rules.Jail.EscapeCardsEnabled);
+        Assert.False(rules.Jail.PayToExitEnabled);
         Assert.Equal(75, rules.Jail.FineAmount);
         Assert.Equal(4, rules.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", rules.Jail.MaxTurnFailureAction);
+    }
+
+    [Theory]
+    [InlineData("payFineAndRelease")]
+    public void JailPayload_AcceptsKnownMaxTurnFailureActions(string maxTurnFailureAction)
+    {
+        using var document = JsonDocument.Parse(
+            $@"{{""jail"":{{""maxTurnFailureAction"":""{maxTurnFailureAction}""}}}}");
+
+        var rules = GameRulesResolver.Resolve(document.RootElement);
+
+        Assert.Equal(maxTurnFailureAction, rules.Jail.MaxTurnFailureAction);
     }
 
     [Fact]
@@ -225,10 +243,13 @@ public class GameRulesResolverTests
     [InlineData(@"{""economy"":{""upgradeSellRefundPercent"":50.5}}")]
     [InlineData(@"{""jail"":{""enabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""escapeCardsEnabled"":""yes""}}")]
+    [InlineData(@"{""jail"":{""payToExitEnabled"":""yes""}}")]
     [InlineData(@"{""jail"":{""fineAmount"":-1}}")]
     [InlineData(@"{""jail"":{""fineAmount"":50.5}}")]
     [InlineData(@"{""jail"":{""maxTurns"":0}}")]
     [InlineData(@"{""jail"":{""maxTurns"":3.5}}")]
+    [InlineData(@"{""jail"":{""maxTurnFailureAction"":""unknown""}}")]
+    [InlineData(@"{""jail"":{""maxTurnFailureAction"":null}}")]
     [InlineData(@"{""dice"":{""diceCount"":0}}")]
     [InlineData(@"{""dice"":{""sidesPerDie"":1}}")]
     [InlineData(@"{""dice"":{""doublesExtraTurnEnabled"":""yes""}}")]

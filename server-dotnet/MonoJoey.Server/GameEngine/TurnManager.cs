@@ -12,7 +12,7 @@ public static class TurnManager
             throw new InvalidOperationException("A game must have at least one player before turns can start.");
         }
 
-        var firstActivePlayer = SelectFirstTurnPlayer(gameState.Players);
+        var firstActivePlayer = SelectFirstTurnPlayer(gameState.Players, gameState.Rules.Jail.Enabled);
         if (firstActivePlayer is null)
         {
             throw new InvalidOperationException("A game must have at least one active player before turns can start.");
@@ -63,7 +63,10 @@ public static class TurnManager
         var currentTurnPlayerId = gameState.CurrentTurnPlayerId.Value;
         var resetGameState = PlayerTurnStateManager.ResetConsecutiveDoubles(gameState, currentTurnPlayerId);
         var currentIndex = FindCurrentPlayerIndex(resetGameState.Players, currentTurnPlayerId);
-        var nextIndex = FindNextActivePlayerIndex(resetGameState.Players, currentIndex);
+        var nextIndex = FindNextActivePlayerIndex(
+            resetGameState.Players,
+            currentIndex,
+            resetGameState.Rules.Jail.Enabled);
 
         var nextPlayerId = resetGameState.Players[nextIndex].PlayerId;
         var nextGameState = resetGameState with
@@ -106,12 +109,15 @@ public static class TurnManager
         throw new InvalidOperationException("Current turn player must exist in the game player list.");
     }
 
-    private static int FindNextActivePlayerIndex(IReadOnlyList<Player> players, int currentIndex)
+    private static int FindNextActivePlayerIndex(
+        IReadOnlyList<Player> players,
+        int currentIndex,
+        bool lockupTurnsEnabled)
     {
         for (var offset = 1; offset <= players.Count; offset++)
         {
             var nextIndex = (currentIndex + offset) % players.Count;
-            if (IsUnlockedActive(players[nextIndex]))
+            if (IsSelectableActive(players[nextIndex], lockupTurnsEnabled))
             {
                 return nextIndex;
             }
@@ -129,14 +135,15 @@ public static class TurnManager
         throw new InvalidOperationException("A game must have at least one active player before turns can advance.");
     }
 
-    private static Player? SelectFirstTurnPlayer(IReadOnlyList<Player> players)
+    private static Player? SelectFirstTurnPlayer(IReadOnlyList<Player> players, bool lockupTurnsEnabled)
     {
-        return players.FirstOrDefault(IsUnlockedActive) ?? players.FirstOrDefault(IsActive);
+        return players.FirstOrDefault(player => IsSelectableActive(player, lockupTurnsEnabled)) ??
+            players.FirstOrDefault(IsActive);
     }
 
-    private static bool IsUnlockedActive(Player player)
+    private static bool IsSelectableActive(Player player, bool lockupTurnsEnabled)
     {
-        return IsActive(player) && !player.IsLockedUp;
+        return IsActive(player) && (lockupTurnsEnabled || !player.IsLockedUp);
     }
 
     private static bool IsActive(Player player)

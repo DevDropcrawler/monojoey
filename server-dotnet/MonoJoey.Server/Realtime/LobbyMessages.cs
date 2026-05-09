@@ -108,6 +108,7 @@ public static class LobbyErrorCodes
     public const string UnsupportedCardAction = "unsupported_card_action";
     public const string GameAlreadyCompleted = "game_already_completed";
     public const string HeldCardNotHeld = "held_card_not_held";
+    public const string HeldCardsDisabled = "held_cards_disabled";
     public const string TradeOfferActive = "trade_offer_active";
     public const string TradeOfferNotFound = "trade_offer_not_found";
     public const string TradeOfferNotForPlayer = "trade_offer_not_for_player";

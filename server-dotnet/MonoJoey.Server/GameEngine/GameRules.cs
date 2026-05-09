@@ -81,16 +81,27 @@ public sealed record AuctionRules(
 public sealed record JailRules(
     bool Enabled,
     bool EscapeCardsEnabled,
+    bool PayToExitEnabled,
     int FineAmount,
-    int MaxTurns)
+    int MaxTurns,
+    string MaxTurnFailureAction)
 {
+    public const string PayFineAndReleaseMaxTurnFailureAction = "payFineAndRelease";
+
+    public static bool IsKnownMaxTurnFailureAction(string action)
+    {
+        return string.Equals(action, PayFineAndReleaseMaxTurnFailureAction, StringComparison.Ordinal);
+    }
+
     public JailRules DeepCopy()
     {
         return new JailRules(
             Enabled,
             EscapeCardsEnabled,
+            PayToExitEnabled,
             FineAmount,
-            MaxTurns);
+            MaxTurns,
+            MaxTurnFailureAction);
     }
 }
 

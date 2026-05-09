@@ -26,8 +26,10 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(9, rules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.True(rules.GetProperty("jail").GetProperty("enabled").GetBoolean());
         Assert.True(rules.GetProperty("jail").GetProperty("escapeCardsEnabled").GetBoolean());
+        Assert.True(rules.GetProperty("jail").GetProperty("payToExitEnabled").GetBoolean());
         Assert.Equal(50, rules.GetProperty("jail").GetProperty("fineAmount").GetInt32());
         Assert.Equal(3, rules.GetProperty("jail").GetProperty("maxTurns").GetInt32());
+        Assert.Equal("payFineAndRelease", rules.GetProperty("jail").GetProperty("maxTurnFailureAction").GetString());
         Assert.False(rules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
         Assert.Equal(3, rules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
         Assert.Equal(new[] { "chance", "table" }, rules.GetProperty("cards").GetProperty("decksEnabled").EnumerateArray().Select(deck => deck.GetString()).ToArray());
@@ -49,7 +51,7 @@ public class LobbyRulesMessageHandlerTests
             SetRulesMessage(
                 session.SessionId,
                 "player_1",
-                @"""presetName"":""House rules"",""auction"":{""initialTimerSeconds"":12,""minimumBidIncrement"":5},""jail"":{""escapeCardsEnabled"":false,""fineAmount"":75,""maxTurns"":4},""dice"":{""doublesExtraTurnEnabled"":true,""maxConsecutiveDoublesBeforeLockup"":2},""loans"":{""loanSharkEnabled"":false}"),
+                @"""presetName"":""House rules"",""auction"":{""initialTimerSeconds"":12,""minimumBidIncrement"":5},""jail"":{""escapeCardsEnabled"":false,""payToExitEnabled"":false,""fineAmount"":75,""maxTurns"":4,""maxTurnFailureAction"":""payFineAndRelease""},""dice"":{""doublesExtraTurnEnabled"":true,""maxConsecutiveDoublesBeforeLockup"":2},""loans"":{""loanSharkEnabled"":false}"),
             firstContext);
 
         Assert.Equal("rules_updated", result.DirectResponse.Type);
@@ -67,8 +69,10 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(12, payload.Rules.Auction.InitialTimerSeconds);
         Assert.Equal(5, payload.Rules.Auction.MinimumBidIncrement);
         Assert.False(payload.Rules.Jail.EscapeCardsEnabled);
+        Assert.False(payload.Rules.Jail.PayToExitEnabled);
         Assert.Equal(75, payload.Rules.Jail.FineAmount);
         Assert.Equal(4, payload.Rules.Jail.MaxTurns);
+        Assert.Equal("payFineAndRelease", payload.Rules.Jail.MaxTurnFailureAction);
         Assert.True(payload.Rules.Dice.DoublesExtraTurnEnabled);
         Assert.Equal(2, payload.Rules.Dice.MaxConsecutiveDoublesBeforeLockup);
         Assert.False(payload.Rules.Loans.LoanSharkEnabled);
@@ -117,8 +121,10 @@ public class LobbyRulesMessageHandlerTests
         Assert.True(rules.GetProperty("isCustom").GetBoolean());
         Assert.Equal(12, rules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal(3, rules.GetProperty("auction").GetProperty("bidResetTimerSeconds").GetInt32());
+        Assert.True(rules.GetProperty("jail").GetProperty("payToExitEnabled").GetBoolean());
         Assert.Equal(50, rules.GetProperty("jail").GetProperty("fineAmount").GetInt32());
         Assert.Equal(3, rules.GetProperty("jail").GetProperty("maxTurns").GetInt32());
+        Assert.Equal("payFineAndRelease", rules.GetProperty("jail").GetProperty("maxTurnFailureAction").GetString());
         Assert.Equal(1500, rules.GetProperty("economy").GetProperty("startingMoney").GetInt32());
         Assert.Equal(100, rules.GetProperty("economy").GetProperty("incomeTaxAmount").GetInt32());
         Assert.Equal(100, rules.GetProperty("economy").GetProperty("luxuryTaxAmount").GetInt32());
@@ -133,6 +139,8 @@ public class LobbyRulesMessageHandlerTests
     [InlineData(@"""economy"":{""luxuryTaxAmount"":-1}")]
     [InlineData(@"""jail"":{""fineAmount"":-1}")]
     [InlineData(@"""jail"":{""maxTurns"":0}")]
+    [InlineData(@"""jail"":{""payToExitEnabled"":""yes""}")]
+    [InlineData(@"""jail"":{""maxTurnFailureAction"":""unknown""}")]
     [InlineData(@"""dice"":{""maxConsecutiveDoublesBeforeLockup"":0}")]
     [InlineData(@"""dice"":{""doublesExtraTurnEnabled"":""yes""}")]
     [InlineData(@"""loans"":{""baseInterestRate"":-0.1}")]
@@ -265,6 +273,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(12, snapshotRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal(75, snapshotRules.GetProperty("jail").GetProperty("fineAmount").GetInt32());
         Assert.Equal(4, snapshotRules.GetProperty("jail").GetProperty("maxTurns").GetInt32());
+        Assert.True(snapshotRules.GetProperty("jail").GetProperty("payToExitEnabled").GetBoolean());
+        Assert.Equal("payFineAndRelease", snapshotRules.GetProperty("jail").GetProperty("maxTurnFailureAction").GetString());
         Assert.True(snapshotRules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
         Assert.Equal(2, snapshotRules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
         Assert.Equal("custom", reconnectRules.GetProperty("presetId").GetString());
@@ -274,6 +284,8 @@ public class LobbyRulesMessageHandlerTests
         Assert.Equal(12, reconnectRules.GetProperty("auction").GetProperty("initialTimerSeconds").GetInt32());
         Assert.Equal(75, reconnectRules.GetProperty("jail").GetProperty("fineAmount").GetInt32());
         Assert.Equal(4, reconnectRules.GetProperty("jail").GetProperty("maxTurns").GetInt32());
+        Assert.True(reconnectRules.GetProperty("jail").GetProperty("payToExitEnabled").GetBoolean());
+        Assert.Equal("payFineAndRelease", reconnectRules.GetProperty("jail").GetProperty("maxTurnFailureAction").GetString());
         Assert.True(reconnectRules.GetProperty("dice").GetProperty("doublesExtraTurnEnabled").GetBoolean());
         Assert.Equal(2, reconnectRules.GetProperty("dice").GetProperty("maxConsecutiveDoublesBeforeLockup").GetInt32());
     }

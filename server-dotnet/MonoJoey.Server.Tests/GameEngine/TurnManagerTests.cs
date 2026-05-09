@@ -46,7 +46,7 @@ public class TurnManagerTests
     }
 
     [Fact]
-    public void StartFirstTurn_SkipsLockedPlayers()
+    public void StartFirstTurn_SelectsLockedPlayersWhenJailRulesAreEnabled()
     {
         var gameState = CreateGameState("player_1", "player_2") with
         {
@@ -59,7 +59,8 @@ public class TurnManagerTests
 
         var started = TurnManager.StartFirstTurn(gameState);
 
-        Assert.Equal("player_2", started.CurrentTurnPlayerId?.Value);
+        Assert.Equal("player_1", started.CurrentTurnPlayerId?.Value);
+        Assert.True(started.Players[0].IsLockedUp);
     }
 
     [Fact]
@@ -347,7 +348,7 @@ public class TurnManagerTests
     }
 
     [Fact]
-    public void AdvanceToNextTurn_SkipsLockedPlayer()
+    public void AdvanceToNextTurn_SelectsLockedPlayerWhenJailRulesAreEnabled()
     {
         var gameState = CreateGameState("player_1", "player_2", "player_3") with
         {
@@ -363,8 +364,9 @@ public class TurnManagerTests
 
         var next = TurnManager.AdvanceToNextTurn(gameState);
 
-        Assert.Equal("player_3", next.CurrentTurnPlayerId?.Value);
+        Assert.Equal("player_2", next.CurrentTurnPlayerId?.Value);
         Assert.Equal(2, next.TurnNumber);
+        Assert.True(next.Players[1].IsLockedUp);
     }
 
     [Fact]

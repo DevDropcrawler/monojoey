@@ -1747,6 +1747,13 @@ public sealed class LobbyMessageHandler
                     "Player does not hold that lockup escape card.");
             }
 
+            if (escapeUse.Kind == LockupEscapeUseResultKind.EscapeCardsDisabled)
+            {
+                return CreateError(
+                    LobbyErrorCodes.HeldCardsDisabled,
+                    "Lockup escape cards are disabled by the current rules.");
+            }
+
             var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, escapeUse.GameState);
             var persistedPlayer = persistence.Session.GameState.Players.First(
                 gamePlayer => gamePlayer.PlayerId == player.PlayerId);
@@ -2460,7 +2467,7 @@ public sealed class LobbyMessageHandler
             DateTimeOffset.UtcNow);
         var persistedPlayer = persistence.Session.GameState.Players.First(
             updatedPlayer => updatedPlayer.PlayerId == player.PlayerId);
-        var executionKind = GetCardExecutionKind(cardResolution.ActionKind, persistedPlayer);
+        var executionKind = GetCardExecutionKind(cardResolution, persistedPlayer);
 
         var directResponse = CreateExecuteTileResult(
                 tileResolution,
@@ -4296,14 +4303,15 @@ public sealed class LobbyMessageHandler
         return actionKind != CardResolutionActionKind.GetOutOfLockup;
     }
 
-    private static string GetCardExecutionKind(CardResolutionActionKind actionKind, Player player)
+    private static string GetCardExecutionKind(CardResolutionResult cardResolution, Player player)
     {
-        if (actionKind == CardResolutionActionKind.GetOutOfLockup)
+        if (cardResolution.ActionKind == CardResolutionActionKind.GetOutOfLockup &&
+            player.HeldCardIds.Contains(cardResolution.CardId))
         {
             return "card_held";
         }
 
-        if (actionKind == CardResolutionActionKind.PayMoney && player.IsEliminated)
+        if (cardResolution.ActionKind == CardResolutionActionKind.PayMoney && player.IsEliminated)
         {
             return "card_payment_eliminated_player";
         }

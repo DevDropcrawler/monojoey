@@ -30,8 +30,10 @@ public static class GameRulesPresets
         Jail: new JailRules(
             Enabled: true,
             EscapeCardsEnabled: true,
+            PayToExitEnabled: true,
             FineAmount: 50,
-            MaxTurns: 3),
+            MaxTurns: 3,
+            MaxTurnFailureAction: JailRules.PayFineAndReleaseMaxTurnFailureAction),
         Dice: new DiceRules(
             DiceCount: 2,
             SidesPerDie: 6,

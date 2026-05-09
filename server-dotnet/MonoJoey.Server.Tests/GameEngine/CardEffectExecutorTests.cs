@@ -290,6 +290,28 @@ public class CardEffectExecutorTests
     }
 
     [Fact]
+    public void ExecuteCardEffect_GetOutOfLockupDoesNotStoreHeldEscapeWhenDisabled()
+    {
+        var playerId = new PlayerId("player_1");
+        var gameState = CreateGameState(CreatePlayer(playerId.Value, "start")) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Jail = GameRulesPresets.MonoJoeyDefault.Jail with { EscapeCardsEnabled = false },
+            },
+        };
+        var cardResolution = CreateCardResolution(
+            playerId,
+            CardResolutionActionKind.GetOutOfLockup,
+            parameters: null);
+
+        var result = CardEffectExecutor.ExecuteCardEffect(gameState, cardResolution);
+
+        Assert.DoesNotContain(cardResolution.CardId, result.Players[0].HeldCardIds);
+        Assert.False(result.Players[0].IsLockedUp);
+    }
+
+    [Fact]
     public void ExecuteCardEffect_DefaultChanceLockupVisitMovesWithoutLockingPlayer()
     {
         var player = CreatePlayer("player_1", "property_03");

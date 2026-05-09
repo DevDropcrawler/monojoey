@@ -184,16 +184,26 @@ public static class GameRulesResolver
         {
             "enabled",
             "escapeCardsEnabled",
+            "payToExitEnabled",
             "fineAmount",
             "maxTurns",
+            "maxTurnFailureAction",
         });
+
+        var maxTurnFailureAction = ReadOptionalString(group, "maxTurnFailureAction") ?? baseline.MaxTurnFailureAction;
+        if (!JailRules.IsKnownMaxTurnFailureAction(maxTurnFailureAction))
+        {
+            throw new GameRulesValidationException("Unknown jail max turn failure action.");
+        }
 
         return baseline with
         {
             Enabled = ReadOptionalBool(group, "enabled") ?? baseline.Enabled,
             EscapeCardsEnabled = ReadOptionalBool(group, "escapeCardsEnabled") ?? baseline.EscapeCardsEnabled,
+            PayToExitEnabled = ReadOptionalBool(group, "payToExitEnabled") ?? baseline.PayToExitEnabled,
             FineAmount = ReadOptionalNonNegativeInt(group, "fineAmount") ?? baseline.FineAmount,
             MaxTurns = ReadOptionalPositiveInt(group, "maxTurns") ?? baseline.MaxTurns,
+            MaxTurnFailureAction = maxTurnFailureAction,
         };
     }
 
@@ -463,6 +473,7 @@ public static class GameRulesResolver
             rules.Auction.StartingBid < 0 ||
             rules.Jail.FineAmount < 0 ||
             rules.Jail.MaxTurns < 1 ||
+            !JailRules.IsKnownMaxTurnFailureAction(rules.Jail.MaxTurnFailureAction) ||
             rules.Dice.DiceCount <= 0 ||
             rules.Dice.SidesPerDie < 2 ||
             rules.Dice.MaxConsecutiveDoublesBeforeLockup < 1 ||

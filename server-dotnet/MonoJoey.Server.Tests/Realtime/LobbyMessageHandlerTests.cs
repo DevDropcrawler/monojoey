@@ -2104,6 +2104,39 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ExecuteTile_HeldLockupEscapeCardIsNotGrantedWhenEscapeCardsDisabled()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""jail"":{""escapeCardsEnabled"":false}");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var holdCard = CreateCard("TEST_HOLD_ESCAPE", CardActionKind.HoldForLater);
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { holdCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var card = executePayload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("card_executed", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("get_out_of_lockup", card.GetProperty("resolutionKind").GetString());
+        Assert.Empty(card.GetProperty("heldCardIds").EnumerateArray());
+        Assert.DoesNotContain(new CardId("TEST_HOLD_ESCAPE"), afterExecute.Players[0].HeldCardIds);
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile);
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+    }
+
+    [Fact]
     public void ExecuteTile_PayBankCardCanEliminatePlayerAndBlockEndTurn()
     {
         var sessionManager = new SessionManager();
@@ -4237,6 +4270,40 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void UseHeldCard_WhenEscapeCardsDisabledReturnsClearErrorWithoutMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""jail"":{""escapeCardsEnabled"":false}");
+        var escapeId = new CardId("escape_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                CurrentTileId = new TileId("lockup_01"),
+                IsLockedUp = true,
+                HeldCardIds = new HashSet<CardId> { escapeId },
+            });
+        var beforeUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            UseHeldCardMessage(started.Session.SessionId, "player_1", escapeId.Value));
+        var afterUse = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertError(response, "held_cards_disabled");
+        Assert.Same(beforeUse, afterUse);
+        Assert.True(afterUse.Players[0].IsLockedUp);
+        Assert.Contains(escapeId, afterUse.Players[0].HeldCardIds);
+    }
+
+    [Fact]
     public void UseHeldCard_NonCurrentPlayerReturnsNotYourTurnWithoutMutation()
     {
         var sessionManager = new SessionManager();
@@ -5875,6 +5942,49 @@ public class LobbyMessageHandlerTests
             RollDiceMessage(started.Session.SessionId, "player_1"));
 
         AssertError(response, "player_locked");
+    }
+
+    [Fact]
+    public void EndTurn_CanAdvanceToLockedPlayerButRollStillReturnsPlayerLocked()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                CurrentTurnPlayerId = new PlayerId("player_2"),
+                TurnNumber = 2,
+                HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = true,
+                HasExecutedTileThisTurn = true,
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            CurrentTileId = new TileId("lockup_01"),
+                            IsLockedUp = true,
+                        }
+                        : player)
+                    .ToArray(),
+            });
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.SecondContext,
+            EndTurnMessage(started.Session.SessionId, "player_2"));
+        using var rollResponse = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", endTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("player_1", afterRoll.CurrentTurnPlayerId?.Value);
+        AssertError(rollResponse, "player_locked");
     }
 
     [Fact]
