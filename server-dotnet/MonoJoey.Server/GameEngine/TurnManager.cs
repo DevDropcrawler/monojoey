@@ -26,6 +26,7 @@ public static class TurnManager
             HasRolledThisTurn = false,
             HasResolvedTileThisTurn = false,
             HasExecutedTileThisTurn = false,
+            SuppressDoublesExtraTurnThisTurn = false,
             ActiveAuctionState = null,
         };
 
@@ -77,10 +78,41 @@ public static class TurnManager
             HasRolledThisTurn = false,
             HasResolvedTileThisTurn = false,
             HasExecutedTileThisTurn = false,
+            SuppressDoublesExtraTurnThisTurn = false,
             ActiveAuctionState = null,
         };
 
         return ApplyStartTurnEffects(nextGameState, nextPlayerId);
+    }
+
+    public static GameState AdvanceToExtraTurn(GameState gameState)
+    {
+        if (gameState.CurrentTurnPlayerId is null)
+        {
+            throw new InvalidOperationException("No current turn player is set.");
+        }
+
+        var currentPlayer = gameState.Players.Single(player => player.PlayerId == gameState.CurrentTurnPlayerId.Value);
+        if (currentPlayer.IsEliminated)
+        {
+            throw new InvalidOperationException("Eliminated players cannot receive extra turns.");
+        }
+
+        if (currentPlayer.IsLockedUp)
+        {
+            throw new InvalidOperationException("Locked players cannot receive extra turns.");
+        }
+
+        return gameState with
+        {
+            Phase = GamePhase.AwaitingRoll,
+            TurnNumber = gameState.TurnNumber + 1,
+            HasRolledThisTurn = false,
+            HasResolvedTileThisTurn = false,
+            HasExecutedTileThisTurn = false,
+            SuppressDoublesExtraTurnThisTurn = false,
+            ActiveAuctionState = null,
+        };
     }
 
     private static GameState ApplyStartTurnEffects(GameState gameState, PlayerId playerId)

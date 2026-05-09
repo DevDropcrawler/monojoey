@@ -292,13 +292,6 @@ public sealed class LobbyMessageHandler
                     "Eliminated players cannot roll dice.");
             }
 
-            if (player.IsLockedUp)
-            {
-                return CreateError(
-                    LobbyErrorCodes.PlayerLocked,
-                    "Locked players cannot roll dice.");
-            }
-
             if (session.GameState.HasRolledThisTurn)
             {
                 return CreateError(
@@ -306,25 +299,68 @@ public sealed class LobbyMessageHandler
                     "Player has already rolled this turn.");
             }
 
-            var isSlimed = PlayerStatusEffectManager.HasSlimer(player);
             var dice = diceService.RollDice(session.GameState.Rules.Dice.SidesPerDie);
+            if (player.IsLockedUp && session.GameState.Rules.Jail.Enabled)
+            {
+                return ResolveLockedPlayerRoll(sessionId, session.GameState, player, dice);
+            }
+
+            var rollStartGameState = player.IsLockedUp
+                ? LockupManager.ReleaseFromLockup(session.GameState, player.PlayerId, "jail_disabled") with
+                {
+                    SuppressDoublesExtraTurnThisTurn = true,
+                }
+                : session.GameState;
+            var rollStartPlayer = rollStartGameState.Players.First(gamePlayer => gamePlayer.PlayerId == player.PlayerId);
+            var isSlimed = PlayerStatusEffectManager.HasSlimer(rollStartPlayer);
             var movementSteps = isSlimed ? dice.FirstDie : dice.Total;
+
+            var turnStateGameState = PlayerTurnStateManager.ApplyDiceRoll(
+                rollStartGameState,
+                player.PlayerId,
+                dice.IsDouble);
+            var rolledPlayer = turnStateGameState.Players.First(gamePlayer => gamePlayer.PlayerId == player.PlayerId);
+            if (ShouldSendToLockupForConsecutiveDoubles(turnStateGameState, rolledPlayer, dice))
+            {
+                var lockedGameState = LockupManager.SendToLockup(turnStateGameState, player.PlayerId) with
+                {
+                    HasRolledThisTurn = true,
+                    HasResolvedTileThisTurn = true,
+                    HasExecutedTileThisTurn = true,
+                    SuppressDoublesExtraTurnThisTurn = true,
+                };
+                var lockupPersistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, lockedGameState);
+
+                return CreateBroadcastResult(
+                    CreateRollResult(
+                        dice,
+                        player.PlayerId,
+                        rollStartGameState,
+                        lockupPersistence.Session.GameState,
+                        movement: CreateDirectMovementPayload(
+                            rollStartGameState,
+                            lockupPersistence.Session.GameState,
+                            player.PlayerId,
+                            "direct"),
+                        moneyDeltas: null,
+                        rollKind: "triple_doubles_lockup"),
+                    LobbyMessageTypes.DiceRolled,
+                    lockupPersistence.Session,
+                    lockupPersistence.Sequence);
+            }
+
             var movementResult = MovementManager.MovePlayer(
-                session.GameState,
+                turnStateGameState,
                 player.PlayerId,
                 movementSteps);
-            var passStartReward = new Money(session.GameState.Rules.Economy.PassStartReward);
+            var passStartReward = new Money(rollStartGameState.Rules.Economy.PassStartReward);
             var rewardedGameState = movementResult.PassedStart
                 ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, passStartReward)
                 : movementResult.GameState;
             var statusGameState = isSlimed && dice.FirstDie == 6
                 ? PlayerStatusEffectManager.RemoveSlimer(rewardedGameState, player.PlayerId)
                 : rewardedGameState;
-            var turnStateGameState = PlayerTurnStateManager.ApplyDiceRoll(
-                statusGameState,
-                player.PlayerId,
-                dice.IsDouble);
-            var updatedGameState = turnStateGameState with
+            var updatedGameState = statusGameState with
             {
                 HasRolledThisTurn = true,
                 HasResolvedTileThisTurn = false,
@@ -336,12 +372,138 @@ public sealed class LobbyMessageHandler
             return CreateBroadcastResult(
                 CreateRollResult(
                     dice,
-                    movementResult,
-                    persistence.Session.GameState),
+                    player.PlayerId,
+                    rollStartGameState,
+                    persistence.Session.GameState,
+                    CreateMovementPayload(movementResult),
+                    CreateRollMoneyDeltas(
+                        rollStartGameState,
+                        persistence.Session.GameState,
+                        movementResult,
+                        fineAmount: null),
+                    rollKind: "normal"),
                 LobbyMessageTypes.DiceRolled,
                 persistence.Session,
                 persistence.Sequence);
         }
+    }
+
+    private LobbyMessageHandleResult ResolveLockedPlayerRoll(
+        string sessionId,
+        GameState gameState,
+        Player player,
+        DiceRoll dice)
+    {
+        if (dice.IsDouble)
+        {
+            var releasedGameState = LockupManager.ReleaseFromLockup(gameState, player.PlayerId, "jail_doubles") with
+            {
+                SuppressDoublesExtraTurnThisTurn = true,
+            };
+            var movementResult = MovementManager.MovePlayer(releasedGameState, player.PlayerId, dice.Total);
+            var passStartReward = new Money(gameState.Rules.Economy.PassStartReward);
+            var rewardedGameState = movementResult.PassedStart
+                ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, passStartReward)
+                : movementResult.GameState;
+            var updatedGameState = rewardedGameState with
+            {
+                HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = false,
+                HasExecutedTileThisTurn = false,
+                SuppressDoublesExtraTurnThisTurn = true,
+            };
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+
+            return CreateBroadcastResult(
+                CreateRollResult(
+                    dice,
+                    player.PlayerId,
+                    gameState,
+                    persistence.Session.GameState,
+                    CreateMovementPayload(movementResult),
+                    CreateRollMoneyDeltas(
+                        gameState,
+                        persistence.Session.GameState,
+                        movementResult,
+                        fineAmount: null),
+                    rollKind: "jail_doubles_release"),
+                LobbyMessageTypes.DiceRolled,
+                persistence.Session,
+                persistence.Sequence);
+        }
+
+        var failedAttemptGameState = PlayerTurnStateManager.ApplyFailedJailRoll(gameState, player.PlayerId);
+        var failedAttemptPlayer = failedAttemptGameState.Players.First(
+            gamePlayer => gamePlayer.PlayerId == player.PlayerId);
+        if (failedAttemptPlayer.TurnState.JailRollAttemptCount >= gameState.Rules.Jail.MaxTurns &&
+            gameState.Rules.Jail.MaxTurnFailureAction == JailRules.PayFineAndReleaseMaxTurnFailureAction)
+        {
+            var finePayment = LockupManager.PayFineAndRelease(
+                failedAttemptGameState,
+                player.PlayerId,
+                forcePayment: true);
+            if (finePayment.Kind == LockupFinePaymentResultKind.PaidAndReleased)
+            {
+                var movementResult = MovementManager.MovePlayer(finePayment.GameState, player.PlayerId, dice.Total);
+                var passStartReward = new Money(gameState.Rules.Economy.PassStartReward);
+                var rewardedGameState = movementResult.PassedStart
+                    ? ChangePlayerMoney(movementResult.GameState, player.PlayerId, passStartReward)
+                    : movementResult.GameState;
+                var updatedGameState = rewardedGameState with
+                {
+                    HasRolledThisTurn = true,
+                    HasResolvedTileThisTurn = false,
+                    HasExecutedTileThisTurn = false,
+                    SuppressDoublesExtraTurnThisTurn = true,
+                };
+                var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, updatedGameState);
+
+                return CreateBroadcastResult(
+                    CreateRollResult(
+                        dice,
+                        player.PlayerId,
+                        gameState,
+                        persistence.Session.GameState,
+                        CreateMovementPayload(movementResult),
+                        CreateRollMoneyDeltas(
+                            gameState,
+                            persistence.Session.GameState,
+                            movementResult,
+                            finePayment.FineAmount),
+                        rollKind: "jail_max_attempts_paid_release"),
+                    LobbyMessageTypes.DiceRolled,
+                    persistence.Session,
+                    persistence.Sequence);
+            }
+        }
+
+        var completedFailedAttemptGameState = failedAttemptGameState with
+        {
+            HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = true,
+            SuppressDoublesExtraTurnThisTurn = true,
+        };
+        var failedPersistence = sessionManager.UpdateGameStateAndAllocateEventSequence(
+            sessionId,
+            completedFailedAttemptGameState);
+        var persistedPlayer = failedPersistence.Session.GameState.Players.First(
+            gamePlayer => gamePlayer.PlayerId == player.PlayerId);
+
+        return CreateBroadcastResult(
+            CreateRollResult(
+                dice,
+                player.PlayerId,
+                gameState,
+                failedPersistence.Session.GameState,
+                movement: null,
+                moneyDeltas: null,
+                rollKind: persistedPlayer.TurnState.JailRollAttemptCount >= gameState.Rules.Jail.MaxTurns
+                    ? "jail_max_attempts_fine_unpaid"
+                    : "jail_failed_attempt"),
+            LobbyMessageTypes.DiceRolled,
+            failedPersistence.Session,
+            failedPersistence.Sequence);
     }
 
     private LobbyMessageHandleResult HandleResolveTile(
@@ -663,7 +825,9 @@ public sealed class LobbyMessageHandler
 
             var previousPlayerId = player.PlayerId;
             var beforeAdvanceGameState = session.GameState;
-            var advancedGameState = TurnManager.AdvanceToNextTurn(beforeAdvanceGameState);
+            var advancedGameState = ShouldGrantDoublesExtraTurn(beforeAdvanceGameState, player)
+                ? TurnManager.AdvanceToExtraTurn(beforeAdvanceGameState)
+                : TurnManager.AdvanceToNextTurn(beforeAdvanceGameState);
 
             var persistence = sessionManager.UpdateTerminalGameStateAndAllocateEventSequences(
                 sessionId,
@@ -1754,7 +1918,9 @@ public sealed class LobbyMessageHandler
                     "Lockup escape cards are disabled by the current rules.");
             }
 
-            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(sessionId, escapeUse.GameState);
+            var persistence = sessionManager.UpdateGameStateAndAllocateEventSequence(
+                sessionId,
+                escapeUse.GameState with { SuppressDoublesExtraTurnThisTurn = true });
             var persistedPlayer = persistence.Session.GameState.Players.First(
                 gamePlayer => gamePlayer.PlayerId == player.PlayerId);
 
@@ -3400,10 +3566,14 @@ public sealed class LobbyMessageHandler
 
     private static LobbyServerEnvelope CreateRollResult(
         DiceRoll dice,
-        MovementResult movementResult,
-        GameState gameState)
+        PlayerId playerId,
+        GameState previousGameState,
+        GameState gameState,
+        MovementPayload? movement,
+        IReadOnlyList<MoneyDeltaPayload>? moneyDeltas,
+        string rollKind)
     {
-        var persistedPlayer = gameState.Players.First(player => player.PlayerId == movementResult.PlayerId);
+        var persistedPlayer = gameState.Players.First(player => player.PlayerId == playerId);
 
         return new LobbyServerEnvelope(
             LobbyMessageTypes.RollResult,
@@ -3413,19 +3583,15 @@ public sealed class LobbyMessageHandler
                 dice.Total,
                 dice.IsDouble,
                 persistedPlayer.CurrentTileId.Value,
-                movementResult.PassedStart,
+                movement?.PassedStart ?? false,
                 gameState.HasRolledThisTurn,
-                CreateMovementPayload(movementResult),
-                movementResult.PassedStart
-                    ? new[]
-                    {
-                        new MoneyDeltaPayload(
-                            persistedPlayer.PlayerId.Value,
-                            gameState.Rules.Economy.PassStartReward,
-                            persistedPlayer.Money.Amount,
-                            "pass_start"),
-                    }
-                    : null));
+                movement,
+                moneyDeltas,
+                rollKind,
+                persistedPlayer.IsLockedUp
+                    ? persistedPlayer.TurnState.JailRollAttemptCount
+                    : null,
+                CreatePlayerEliminationsFromDiff(previousGameState, gameState, "fine")));
     }
 
     private static LobbyServerEnvelope CreateResolveTileResult(TileResolutionResult resolution)
@@ -3912,6 +4078,57 @@ public sealed class LobbyMessageHandler
             movementResult.StepCount,
             movementResult.MovementKind,
             movementResult.PassedStart);
+    }
+
+    private static bool ShouldSendToLockupForConsecutiveDoubles(
+        GameState gameState,
+        Player player,
+        DiceRoll dice)
+    {
+        return gameState.Rules.Jail.Enabled &&
+            gameState.Rules.Dice.DoublesExtraTurnEnabled &&
+            dice.IsDouble &&
+            player.TurnState.ConsecutiveDoublesCount >= gameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup;
+    }
+
+    private static bool ShouldGrantDoublesExtraTurn(GameState gameState, Player player)
+    {
+        return gameState.Rules.Dice.DoublesExtraTurnEnabled &&
+            !gameState.SuppressDoublesExtraTurnThisTurn &&
+            !player.IsEliminated &&
+            !player.IsLockedUp &&
+            player.TurnState.ConsecutiveDoublesCount > 0 &&
+            player.TurnState.ConsecutiveDoublesCount < gameState.Rules.Dice.MaxConsecutiveDoublesBeforeLockup;
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateRollMoneyDeltas(
+        GameState previousGameState,
+        GameState gameState,
+        MovementResult? movement,
+        Money? fineAmount)
+    {
+        var player = gameState.Players.First(updatedPlayer => updatedPlayer.PlayerId == previousGameState.CurrentTurnPlayerId);
+        var deltas = new List<MoneyDeltaPayload>();
+
+        if (fineAmount is not null)
+        {
+            deltas.Add(new MoneyDeltaPayload(
+                player.PlayerId.Value,
+                -fineAmount.Value.Amount,
+                player.Money.Amount,
+                "jail_fine"));
+        }
+
+        if (movement?.PassedStart == true)
+        {
+            deltas.Add(new MoneyDeltaPayload(
+                player.PlayerId.Value,
+                gameState.Rules.Economy.PassStartReward,
+                player.Money.Amount,
+                "pass_start"));
+        }
+
+        return deltas.Count == 0 ? null : deltas;
     }
 
     private static MovementPayload? CreateDirectMovementPayload(

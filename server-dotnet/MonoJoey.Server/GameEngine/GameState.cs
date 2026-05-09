@@ -21,6 +21,8 @@ public sealed record GameState(
 
     public bool HasExecutedTileThisTurn { get; init; }
 
+    public bool SuppressDoublesExtraTurnThisTurn { get; init; }
+
     public AuctionState? ActiveAuctionState { get; init; }
 
     public IReadOnlyDictionary<string, CardDeckState> CardDeckStates { get; init; } =

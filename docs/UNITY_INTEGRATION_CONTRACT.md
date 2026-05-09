@@ -161,12 +161,20 @@ new action.
 
 `roll_dice`:
 
-- The server validates the bound current player, rolls dice, applies Slimer movement rules, moves the
-  player, applies pass-start money when relevant, updates turn flags, and emits `dice_rolled`.
+- The server validates the bound current player, rolls dice, applies lockup/doubles rules, applies Slimer
+  movement rules when movement is allowed, applies pass-start money when relevant, updates turn flags,
+  and emits `dice_rolled`.
 - `roll_result` includes `playerId`, `dice`, physical two-dice `total`, physical `isDouble`,
-  `newPosition`, `passedStart`, `hasRolledThisTurn`, and optional helper data.
+  `newPosition`, `passedStart`, `hasRolledThisTurn`, optional `rollKind`, optional
+  `jailRollAttemptCount`, and optional helper data.
 - For Slimer, movement uses the first die while `dice`, `total`, and `isDouble` remain the physical
   two-dice metadata.
+- A failed jail roll does not move the player, leaves them locked, increments jail counters, marks the
+  turn complete, and may be ended with `end_turn`.
+- A jail doubles release clears lockup, resets jail counters, moves by the physical rolled total, resumes
+  the normal resolve/execute flow, and never grants an extra turn from that doubles roll.
+- A third consecutive doubles lockup sends the player directly to `lockup_01`, skips movement and landing
+  execution, resets the doubles streak, marks the turn complete, and grants no extra turn.
 
 `resolve_tile`:
 
@@ -185,10 +193,12 @@ new action.
 
 `end_turn`:
 
-- The server advances to the next eligible player only after the current turn has rolled, resolved, and
-  executed with no active auction.
-- Start-of-turn loan interest and automatic property repair for the selected next player are applied by
-  the server during turn advancement.
+- The server advances only after the current turn is complete with no active auction.
+- Doubles grant an extra turn only when `rules.dice.doublesExtraTurnEnabled` is true, the player is not
+  locked or eliminated, and the turn was not a jail-release turn. Extra-turn advancement keeps the same
+  player and does not re-run start-turn loan interest or automatic property repair.
+- Normal next-player advancement applies start-of-turn loan interest and automatic property repair for
+  the selected next player.
 - `end_turn_result.moneyDeltas` can include `loan_interest` and `property_repair`.
 
 Auctions:
@@ -247,6 +257,14 @@ Lockup and held escape cards:
 - The direct response is `use_held_card_result`.
 - The broadcast is `held_card_used`.
 - Valid use clears lockup state and consumes the held card. Invalid use, including disabled escape cards, returns `error` without mutation.
+- Locked players receive turns when `rules.jail.enabled` is true.
+- Locked `roll_dice` attempts either release on doubles and move, fail without movement, or at
+  `rules.jail.maxTurns` apply the configured failure policy. The currently supported max-turn policy is
+  `payFineAndRelease`.
+- Max-attempt `payFineAndRelease` deducts `rules.jail.fineAmount`, releases, resets jail counters, moves
+  by the failed roll total, and resumes normal resolve/execute flow. If the player cannot pay, no money is
+  deducted, the player remains locked, and the completed turn can end deterministically.
+- `use_held_card` release suppresses the next doubles extra turn for that same turn.
 
 Slimer:
 

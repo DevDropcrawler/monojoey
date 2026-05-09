@@ -11,12 +11,13 @@ public static class LockupManager
     {
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
         _ = FindLockupTile(gameState.Board);
+        var lockPlayer = gameState.Rules.Jail.Enabled;
 
         var players = gameState.Players.ToArray();
         players[playerIndex] = players[playerIndex] with
         {
             CurrentTileId = LockupTileId,
-            IsLockedUp = true,
+            IsLockedUp = lockPlayer,
             TurnState = players[playerIndex].TurnState with
             {
                 JailTurnCount = 0,
@@ -133,7 +134,10 @@ public static class LockupManager
             player.Money.Amount >= gameState.Rules.Jail.FineAmount;
     }
 
-    public static LockupFinePaymentResult PayFineAndRelease(GameState gameState, PlayerId playerId)
+    public static LockupFinePaymentResult PayFineAndRelease(
+        GameState gameState,
+        PlayerId playerId,
+        bool forcePayment = false)
     {
         var fineAmount = new Money(gameState.Rules.Jail.FineAmount);
         var playerIndex = FindPlayerIndex(gameState.Players, playerId);
@@ -147,7 +151,7 @@ public static class LockupManager
                 fineAmount);
         }
 
-        if (!gameState.Rules.Jail.PayToExitEnabled)
+        if (!forcePayment && !gameState.Rules.Jail.PayToExitEnabled)
         {
             return new LockupFinePaymentResult(
                 gameState,

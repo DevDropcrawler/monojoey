@@ -95,7 +95,7 @@ Helper fields are additive and omitted when irrelevant:
 - `propertyOwnershipChanges`: `tileId`, nullable `previousOwnerPlayerId`, nullable `newOwnerPlayerId`, `reason`.
 - `playerEliminations`: `playerId`, `reason`, `money`, and optional `paymentDue`.
 
-`roll_result` / `dice_rolled` also includes `total` and `isDouble`. Dice and card path movement is sourced from `MovementManager`; direct lockup movement uses `movementKind = "direct"`.
+`roll_result` / `dice_rolled` also includes `total`, `isDouble`, optional `rollKind`, and optional `jailRollAttemptCount`. Dice and card path movement is sourced from `MovementManager`; direct lockup movement uses `movementKind = "direct"`. Lockup failed-roll and triple-doubles payloads may omit `movement` because no board path is traversed.
 
 Example `dice_rolled` payload:
 
@@ -263,6 +263,14 @@ Server validates:
 - Sender is current player.
 - Phase is `AwaitingRoll`.
 - Start-of-turn loan interest has already resolved.
+
+Roll-time jail and doubles behavior is server-owned:
+
+- Doubles grant an extra turn at `end_turn` only when `rules.dice.doublesExtraTurnEnabled` allows it and the turn was not a jail-release turn.
+- Third consecutive doubles sends the player directly to lockup, skips landing execution, and grants no extra turn.
+- Locked players may roll when `rules.jail.enabled` is true. Failed jail rolls do not move, increment jail counters, and produce a completed turn.
+- Jail doubles release and max-attempt `payFineAndRelease` release the player, reset jail counters, move by the physical rolled total, and resume normal resolve/execute flow.
+- If max-attempt fine payment cannot be paid, no money is deducted, the player remains locked, and the completed turn can be ended.
 
 ### Place bid
 

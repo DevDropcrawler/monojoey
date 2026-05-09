@@ -5,13 +5,13 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Engine-Only Solvency/Liquidation Foundation
-- Completion status: Engine-only solvency analysis foundation complete; payment obligations, deterministic raiseable-cash calculation, and pure solvency analysis now exist without changing realtime, session, bankruptcy, ownership, or liquidation execution behavior.
+- Chunk: Jail/Joey Hole Runtime Parity
+- Completion status: Classic lockup and doubles runtime behavior is implemented server-side: doubles extra turns, triple-doubles lockup, jailed roll attempts, doubles release, max-attempt fine release, insufficient-fine handling, and no-extra-turn-after-jail-release.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `489d52b`
-- Last commit before this chunk: `489d52b`
+- Previous commit: `748a2b3`
+- Last commit before this chunk: `748a2b3`
 - Last commit after this chunk: not committed yet
-- Date/time: 2026-05-09
+- Date/time: 2026-05-10
 
 ## Docs Planning Note
 
@@ -19,18 +19,18 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Engine-Only Solvency/Liquidation Foundation.
+Jail/Joey Hole Runtime Parity.
 
 Completed:
 
-- Added `PaymentObligation` primitives for currently implemented payment obligations only: rent, tax, card payment, auction payment, fine, and loan interest.
-- Added creditor modeling for bank obligations vs player-creditor obligations.
-- Added pure `SolvencyAnalyzer.Analyze` and `CalculateRaiseableCash` helpers that do not mutate `GameState`.
-- Added deterministic raiseable-cash items for upgrade sale value and mortgage value, ordered by board index/tile ID with upgrade-sale before mortgage on the same tile.
-- Shared mortgage, unmortgage-interest, and upgrade-sale refund formulas through `EconomyRulesCalculator`; `MortgageManager` now uses the shared mortgage formulas.
-- Added read-only property/player lookup helpers to `PropertyRuleHelpers`.
-- Added tests for obligation enum scope, cash solvency, asset solvency, insolvency shortfall, invalid debtors/obligations, mortgage exclusions, configured value formulas, upgrade liquidation value, deterministic ordering, and non-mutation.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 847 passed, 0 failed, 0 skipped.
+- Added server runtime handling for doubles extra turns when `rules.dice.doublesExtraTurnEnabled` is true.
+- Added triple-doubles direct lockup behavior through the existing lockup authority, with no landing execution and no extra turn.
+- Added jailed-player `roll_dice` behavior: failed attempts, doubles release, max-attempt `payFineAndRelease`, insufficient-fine deterministic stay-locked behavior, and completed-turn semantics for failed attempts.
+- Added no-extra-turn suppression after jail release by doubles, forced fine payment, disabled-jail release, or held escape card.
+- Added extra-turn advancement that keeps the same current player without re-running start-turn loan interest or automatic repairs.
+- Added additive `roll_result` helper fields for `rollKind`, `jailRollAttemptCount`, and roll-time `playerEliminations`.
+- Added tests for doubles extra turns, triple doubles, jailed failed attempts, jailed release movement, max-attempt payment, insufficient fine, snapshot/reconnect jail state, all-locked turn progression, held-card suppression, and loan-interest timing.
+- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 892 passed, 0 failed, 0 skipped.
 
 Not included by explicit user scope:
 
@@ -51,25 +51,24 @@ Not included by explicit user scope:
 - Reconnect identity.
 - Authentication.
 - Unity client.
-- Extra turns on doubles.
-- Consecutive-doubles lockup behavior.
-- Jail roll behavior, realtime fine payment, max-turn aging, forced release behavior, doubles release, or extra turns.
+- Voluntary realtime pay-fine request UI/flow.
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
 - Realtime liquidation requests, UI, auto-liquidation, forced property transfer, auction liquidation, or any rewrite of the hard-elimination flow.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/EconomyRulesCalculator.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/MortgageManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PaymentObligation.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PropertyRuleHelpers.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/RaiseableCashResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/SolvencyAnalysisResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/SolvencyAnalyzer.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/EconomyRulesCalculatorTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/SolvencyAnalyzerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/PlayerTurnStateManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `docs/GAME_RULES_SPEC.md`
+- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
+- `docs/UNITY_INTEGRATION_CONTRACT.md`
 
 ## Previous Chunk Files
 
@@ -165,7 +164,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 847 passed, 0 failed, 0 skipped.
+  - Output summary: 892 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -201,9 +200,13 @@ Not included by explicit user scope:
 - `start_game` creates engine players from lobby players in current lobby order, with the first lobby player becoming the first current turn player through `TurnManager.StartFirstTurn`.
 - Started engine players use selected lobby profiles when present; unset profile fields still fall back to deterministic placeholders: username = `playerId`, token = `token_{playerId}`, color = `color_{playerId}`, starting money = `1500`, and current tile = board start tile.
 - `game_started` is a start acknowledgement only; it is not a gameplay snapshot protocol beyond the initial player/turn fields needed for this chunk.
-- `roll_dice` rolls dice and moves the current player only; players with Slimer move by `FirstDie` while non-slimed players move by the two-dice total.
-- `roll_result` contains the rolling `playerId`, two dice values, physical two-dice `total`, physical `isDouble`, landing tile ID as `newPosition`, `passedStart`, `hasRolledThisTurn`, and optional helper `movement` / `moneyDeltas`.
-- `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, or change `GamePhase`; successful rolls emit `dice_rolled`.
+- `roll_dice` rolls dice for the current player, applies lockup/doubles rules, moves only when the roll path allows movement, and applies Slimer movement by `FirstDie` while non-slimed movement uses the two-dice total.
+- `roll_result` contains the rolling `playerId`, two dice values, physical two-dice `total`, physical `isDouble`, landing tile ID as `newPosition`, `passedStart`, `hasRolledThisTurn`, optional `rollKind`, optional `jailRollAttemptCount`, and optional helper `movement` / `moneyDeltas` / `playerEliminations`.
+- Normal `roll_dice` does not resolve landing tiles, execute tile effects, start auctions, draw cards, advance turns, or change `GamePhase`; successful rolls emit `dice_rolled`.
+- A failed jail roll leaves the player locked, increments jail counters, performs no movement, and marks the turn complete so `end_turn` can advance.
+- A jail doubles release clears lockup, resets jail counters, moves by the physical dice total, resumes the normal resolve/execute flow, and suppresses doubles extra-turn behavior for that turn.
+- At `rules.jail.maxTurns`, `payFineAndRelease` attempts forced fine payment, releases and moves on success, or leaves the player locked with no deduction and a completed turn on insufficient cash.
+- Third consecutive doubles sends the player directly to `lockup_01`, skips pass-start and landing execution, resets the doubles streak, marks the turn complete, and grants no extra turn.
 - A second `roll_dice` in the same turn is rejected through `invalid_session_state` while `GameState.HasRolledThisTurn` is true.
 - `resolve_tile` passively classifies the current player's current tile only after `HasRolledThisTurn` is true.
 - `resolve_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, deterministic `requiresAction`, and string `actionKind`.
@@ -220,13 +223,13 @@ Not included by explicit user scope:
 - Card-tile errors `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` do not mutate session state and do not mark `GameState.HasExecutedTileThisTurn`.
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
-- `end_turn` requires a successful roll, resolve, execute, no active auction, and a non-eliminated current player before advancing.
+- `end_turn` requires a completed turn, no active auction, and a non-eliminated current player before advancing.
 - `end_turn_result` contains `previousPlayerId`, nullable `nextPlayerId`, `turnIndex` from the advanced `GameState.TurnNumber`, and optional `moneyDeltas` / `playerEliminations`.
 - Start-turn loan-interest deductions reported from `end_turn_result.moneyDeltas` use reason `loan_interest`; automatic property repair deductions use reason `property_repair`.
 - `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, locked current players before the completed-turn state through `player_locked`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
 - Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
 - If `execute_tile` eliminated the current player and the match completed, later gameplay requests return `game_already_completed`; if the match did not complete, `end_turn` still returns `player_eliminated` and does not advance.
-- Successful `end_turn` advances only through `TurnManager.AdvanceToNextTurn`, which resets turn flags and `ActiveAuctionState`, and the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
+- Successful `end_turn` advances through `TurnManager.AdvanceToNextTurn` for normal turn changes or `TurnManager.AdvanceToExtraTurn` for eligible doubles extra turns; the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
 - `end_turn` does not emit snapshots, finalize auctions, add persistence, add client behavior, or special-case eliminated players into a forced advance. Successful end-turn actions emit `turn_ended`.
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
 - `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
@@ -289,7 +292,7 @@ Not included by explicit user scope:
 - `CardResolutionActionKind.InvalidCard` is a safe resolver output for invalid or incomplete card definitions; WebSocket card execution returns `invalid_card` before persisting any draw, discard, execution flag, or player mutation.
 - `CardEffectExecutor` leaves unsupported or out-of-scope resolved card action kinds unchanged, and WebSocket card execution pre-filters those actions as `unsupported_card_action` before calling it.
 - Lockup uses the placeholder `lockup_01` tile ID only; there is no advanced jail location selection or custom board lookup beyond requiring that tile to exist.
-- `JailRules.PayToExitEnabled`, `JailRules.FineAmount`, `JailRules.MaxTurns`, and `JailRules.MaxTurnFailureAction` are serialized configuration. Fine-payment helpers exist for future wiring, but there is no realtime pay-fine request, max-turn aging, or forced release behavior yet.
+- `JailRules.PayToExitEnabled`, `JailRules.FineAmount`, `JailRules.MaxTurns`, and `JailRules.MaxTurnFailureAction` are serialized configuration. There is still no voluntary realtime pay-fine request, but max-attempt `payFineAndRelease` is wired into jailed roll handling.
 - Held get-out-of-lockup escapes are stored in `Player.HeldCardIds`; there is no separate inventory, token count, deck discard return, or persistence.
 - When `JailRules.EscapeCardsEnabled` is false, card execution does not grant held escape cards and `use_held_card` returns `held_cards_disabled` without mutation.
 - Using a get-out-of-lockup escape while not locked or without holding that escape returns a typed no-op result and leaves `GameState` unchanged.
@@ -336,14 +339,14 @@ Not included by explicit user scope:
 - Disconnect cleanup after game start does not remove engine players and clears only the matching current connection ID, so stale sockets closing after reconnect cannot erase the newer binding.
 - Lobby broadcasts exist only for accepted `set_profile` updates; broader join/leave/ready lobby broadcasts are still intentionally deferred.
 - Gameplay `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, `place_bid`, `finalize_auction`, and `take_loan` now keep direct request/response behavior and emit sequenced broadcasts after successful state changes. `get_snapshot` remains direct-only.
-- Roll execution is server-authoritative and reuses `DiceService` and `MovementManager` only.
-- Roll execution sets `GameState.HasRolledThisTurn = true` and `GameState.HasResolvedTileThisTurn = false` after movement and does not mutate `GamePhase`.
+- Roll execution is server-authoritative and reuses `DiceService`, `MovementManager`, `LockupManager`, and `PlayerTurnStateManager`.
+- Roll execution sets `GameState.HasRolledThisTurn = true` and does not mutate `GamePhase`; movement roll paths reset `GameState.HasResolvedTileThisTurn = false`, while no-movement jail/triple-doubles paths mark the turn complete.
 - Tile resolution is server-authoritative and reuses `TileResolver.ResolveCurrentTile` only.
 - Tile resolution sets only `GameState.HasResolvedTileThisTurn = true` after successful passive classification and does not mutate `GamePhase`.
 - Tile execution is server-authoritative and re-resolves the current tile through `TileResolver.ResolveCurrentTile` before executing supported effects.
 - Tile execution mutates only the narrow supported effect state: rent money/elimination via `PropertyManager`, active auction metadata, and `HasExecutedTileThisTurn`.
 - Tile execution does not mutate `GamePhase`; `ActiveAuctionState` is the only Phase 5.7 representation of auction presence.
-- End-turn execution is server-authoritative and reuses `TurnManager.AdvanceToNextTurn` only after the current player has rolled, resolved, and executed without an active auction.
+- End-turn execution is server-authoritative and reuses `TurnManager.AdvanceToNextTurn` for normal advancement or `TurnManager.AdvanceToExtraTurn` for eligible doubles extra turns after the current turn is complete without an active auction.
 - End-turn execution rejects an eliminated current player, including after rent execution eliminates that player.
 - End-turn execution uses strict session/player connection binding and does not allow one socket to end another player's turn.
 - `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are reset to false by the existing turn-start boundaries in `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn`.
@@ -381,8 +384,8 @@ Not included by explicit user scope:
 - `NextTurnInterestDue` is calculated from total borrowed and the stored current interest rate using integer money arithmetic, with `rules.loans.minimumInterestPayment` applied only when it is higher than the calculated interest.
 - Start-of-turn loan interest uses the same interest calculation and is skipped entirely when `rules.loans.loanSharkEnabled` is false.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` derive `LoanSharkConfig` from `GameState.Rules.Loans` and call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
-- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` can select locked active players when `GameState.Rules.Jail.Enabled` is true, so later jail turns are not stranded.
-- Chunk 1 still rejects locked-player `roll_dice`, `resolve_tile`, `execute_tile`, and pre-execution `end_turn` through existing `player_locked` request-layer behavior.
+- `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` can select locked active players when `GameState.Rules.Jail.Enabled` is true, so jail turns are not stranded.
+- Locked current players may `roll_dice` when `GameState.Rules.Jail.Enabled` is true; locked `resolve_tile` and `execute_tile` remain blocked unless the roll path released the player.
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.
 - Card definitions are passive metadata only: `Card`, `CardDeck`, `CardActionKind`, and `PlaceholderCardDeckFactory` do not mutate `GameState`.
@@ -454,7 +457,7 @@ Do not implement before its assigned chunk:
 - Debt recovery.
 - Asset liquidation.
 - Automatic card reshuffling.
-- Advanced jail/lockup rules beyond the simple status and escape consumption now in place, including disabled-jail behavior, fine payment, escape policy changes, max-turn aging, or release behavior.
+- Voluntary realtime pay-fine request and client UI for jail choices.
 - Upgrade sell/downgrade and house UI.
 - Trade offer expiry, trade timers, trade UI, multi-party trades, negotiation rounds, or multiple outgoing offers per proposer.
 - Taxes/fines money changes.

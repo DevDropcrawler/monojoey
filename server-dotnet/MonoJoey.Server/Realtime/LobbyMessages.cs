@@ -212,7 +212,13 @@ public sealed record RollResultPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     MovementPayload? Movement = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null);
+    IReadOnlyList<MoneyDeltaPayload>? MoneyDeltas = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RollKind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? JailRollAttemptCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
 
 public sealed record ResolveTileResultPayload(
     string PlayerId,

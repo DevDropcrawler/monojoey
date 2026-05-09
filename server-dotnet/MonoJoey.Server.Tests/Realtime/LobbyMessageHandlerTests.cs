@@ -1017,11 +1017,7 @@ public class LobbyMessageHandlerTests
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
         var started = StartReadyGame(sessionManager, handler);
         _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
-        _ = UpdateEnginePlayer(
-            sessionManager,
-            started.Session.SessionId,
-            "player_1",
-            player => player with { IsLockedUp = true });
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
 
         using var response = Handle(
             handler,
@@ -2558,11 +2554,7 @@ public class LobbyMessageHandlerTests
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
         var started = StartReadyGame(sessionManager, handler);
         _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "start");
-        _ = UpdateEnginePlayer(
-            sessionManager,
-            started.Session.SessionId,
-            "player_1",
-            player => player with { IsLockedUp = true });
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
 
         using var response = Handle(
             handler,
@@ -4304,6 +4296,42 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void UseHeldCard_ReleaseSuppressesDoublesExtraTurnForFollowingRoll()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 1));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""doublesExtraTurnEnabled"":true}");
+        var escapeId = new CardId("escape_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                CurrentTileId = new TileId("lockup_01"),
+                IsLockedUp = true,
+                HeldCardIds = new HashSet<CardId> { escapeId },
+            });
+        _ = handler.HandleTextMessage(
+            UseHeldCardMessage(started.Session.SessionId, "player_1", escapeId.Value),
+            started.FirstContext);
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+
+        Assert.Equal("player_2", payload.GetProperty("nextPlayerId").GetString());
+    }
+
+    [Fact]
     public void UseHeldCard_NonCurrentPlayerReturnsNotYourTurnWithoutMutation()
     {
         var sessionManager = new SessionManager();
@@ -5925,27 +5953,33 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
-    public void RollDice_LockedCurrentPlayerReturnsPlayerLocked()
+    public void RollDice_LockedCurrentPlayerRecordsFailedJailAttemptWithoutMovement()
     {
         var sessionManager = new SessionManager();
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
         var started = StartReadyGame(sessionManager, handler);
-        _ = UpdateEnginePlayer(
-            sessionManager,
-            started.Session.SessionId,
-            "player_1",
-            player => player with { IsLockedUp = true });
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
 
         using var response = Handle(
             handler,
             started.FirstContext,
             RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var afterRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
-        AssertError(response, "player_locked");
+        Assert.Equal("jail_failed_attempt", payload.GetProperty("rollKind").GetString());
+        Assert.False(payload.TryGetProperty("movement", out _));
+        Assert.Equal("lockup_01", payload.GetProperty("newPosition").GetString());
+        Assert.True(afterRoll.Players[0].IsLockedUp);
+        Assert.Equal(1, afterRoll.Players[0].TurnState.JailTurnCount);
+        Assert.Equal(1, afterRoll.Players[0].TurnState.JailRollAttemptCount);
+        Assert.True(afterRoll.HasRolledThisTurn);
+        Assert.True(afterRoll.HasResolvedTileThisTurn);
+        Assert.True(afterRoll.HasExecutedTileThisTurn);
     }
 
     [Fact]
-    public void EndTurn_CanAdvanceToLockedPlayerButRollStillReturnsPlayerLocked()
+    public void EndTurn_CanAdvanceToLockedPlayerAndFailedJailAttemptCanEndTurn()
     {
         var sessionManager = new SessionManager();
         var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
@@ -5979,12 +6013,244 @@ public class LobbyMessageHandlerTests
             handler,
             started.FirstContext,
             RollDiceMessage(started.Session.SessionId, "player_1"));
+        using var failedEndTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
         var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
-        var afterRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var failedEndTurnPayload = AssertResponseType(failedEndTurnResponse, "end_turn_result");
+        var afterFailedEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
         Assert.Equal("player_1", endTurnPayload.GetProperty("nextPlayerId").GetString());
-        Assert.Equal("player_1", afterRoll.CurrentTurnPlayerId?.Value);
-        AssertError(rollResponse, "player_locked");
+        Assert.Equal("jail_failed_attempt", AssertResponseType(rollResponse, "roll_result").GetProperty("rollKind").GetString());
+        Assert.Equal("player_2", failedEndTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("player_2", afterFailedEnd.CurrentTurnPlayerId?.Value);
+    }
+
+    [Fact]
+    public void EndTurn_DoubleRollGrantsExtraTurnWhenEnabledWithoutChargingLoanInterestAgain()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(3, 3));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""doublesExtraTurnEnabled"":true}");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                LoanState = new PlayerLoanState(new Money(100), 20, new Money(20), LoanTier: 1),
+            });
+        var beforeRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState.Players[0].Money;
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("player_1", payload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("player_1", afterEnd.CurrentTurnPlayerId?.Value);
+        Assert.Equal(2, afterEnd.TurnNumber);
+        Assert.Equal(beforeRoll, afterEnd.Players[0].Money);
+        Assert.Equal(1, afterEnd.Players[0].TurnState.ConsecutiveDoublesCount);
+    }
+
+    [Fact]
+    public void RollDice_ThirdConsecutiveDoubleSendsPlayerDirectlyToLockup()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(
+            sessionManager,
+            new QueueDiceRoller(
+                new DiceRoll(3, 3),
+                new DiceRoll(3, 3),
+                new DiceRoll(3, 3)));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""doublesExtraTurnEnabled"":true}");
+        _ = CompleteCurrentTurn(handler, started.FirstContext, started.Session.SessionId, "player_1");
+        _ = CompleteCurrentTurn(handler, started.FirstContext, started.Session.SessionId, "player_1");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var afterRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("triple_doubles_lockup", payload.GetProperty("rollKind").GetString());
+        Assert.Equal("lockup_01", payload.GetProperty("newPosition").GetString());
+        Assert.Equal("direct", payload.GetProperty("movement").GetProperty("movementKind").GetString());
+        Assert.True(afterRoll.Players[0].IsLockedUp);
+        Assert.Equal(0, afterRoll.Players[0].TurnState.ConsecutiveDoublesCount);
+        Assert.True(afterRoll.HasRolledThisTurn);
+        Assert.True(afterRoll.HasResolvedTileThisTurn);
+        Assert.True(afterRoll.HasExecutedTileThisTurn);
+    }
+
+    [Fact]
+    public void RollDice_JailedDoublesReleaseMovesAndDoesNotGrantExtraTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 1));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""dice"":{""doublesExtraTurnEnabled"":true}");
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var rollResponse = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        _ = handler.HandleTextMessage(ResolveTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var rollPayload = AssertResponseType(rollResponse, "roll_result");
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("jail_doubles_release", rollPayload.GetProperty("rollKind").GetString());
+        Assert.Equal("start", rollPayload.GetProperty("newPosition").GetString());
+        Assert.False(afterEnd.Players[0].IsLockedUp);
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("player_2", afterEnd.CurrentTurnPlayerId?.Value);
+    }
+
+    [Fact]
+    public void RollDice_MaxFailedJailAttemptPaysFineReleasesAndMoves()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""jail"":{""maxTurns"":1,""fineAmount"":50,""payToExitEnabled"":false,""maxTurnFailureAction"":""payFineAndRelease""}");
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "roll_result");
+        var afterRoll = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("jail_max_attempts_paid_release", payload.GetProperty("rollKind").GetString());
+        Assert.Equal("property_01", payload.GetProperty("newPosition").GetString());
+        Assert.Equal(1650, afterRoll.Players[0].Money.Amount);
+        Assert.False(afterRoll.Players[0].IsLockedUp);
+        Assert.Equal(0, afterRoll.Players[0].TurnState.JailRollAttemptCount);
+        Assert.Equal("paid_fine", afterRoll.Players[0].TurnState.LastJailReleaseReason);
+        Assert.Equal(
+            new[] { "jail_fine", "pass_start" },
+            payload.GetProperty("moneyDeltas").EnumerateArray().Select(delta => delta.GetProperty("reason").GetString()).ToArray());
+    }
+
+    [Fact]
+    public void RollDice_MaxFailedJailAttemptWithInsufficientFineStaysLockedAndCanEndTurn()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(
+            sessionManager,
+            handler,
+            @"""jail"":{""maxTurns"":1,""fineAmount"":50,""maxTurnFailureAction"":""payFineAndRelease""}");
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with { Money = new Money(10) });
+
+        using var rollResponse = Handle(
+            handler,
+            started.FirstContext,
+            RollDiceMessage(started.Session.SessionId, "player_1"));
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        var rollPayload = AssertResponseType(rollResponse, "roll_result");
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("jail_max_attempts_fine_unpaid", rollPayload.GetProperty("rollKind").GetString());
+        Assert.True(afterEnd.Players[0].IsLockedUp);
+        Assert.Equal(new Money(10), afterEnd.Players[0].Money);
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+    }
+
+    [Fact]
+    public void SnapshotAndReconnect_IncludeJailAttemptStateAfterFailedLockedRoll()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+
+        using var snapshotResponse = Handle(
+            handler,
+            started.FirstContext,
+            GetSnapshotMessage(started.Session.SessionId, "player_1"));
+        using var reconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_1"));
+        var snapshotPlayer = AssertResponseType(snapshotResponse, "snapshot_result")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+        var reconnectPlayer = AssertResponseType(reconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .First(player => player.GetProperty("playerId").GetString() == "player_1");
+
+        Assert.True(snapshotPlayer.GetProperty("isLockedUp").GetBoolean());
+        Assert.Equal(1, snapshotPlayer.GetProperty("jailTurnCount").GetInt32());
+        Assert.Equal(1, snapshotPlayer.GetProperty("jailRollAttemptCount").GetInt32());
+        Assert.True(reconnectPlayer.GetProperty("isLockedUp").GetBoolean());
+        Assert.Equal(1, reconnectPlayer.GetProperty("jailTurnCount").GetInt32());
+        Assert.Equal(1, reconnectPlayer.GetProperty("jailRollAttemptCount").GetInt32());
+    }
+
+    [Fact]
+    public void EndTurn_AllLockedPlayersContinueReceivingJailTurns()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_1");
+        _ = LockCurrentPlayer(sessionManager, started.Session.SessionId, "player_2");
+        _ = handler.HandleTextMessage(RollDiceMessage(started.Session.SessionId, "player_1"), started.FirstContext);
+
+        using var endTurnResponse = Handle(
+            handler,
+            started.FirstContext,
+            EndTurnMessage(started.Session.SessionId, "player_1"));
+        using var player2RollResponse = Handle(
+            handler,
+            started.SecondContext,
+            RollDiceMessage(started.Session.SessionId, "player_2"));
+        var endTurnPayload = AssertResponseType(endTurnResponse, "end_turn_result");
+        var player2RollPayload = AssertResponseType(player2RollResponse, "roll_result");
+
+        Assert.Equal("player_2", endTurnPayload.GetProperty("nextPlayerId").GetString());
+        Assert.Equal("jail_failed_attempt", player2RollPayload.GetProperty("rollKind").GetString());
     }
 
     [Fact]
@@ -6465,6 +6731,36 @@ public class LobbyMessageHandlerTests
             secondContext);
     }
 
+    private static bool CompleteCurrentTurn(
+        LobbyMessageHandler handler,
+        LobbyConnectionContext context,
+        string sessionId,
+        string playerId)
+    {
+        _ = handler.HandleTextMessage(RollDiceMessage(sessionId, playerId), context);
+        _ = handler.HandleTextMessage(ResolveTileMessage(sessionId, playerId), context);
+        _ = handler.HandleTextMessage(ExecuteTileMessage(sessionId, playerId), context);
+        _ = handler.HandleTextMessage(EndTurnMessage(sessionId, playerId), context);
+
+        return true;
+    }
+
+    private static GameSession LockCurrentPlayer(
+        SessionManager sessionManager,
+        string sessionId,
+        string playerId)
+    {
+        return UpdateEnginePlayer(
+            sessionManager,
+            sessionId,
+            playerId,
+            player => player with
+            {
+                CurrentTileId = new TileId("lockup_01"),
+                IsLockedUp = true,
+            });
+    }
+
     private static GameSession UpdateEnginePlayer(
         SessionManager sessionManager,
         string sessionId,
@@ -6932,6 +7228,21 @@ public class LobbyMessageHandlerTests
         public DiceRoll Roll(int sidesPerDie)
         {
             return diceRoll;
+        }
+    }
+
+    private sealed class QueueDiceRoller : IDiceRoller
+    {
+        private readonly Queue<DiceRoll> diceRolls;
+
+        public QueueDiceRoller(params DiceRoll[] diceRolls)
+        {
+            this.diceRolls = new Queue<DiceRoll>(diceRolls);
+        }
+
+        public DiceRoll Roll(int sidesPerDie)
+        {
+            return diceRolls.Dequeue();
         }
     }
 

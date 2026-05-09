@@ -17,6 +17,20 @@ public static class PlayerTurnStateManager
             });
     }
 
+    public static GameState ApplyFailedJailRoll(GameState gameState, PlayerId playerId)
+    {
+        return UpdatePlayerTurnState(
+            gameState,
+            playerId,
+            turnState => turnState with
+            {
+                JailTurnCount = turnState.JailTurnCount + 1,
+                JailRollAttemptCount = turnState.JailRollAttemptCount + 1,
+                ConsecutiveDoublesCount = 0,
+                LastJailReleaseReason = null,
+            });
+    }
+
     public static GameState ResetConsecutiveDoubles(GameState gameState, PlayerId playerId)
     {
         return UpdatePlayerTurnState(

@@ -93,10 +93,10 @@ These are planning identifiers for the editable surface. They do not require Pha
 | `auction.startingBid` | Auctions | integer | 0 | true | conditional | conditional | Min 0 | Current implementation default is 0. Applies only before an auction starts. |
 | `jail.enabled` | The Joey Hole | boolean | true | true | false | locked | boolean | Player-facing name is "The Joey Hole"; backend internals currently remain `Rules.Jail`, `JailRules`, and JSON `jail`. Lockup state affects turn eligibility and held escape cards. |
 | `jail.escapeCardsEnabled` | The Joey Hole | boolean | true | true | conditional | conditional | boolean | Only safe before relevant held-card or deck references exist. |
-| `jail.payToExitEnabled` | The Joey Hole | boolean | true | true | false | locked | boolean | Runtime helper support exists, but no realtime pay-fine request is implemented yet. |
-| `jail.fineAmount` | The Joey Hole | integer | 50 | true | false | locked | Min 0 | Runtime helper support exists, but no realtime fine payment behavior is wired yet. |
-| `jail.maxTurns` | The Joey Hole | integer | 3 | true | false | locked | Min 1 | Schema/config-only in this chunk; no turn aging or release behavior is implemented yet. |
-| `jail.maxTurnFailureAction` | The Joey Hole | string | `payFineAndRelease` | true | false | locked | Known value: `payFineAndRelease` | Schema/config-only in this chunk; max-attempt handling is not wired yet. |
+| `jail.payToExitEnabled` | The Joey Hole | boolean | true | true | false | locked | boolean | Controls voluntary fine-payment eligibility. Max-attempt forced payment still follows `jail.maxTurnFailureAction`. No separate realtime pay-fine request exists yet. |
+| `jail.fineAmount` | The Joey Hole | integer | 50 | true | false | locked | Min 0 | Used by lockup fine helpers and max-attempt `payFineAndRelease` runtime behavior. |
+| `jail.maxTurns` | The Joey Hole | integer | 3 | true | false | locked | Min 1 | Locked players may roll on jail turns. Failed jail rolls increment attempt counters until this limit. |
+| `jail.maxTurnFailureAction` | The Joey Hole | string | `payFineAndRelease` | true | false | locked | Known value: `payFineAndRelease` | At the configured max attempts, the current runtime attempts forced fine payment and release. Insufficient cash leaves the player locked with a completed turn. |
 | `dice.diceCount` | Dice & Movement | integer | 2 | true | false | locked | Min 1 | Dice metadata and doubles behavior depend on this. |
 | `dice.sidesPerDie` | Dice & Movement | integer | 6 | true | false | locked | Min 2 | Movement and probability expectations depend on this. |
 | `movement.resolveLandingAfterCardMove` | Dice & Movement | boolean | card-defined | true | false | locked | boolean or card-defined | Runtime effect must come from validated card parameters. |
