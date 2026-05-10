@@ -288,6 +288,32 @@ public class LoanManagerTests
         Assert.Null(result.GameState.Players[0].LoanState);
     }
 
+    [Fact]
+    public void TakeLoan_WhenConfigDisabledRejectsWithoutMutation()
+    {
+        var playerId = new PlayerId("player_1");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(100),
+            CurrentInterestRatePercent: 20,
+            NextTurnInterestDue: new Money(20),
+            LoanTier: 1);
+        var gameState = CreateGameState(CreatePlayer("player_1", money: 1500, loanState: loanState));
+        var config = DefaultLoanConfig with { Enabled = false };
+
+        var result = LoanManager.TakeLoan(
+            gameState,
+            playerId,
+            new Money(100),
+            BorrowPurpose.RentPayment,
+            config);
+
+        Assert.False(result.LoanTaken);
+        Assert.Equal(LoanTakeResultKind.LoanModeDisabled, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Equal(new Money(1500), result.GameState.Players[0].Money);
+        Assert.Same(loanState, result.GameState.Players[0].LoanState);
+    }
+
     [Theory]
     [InlineData(BorrowPurpose.AuctionBid)]
     [InlineData(BorrowPurpose.RentPayment)]

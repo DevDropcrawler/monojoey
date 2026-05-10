@@ -20,5 +20,6 @@ public enum LoanTakeResultKind
     PlayerNotInGame,
     PlayerEliminated,
     InvalidAmount,
+    LoanModeDisabled,
     DisallowedBorrowPurpose,
 }

@@ -3957,6 +3957,9 @@ public sealed class LobbyMessageHandler
             LoanTakeResultKind.InvalidAmount => CreateError(
                 LobbyErrorCodes.InvalidLoanAmount,
                 loanResult.Message),
+            LoanTakeResultKind.LoanModeDisabled => CreateError(
+                LobbyErrorCodes.LoanModeDisabled,
+                loanResult.Message),
             LoanTakeResultKind.DisallowedBorrowPurpose => CreateError(
                 LobbyErrorCodes.LoanReasonBlocked,
                 loanResult.Message),

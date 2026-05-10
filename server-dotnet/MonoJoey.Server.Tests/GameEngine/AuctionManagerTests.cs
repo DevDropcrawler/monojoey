@@ -404,6 +404,35 @@ public class AuctionManagerTests
     }
 
     [Fact]
+    public void PlaceBid_DoesNotTreatLoanStateAsAuctionAffordability()
+    {
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(1000),
+            CurrentInterestRatePercent: 50,
+            NextTurnInterestDue: new Money(500),
+            LoanTier: 3);
+        var bidder = CreatePlayer("player_2", "start", money: 10) with { LoanState = loanState };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            bidder);
+        var auctionState = StartAuction(gameState);
+
+        var result = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(11),
+            FirstBidTime);
+
+        Assert.False(result.BidAccepted);
+        Assert.Equal(AuctionBidResultKind.BidderCannotCoverBid, result.ResultKind);
+        Assert.Same(auctionState, result.AuctionState);
+        Assert.Empty(result.AuctionState.Bids);
+        Assert.Same(loanState, gameState.Players[1].LoanState);
+        Assert.Equal(new Money(10), gameState.Players[1].Money);
+    }
+
+    [Fact]
     public void PlaceBid_AcceptsBidCoveredByUpgradeSaleAndMortgageValue()
     {
         var bidderId = new PlayerId("player_2");
@@ -691,9 +720,14 @@ public class AuctionManagerTests
     {
         var auctionedTileId = new TileId("property_01");
         var mortgagedTileId = new TileId("property_03");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: new Money(60),
+            LoanTier: 2);
         var gameState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
-            CreatePlayer("player_2", "start", money: 10, "property_03"));
+            CreatePlayer("player_2", "start", money: 10, "property_03") with { LoanState = loanState });
         var auctionState = StartAuction(gameState);
         var bidState = AuctionManager.PlaceBid(
             gameState,
@@ -715,6 +749,7 @@ public class AuctionManagerTests
         Assert.Contains(auctionedTileId, result.GameState.Players[1].OwnedPropertyIds);
         Assert.True(result.GameState.PropertyStates[mortgagedTileId].Data.IsMortgaged);
         Assert.Same(bidState, result.GameState.ActiveAuctionState);
+        Assert.Same(loanState, result.GameState.Players[1].LoanState);
     }
 
     [Fact]

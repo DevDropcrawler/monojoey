@@ -88,6 +88,18 @@ public static class LoanManager
                 "Loan amount must be positive.");
         }
 
+        if (!config.Enabled)
+        {
+            return LoanRejected(
+                LoanTakeResultKind.LoanModeDisabled,
+                gameState,
+                playerId,
+                amount,
+                purpose,
+                player.LoanState,
+                "Loan Shark mode is disabled.");
+        }
+
         if (!IsBorrowPurposeAllowed(purpose, config))
         {
             return LoanRejected(

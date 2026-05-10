@@ -247,6 +247,38 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void AdvanceToExtraTurn_DoesNotChargeLoanInterestOrRepairProperties()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateGameState("player_1", "player_2") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer(
+                    "player_1",
+                    new TileId("start"),
+                    loanState: new PlayerLoanState(new Money(100), 20, new Money(20), LoanTier: 1),
+                    ownedPropertyIds: new[] { "property_01" }),
+                CreatePlayer("player_2", new TileId("start")),
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(20)),
+            },
+        };
+
+        var extraTurn = TurnManager.AdvanceToExtraTurn(gameState);
+
+        Assert.Equal("player_1", extraTurn.CurrentTurnPlayerId?.Value);
+        Assert.Equal(2, extraTurn.TurnNumber);
+        Assert.Equal(new Money(1500), extraTurn.Players[0].Money);
+        Assert.Equal(new Money(20), extraTurn.Players[0].LoanState?.NextTurnInterestDue);
+        Assert.Equal(20, extraTurn.PropertyStates[property01].Data.DamagePercent);
+    }
+
+    [Fact]
     public void AdvanceToNextTurn_RepairsNextPlayersPropertiesAfterLoanInterest()
     {
         var property02 = new TileId("property_02");

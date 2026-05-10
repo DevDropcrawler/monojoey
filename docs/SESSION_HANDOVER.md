@@ -5,12 +5,12 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Deterministic Liquidation Visibility + Payout Event Exposure
-- Completion status: Realtime tax/card eliminations now include `paymentDue` when the due amount is known; auction finalization helper tests cover cash, mortgage liquidation, upgrade-sale-plus-mortgage liquidation, failed liquidation omission, no-sale omission, and terminal broadcast ordering.
-- Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; local has this chunk implemented, validated, and committed.
+- Chunk: Loan Shark Integration Sequencing Hardening
+- Completion status: Loan Shark borrowing is now defensively rejected at the engine boundary when disabled, and regression coverage pins LoanState isolation from solvency, auction affordability, liquidation execution, extra turns, and unresolved tile payment flow.
+- Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; local has this chunk implemented and validated but not committed.
 - Previous commit: `748a2b3`
 - Last commit before this chunk: `748a2b3`
-- Last commit after this chunk: this commit (`phase-5-liquidation-visibility: expose liquidation helpers`)
+- Last commit after this chunk: not committed
 - Date/time: 2026-05-10
 
 ## Docs Planning Note
@@ -19,15 +19,15 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Deterministic Liquidation Visibility + Payout Event Exposure.
+Loan Shark Integration Sequencing Hardening.
 
 Completed:
 
-- Added `paymentDue` to diff-based tax/card elimination helper payloads when the payment amount is already known.
-- Preserved failed-liquidation omission semantics: failed liquidation payloads do not expose `liquidationSteps` or payout `moneyDeltas`, and no partial mortgage/upgrade mutation persists.
-- Added auction finalization realtime coverage for cash-only payment, mortgage liquidation, upgrade sale followed by mortgage, failed payment, and no-sale helper omission.
-- Added WebSocket sequencing coverage proving terminal auction finalization sends direct `auction_result`, then `auction_finalized` at sequence `N`, then `game_completed` at `N + 1`.
-- Updated multiplayer/Unity protocol docs to list `liquidationSteps`, liquidation step kinds, and liquidation money delta reasons.
+- Added engine-level disabled Loan Shark rejection in `LoanManager.TakeLoan`, mapped to the existing realtime `loan_mode_disabled` error.
+- Added solvency and auction coverage proving `Player.LoanState` is not available cash and untaken loans do not satisfy auction affordability.
+- Added liquidation coverage proving payment execution does not create or mutate loan state.
+- Added turn-flow coverage proving extra turns do not run start-turn loan interest or automatic property repair.
+- Added realtime coverage proving manual `take_loan` during unresolved tile flow only mutates cash plus loan state and does not execute payment/liquidation.
 
 Not included by explicit user scope:
 
@@ -52,15 +52,20 @@ Not included by explicit user scope:
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
 - Realtime liquidation requests, UI, auto-liquidation outside auction finalization, forced property transfer, or any rewrite of the hard-elimination flow.
+- Any change to `GamePhase`, snapshot DTOs/version, ownership authority, mortgage authority, auction authority, Slimer/status effects, Earthquake/property repair behavior, or card execution.
 
 ## Files Changed In This Chunk
 
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LiquidationExecutionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/SolvencyAnalyzerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
-- `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
-- `docs/UNITY_INTEGRATION_CONTRACT.md`
 
 ## Previous Chunk Files
 
@@ -154,9 +159,12 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
+- `dotnet test server-dotnet\MonoJoey.sln -v minimal --filter "Loan|Solvency|Auction|Liquidation|Turn"`
+  - Result: succeeded.
+  - Output summary: 473 passed, 0 failed, 0 skipped.
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 919 passed, 0 failed, 0 skipped.
+  - Output summary: 924 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 

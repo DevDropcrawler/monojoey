@@ -45,7 +45,12 @@ public class LiquidationExecutionManagerTests
     [Fact]
     public void ExecutePaymentObligation_PaysBankObligationAfterLiquidation()
     {
-        var gameState = CreateGameState(CreatePlayer("player_1", 10, "property_03"));
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(200),
+            CurrentInterestRatePercent: 30,
+            NextTurnInterestDue: new Money(60),
+            LoanTier: 2);
+        var gameState = CreateGameState(CreatePlayer("player_1", 10, "property_03") with { LoanState = loanState });
 
         var result = LiquidationExecutionManager.ExecutePaymentObligation(
             gameState,
@@ -59,6 +64,7 @@ public class LiquidationExecutionManagerTests
         Assert.Equal(new Money(50), result.Steps[0].Amount);
         Assert.Equal(Money.Zero, result.DebtorBalance);
         Assert.True(result.GameState.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+        Assert.Same(loanState, result.GameState.Players[0].LoanState);
     }
 
     [Fact]
@@ -202,11 +208,16 @@ public class LiquidationExecutionManagerTests
     public void ExecutePaymentObligation_ReturnsOriginalStateWhenAssetsCannotCover()
     {
         var property03 = new TileId("property_03");
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(1000),
+            CurrentInterestRatePercent: 50,
+            NextTurnInterestDue: new Money(500),
+            LoanTier: 3);
         var propertyStates = new Dictionary<TileId, PropertyState>
         {
             [property03] = new(property03, new PropertyStateData(damagePercent: 15)),
         };
-        var gameState = CreateGameState(CreatePlayer("player_1", 5, "property_03")) with
+        var gameState = CreateGameState(CreatePlayer("player_1", 5, "property_03") with { LoanState = loanState }) with
         {
             PropertyStates = propertyStates,
         };
@@ -219,6 +230,7 @@ public class LiquidationExecutionManagerTests
         Assert.Same(gameState, result.GameState);
         Assert.Same(propertyStates, result.GameState.PropertyStates);
         Assert.Equal(new Money(5), result.GameState.Players[0].Money);
+        Assert.Same(loanState, result.GameState.Players[0].LoanState);
         Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
     }
 

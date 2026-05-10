@@ -90,6 +90,27 @@ public class SolvencyAnalyzerTests
         Assert.Equal(new Money(25), result.Shortfall);
     }
 
+    [Fact]
+    public void Analyze_DoesNotTreatLoanStateAsAvailableCash()
+    {
+        var loanState = new PlayerLoanState(
+            TotalBorrowed: new Money(1000),
+            CurrentInterestRatePercent: 50,
+            NextTurnInterestDue: new Money(500),
+            LoanTier: 3);
+        var gameState = CreateGameState(CreatePlayer("player_1", 10) with { LoanState = loanState });
+
+        var result = SolvencyAnalyzer.Analyze(
+            gameState,
+            BankObligation("player_1", 100, PaymentObligationKind.AuctionPayment));
+
+        Assert.Equal(SolvencyAnalysisResultKind.Insolvent, result.ResultKind);
+        Assert.Equal(new Money(10), result.CashOnHand);
+        Assert.Equal(new Money(10), result.TotalAvailable);
+        Assert.Equal(new Money(90), result.Shortfall);
+        Assert.Same(loanState, gameState.Players[0].LoanState);
+    }
+
     [Theory]
     [InlineData("missing", SolvencyAnalysisResultKind.PlayerNotInGame)]
     [InlineData("bankrupt", SolvencyAnalysisResultKind.PlayerBankrupt)]

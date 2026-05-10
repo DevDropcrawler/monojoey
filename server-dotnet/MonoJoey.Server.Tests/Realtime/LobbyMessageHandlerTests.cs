@@ -3956,6 +3956,53 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void TakeLoan_DuringUnresolvedTileDoesNotExecutePaymentOrLiquidation()
+    {
+        var property03 = new TileId("property_03");
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = true,
+                HasExecutedTileThisTurn = false,
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            Money = new Money(10),
+                            OwnedPropertyIds = new HashSet<TileId> { property03 },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property03] = new(property03, new PropertyStateData()),
+                },
+            });
+        var beforeLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            TakeLoanMessage(started.Session.SessionId, "player_1", 50, "rent_payment"));
+        var afterLoan = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        AssertResponseType(response, "loan_result");
+        Assert.True(afterLoan.HasRolledThisTurn);
+        Assert.True(afterLoan.HasResolvedTileThisTurn);
+        Assert.False(afterLoan.HasExecutedTileThisTurn);
+        Assert.Equal(new Money(60), afterLoan.Players[0].Money);
+        Assert.Equal(new Money(50), afterLoan.Players[0].LoanState?.TotalBorrowed);
+        Assert.False(afterLoan.PropertyStates[property03].Data.IsMortgaged);
+        Assert.Equal(beforeLoan.Players[0].OwnedPropertyIds, afterLoan.Players[0].OwnedPropertyIds);
+    }
+
+    [Fact]
     public void CreateTradeOffer_AllowsOneOutgoingOfferPerProposer()
     {
         var sessionManager = new SessionManager();
