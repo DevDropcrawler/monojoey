@@ -318,7 +318,9 @@ public sealed record AuctionResultPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<PropertyOwnershipChangePayload>? PropertyOwnershipChanges = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<LiquidationStepPayload>? LiquidationSteps = null);
 
 public sealed record LoanResultPayload(
     string PlayerId,

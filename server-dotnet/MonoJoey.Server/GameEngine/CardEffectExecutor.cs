@@ -94,6 +94,18 @@ public static class CardEffectExecutor
                 CardId: cardResolution.CardId);
     }
 
+    public static MultiCreditorPaymentObligation? CreateMultiCreditorPaymentObligation(
+        CardResolutionResult cardResolution)
+    {
+        return cardResolution.ActionKind != CardResolutionActionKind.PayMoneyToEveryPlayer
+            ? null
+            : new MultiCreditorPaymentObligation(
+                cardResolution.PlayerId,
+                RequireAmount(cardResolution),
+                PaymentObligationKind.CardPayment,
+                CardId: cardResolution.CardId);
+    }
+
     private static CardEffectExecutionResult MoveToStart(GameState gameState, CardResolutionResult cardResolution)
     {
         var steps = CalculateForwardStepsToTile(gameState, cardResolution.PlayerId, StartTileId);

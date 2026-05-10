@@ -372,6 +372,171 @@ public class LiquidationExecutionManagerTests
         AssertUnresolvedTileExecutionPreserved(result.GameState);
     }
 
+    [Fact]
+    public void ExecutePaymentObligation_AuctionPaymentAllowsMatchingActiveAuctionLiquidation()
+    {
+        var auctionState = CreateAuctionState() with
+        {
+            PropertyTileId = new TileId("property_01"),
+            Bids = new[] { new AuctionBid(new PlayerId("player_1"), new Money(60), DateTimeOffset.Parse("2026-04-26T00:00:01+00:00")) },
+            HighestBid = new Money(60),
+            HighestBidderId = new PlayerId("player_1"),
+        };
+        var gameState = CreateGameState(CreatePlayer("player_1", 10, "property_03")) with
+        {
+            ActiveAuctionState = auctionState,
+        };
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            new PaymentObligation(
+                new PlayerId("player_1"),
+                new Money(60),
+                PaymentObligationKind.AuctionPayment,
+                PaymentObligationCreditor.Bank,
+                new TileId("property_01")),
+            LiquidationExecutionContext.AuctionPayment);
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(
+            new[] { LiquidationStepKind.Mortgage, LiquidationStepKind.BankPayment },
+            result.Steps.Select(step => step.StepKind).ToArray());
+        Assert.Same(auctionState, result.GameState.ActiveAuctionState);
+        Assert.True(result.GameState.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_AuctionPaymentRejectsMismatchedActiveAuction()
+    {
+        var auctionState = CreateAuctionState() with
+        {
+            PropertyTileId = new TileId("property_01"),
+            Bids = new[] { new AuctionBid(new PlayerId("player_2"), new Money(60), DateTimeOffset.Parse("2026-04-26T00:00:01+00:00")) },
+            HighestBid = new Money(60),
+            HighestBidderId = new PlayerId("player_2"),
+        };
+        var gameState = CreateGameState(CreatePlayer("player_1", 100)) with
+        {
+            ActiveAuctionState = auctionState,
+        };
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            new PaymentObligation(
+                new PlayerId("player_1"),
+                new Money(60),
+                PaymentObligationKind.AuctionPayment,
+                PaymentObligationCreditor.Bank,
+                new TileId("property_01")),
+            LiquidationExecutionContext.AuctionPayment);
+
+        Assert.Equal(LiquidationExecutionResultKind.ActiveAuction, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_AuctionPaymentSellsUpgradesBeforeMortgagesInTileOrder()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var auctionState = CreateAuctionState() with
+        {
+            PropertyTileId = new TileId("property_03"),
+            Bids = new[] { new AuctionBid(new PlayerId("player_1"), new Money(80), DateTimeOffset.Parse("2026-04-26T00:00:01+00:00")) },
+            HighestBid = new Money(80),
+            HighestBidderId = new PlayerId("player_1"),
+        };
+        var gameState = CreateGameState(CreatePlayer("player_1", 0, "property_01", "property_02")) with
+        {
+            ActiveAuctionState = auctionState,
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                [property02] = new(property02, new PropertyStateData(upgradeLevel: 1)),
+            },
+        };
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            new PaymentObligation(
+                new PlayerId("player_1"),
+                new Money(80),
+                PaymentObligationKind.AuctionPayment,
+                PaymentObligationCreditor.Bank,
+                new TileId("property_03")),
+            LiquidationExecutionContext.AuctionPayment);
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(
+            new[]
+            {
+                (LiquidationStepKind.UpgradeSale, "property_01"),
+                (LiquidationStepKind.UpgradeSale, "property_02"),
+                (LiquidationStepKind.Mortgage, "property_01"),
+                (LiquidationStepKind.BankPayment, (string?)null),
+            },
+            result.Steps.Select(step => (step.StepKind, step.PropertyTileId?.Value)).ToArray());
+    }
+
+    [Fact]
+    public void ExecuteMultiCreditorPaymentObligation_PaysActiveCreditorsInPlayerOrder()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", 100),
+            CreatePlayer("player_3", 50),
+            CreatePlayer("player_2", 60),
+            CreatePlayer("player_4", 70) with { IsEliminated = true });
+
+        var result = LiquidationExecutionManager.ExecuteMultiCreditorPaymentObligation(
+            gameState,
+            new MultiCreditorPaymentObligation(
+                new PlayerId("player_1"),
+                new Money(10),
+                PaymentObligationKind.CardPayment,
+                CardId: new CardId("card_pay_all")));
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(new[] { "player_3", "player_2" }, result.CreditorPlayerIds.Select(playerId => playerId.Value).ToArray());
+        Assert.Equal(new[] { "player_3", "player_2" }, result.Steps.Select(step => step.CreditorPlayerId?.Value).ToArray());
+        Assert.Equal(new Money(80), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(60), result.GameState.Players[1].Money);
+        Assert.Equal(new Money(70), result.GameState.Players[2].Money);
+        Assert.Equal(new Money(70), result.GameState.Players[3].Money);
+    }
+
+    [Fact]
+    public void ExecuteMultiCreditorPaymentObligation_ReturnsOriginalStateWhenAssetsCannotCover()
+    {
+        var property03 = new TileId("property_03");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [property03] = new(property03, new PropertyStateData()),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", 5, "property_03"),
+            CreatePlayer("player_2", 50),
+            CreatePlayer("player_3", 60)) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = LiquidationExecutionManager.ExecuteMultiCreditorPaymentObligation(
+            gameState,
+            new MultiCreditorPaymentObligation(
+                new PlayerId("player_1"),
+                new Money(30),
+                PaymentObligationKind.CardPayment,
+                CardId: new CardId("card_pay_all")));
+
+        Assert.Equal(LiquidationExecutionResultKind.Insolvent, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
+        Assert.Equal(new Money(5), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(50), result.GameState.Players[1].Money);
+        Assert.Equal(new Money(60), result.GameState.Players[2].Money);
+        Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
+    }
+
     [Theory]
     [InlineData("missing_debtor", LiquidationExecutionResultKind.DebtorNotInGame)]
     [InlineData("bankrupt_debtor", LiquidationExecutionResultKind.DebtorBankrupt)]

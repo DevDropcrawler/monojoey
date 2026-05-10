@@ -10,6 +10,7 @@ public sealed record AuctionFinalizationResult(
     PlayerId? WinnerId,
     Money? WinningBid,
     PlayerEliminationResult? EliminationResult,
+    LiquidationExecutionResult? PaymentLiquidation,
     string Message)
 {
     public bool FinalizedWithWinner => ResultKind == AuctionFinalizationResultKind.FinalizedWithWinner;

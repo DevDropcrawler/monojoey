@@ -2641,13 +2641,28 @@ public sealed class LobbyMessageHandler
         }
 
         var cardObligation = CardEffectExecutor.CreateSingleDebtorBankPaymentObligation(gameState, cardResolution);
+        var multiCreditorObligation = CardEffectExecutor.CreateMultiCreditorPaymentObligation(cardResolution);
         var liquidation = cardObligation is null
             ? null
             : LiquidationExecutionManager.ExecutePaymentObligation(
                 gameState,
                 cardObligation,
                 LiquidationExecutionContext.TileExecutionPayment);
-        var executionResult = liquidation?.PaymentExecuted == true
+        var multiCreditorLiquidation = multiCreditorObligation is null
+            ? null
+            : LiquidationExecutionManager.ExecuteMultiCreditorPaymentObligation(
+                gameState,
+                multiCreditorObligation,
+                LiquidationExecutionContext.TileExecutionPayment);
+        var executionResult = multiCreditorLiquidation?.PaymentExecuted == true
+            ? new CardEffectExecutionResult(multiCreditorLiquidation.GameState)
+            : multiCreditorLiquidation?.ResultKind == LiquidationExecutionResultKind.Insolvent
+                ? new CardEffectExecutionResult(
+                    BankruptcyManager.EliminateForFailedPayment(
+                        gameState,
+                        multiCreditorLiquidation.Obligation.DebtorPlayerId,
+                        multiCreditorLiquidation.AmountDue).GameState)
+                : liquidation?.PaymentExecuted == true
             ? new CardEffectExecutionResult(liquidation.GameState)
             : CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
         var executedGameState = executionResult.GameState;
@@ -2687,6 +2702,8 @@ public sealed class LobbyMessageHandler
                     executionResult.MovementResult),
                 moneyDeltas: liquidation?.PaymentExecuted == true
                     ? CreateLiquidationMoneyDeltas(liquidation, "card", persistence.Session.GameState)
+                    : multiCreditorLiquidation?.PaymentExecuted == true
+                        ? CreateLiquidationMoneyDeltas(multiCreditorLiquidation, "card", persistence.Session.GameState)
                     : CreateMoneyDeltasFromDiff(
                         gameState,
                         persistence.Session.GameState,
@@ -2696,7 +2713,9 @@ public sealed class LobbyMessageHandler
                     gameState,
                     persistence.Session.GameState,
                     "card_payment"),
-                liquidationSteps: CreateLiquidationStepPayloads(liquidation));
+                liquidationSteps: liquidation?.PaymentExecuted == true
+                    ? CreateLiquidationStepPayloads(liquidation)
+                    : CreateLiquidationStepPayloads(multiCreditorLiquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
             LobbyMessageTypes.TileExecuted,
@@ -3757,7 +3776,8 @@ public sealed class LobbyMessageHandler
                 tileId.Value,
                 CreateAuctionMoneyDeltas(finalizationResult, persistedGameState),
                 CreateAuctionOwnershipChanges(finalizationResult),
-                CreateAuctionPlayerEliminations(finalizationResult, persistedGameState)));
+                CreateAuctionPlayerEliminations(finalizationResult, persistedGameState),
+                CreateLiquidationStepPayloads(finalizationResult.PaymentLiquidation)));
     }
 
     private static LobbyServerEnvelope CreateLoanResult(
@@ -4388,6 +4408,49 @@ public sealed class LobbyMessageHandler
         return deltas.Count == 0 ? null : deltas;
     }
 
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateLiquidationMoneyDeltas(
+        MultiCreditorLiquidationExecutionResult liquidation,
+        string paymentReason,
+        GameState gameState)
+    {
+        if (!liquidation.PaymentExecuted)
+        {
+            return null;
+        }
+
+        var deltas = new List<MoneyDeltaPayload>();
+        foreach (var step in liquidation.Steps)
+        {
+            switch (step.StepKind)
+            {
+                case LiquidationStepKind.UpgradeSale:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, "liquidation_upgrade_sale"));
+                    break;
+                case LiquidationStepKind.Mortgage:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, "liquidation_mortgage"));
+                    break;
+                case LiquidationStepKind.PlayerPayment:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, paymentReason));
+                    if (step.CreditorPlayerId is not null)
+                    {
+                        var creditor = gameState.Players.First(player => player.PlayerId == step.CreditorPlayerId.Value);
+                        deltas.Add(new MoneyDeltaPayload(
+                            creditor.PlayerId.Value,
+                            step.Amount.Amount,
+                            creditor.Money.Amount,
+                            paymentReason,
+                            liquidation.Obligation.DebtorPlayerId.Value,
+                            liquidation.Obligation.TileId?.Value,
+                            liquidation.Obligation.CardId?.Value));
+                    }
+
+                    break;
+            }
+        }
+
+        return deltas.Count == 0 ? null : deltas;
+    }
+
     private static MoneyDeltaPayload CreateDebtorLiquidationDelta(
         LiquidationExecutionResult liquidation,
         LiquidationStepResult step,
@@ -4411,10 +4474,58 @@ public sealed class LobbyMessageHandler
             liquidation.Obligation.CardId?.Value);
     }
 
+    private static MoneyDeltaPayload CreateDebtorLiquidationDelta(
+        MultiCreditorLiquidationExecutionResult liquidation,
+        LiquidationStepResult step,
+        string reason)
+    {
+        var delta = step.StepKind == LiquidationStepKind.PlayerPayment
+            ? -step.Amount.Amount
+            : step.Amount.Amount;
+
+        return new MoneyDeltaPayload(
+            liquidation.Obligation.DebtorPlayerId.Value,
+            delta,
+            step.DebtorBalance.Amount,
+            reason,
+            step.CreditorPlayerId?.Value,
+            step.PropertyTileId?.Value ?? liquidation.Obligation.TileId?.Value,
+            liquidation.Obligation.CardId?.Value);
+    }
+
     private static IReadOnlyList<LiquidationStepPayload>? CreateLiquidationStepPayloads(
         LiquidationExecutionResult? liquidation)
     {
         if (liquidation?.PaymentExecuted != true)
+        {
+            return null;
+        }
+
+        if (liquidation.Steps.Count == 0)
+        {
+            return null;
+        }
+
+        return liquidation.Steps
+            .Select(step => new LiquidationStepPayload(
+                FormatLiquidationStepKind(step.StepKind),
+                step.PropertyTileId?.Value,
+                step.Amount.Amount,
+                step.DebtorBalance.Amount,
+                step.UpgradeLevel,
+                step.IsMortgaged))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<LiquidationStepPayload>? CreateLiquidationStepPayloads(
+        MultiCreditorLiquidationExecutionResult? liquidation)
+    {
+        if (liquidation?.PaymentExecuted != true)
+        {
+            return null;
+        }
+
+        if (liquidation.Steps.Count == 0)
         {
             return null;
         }
@@ -4519,6 +4630,14 @@ public sealed class LobbyMessageHandler
             finalizationResult.WinningBid is null)
         {
             return null;
+        }
+
+        if (finalizationResult.PaymentLiquidation?.PaymentExecuted == true)
+        {
+            return CreateLiquidationMoneyDeltas(
+                finalizationResult.PaymentLiquidation,
+                "auction_payment",
+                gameState);
         }
 
         var winner = gameState.Players.First(player => player.PlayerId == finalizationResult.WinnerId.Value);

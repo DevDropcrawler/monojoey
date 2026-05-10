@@ -149,6 +149,7 @@ public static class AuctionManager
                 WinnerId: null,
                 WinningBid: null,
                 EliminationResult: null,
+                PaymentLiquidation: null,
                 "Auction finalized with no winner.");
         }
 
@@ -163,12 +164,23 @@ public static class AuctionManager
                 WinnerId: null,
                 WinningBid: null,
                 EliminationResult: null,
+                PaymentLiquidation: null,
                 "Auction finalized with no eligible winner.");
         }
 
         var (winnerIndex, winningBid) = winner.Value;
         var winningPlayer = gameState.Players[winnerIndex];
-        if (winningPlayer.Money.Amount < winningBid.Amount)
+        var paymentObligation = new PaymentObligation(
+            winningPlayer.PlayerId,
+            winningBid,
+            PaymentObligationKind.AuctionPayment,
+            PaymentObligationCreditor.Bank,
+            auctionState.PropertyTileId);
+        var payment = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            paymentObligation,
+            LiquidationExecutionContext.AuctionPayment);
+        if (!payment.PaymentExecuted)
         {
             var eliminationResult = BankruptcyManager.EliminateForFailedPayment(
                 gameState,
@@ -183,17 +195,12 @@ public static class AuctionManager
                 winningPlayer.PlayerId,
                 winningBid,
                 eliminationResult,
+                payment,
                 "Auction winner could not pay the winning bid.");
         }
 
-        var players = gameState.Players.ToArray();
-        players[winnerIndex] = winningPlayer with
-        {
-            Money = new Money(winningPlayer.Money.Amount - winningBid.Amount),
-        };
-        var paidGameState = gameState with { Players = players };
         var finalizedGameState = PropertyManager.AssignOwner(
-            paidGameState,
+            payment.GameState,
             auctionState.PropertyTileId,
             winningPlayer.PlayerId);
 
@@ -205,6 +212,7 @@ public static class AuctionManager
             winningPlayer.PlayerId,
             winningBid,
             EliminationResult: null,
+            payment,
             "Auction finalized with a winning bidder.");
     }
 
@@ -231,6 +239,7 @@ public static class AuctionManager
             WinnerId: null,
             WinningBid: null,
             EliminationResult: null,
+            PaymentLiquidation: null,
             InvalidAuctionStateMessage);
     }
 

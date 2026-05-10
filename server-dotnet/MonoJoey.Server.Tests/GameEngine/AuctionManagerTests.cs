@@ -564,6 +564,71 @@ public class AuctionManagerTests
     }
 
     [Fact]
+    public void FinalizeAuction_WhenWinnerCanLiquidatePaysBidAndTransfersOwnership()
+    {
+        var auctionedTileId = new TileId("property_01");
+        var mortgagedTileId = new TileId("property_03");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 10, "property_03"));
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(60),
+            FirstBidTime).AuctionState;
+        var finalizationState = gameState with { ActiveAuctionState = bidState };
+
+        var result = AuctionManager.FinalizeAuction(finalizationState, bidState);
+
+        Assert.True(result.FinalizedWithWinner);
+        Assert.True(result.PaymentLiquidation?.PaymentExecuted);
+        Assert.Equal(
+            new[] { LiquidationStepKind.Mortgage, LiquidationStepKind.BankPayment },
+            result.PaymentLiquidation?.Steps.Select(step => step.StepKind).ToArray());
+        Assert.Equal(mortgagedTileId, result.PaymentLiquidation?.Steps[0].PropertyTileId);
+        Assert.Equal(Money.Zero, result.GameState.Players[1].Money);
+        Assert.Contains(auctionedTileId, result.GameState.Players[1].OwnedPropertyIds);
+        Assert.True(result.GameState.PropertyStates[mortgagedTileId].Data.IsMortgaged);
+        Assert.Same(bidState, result.GameState.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WhenWinnerCannotCoverAfterLiquidationEliminatesWithoutPartialLiquidation()
+    {
+        var auctionedTileId = new TileId("property_01");
+        var mortgagedTileId = new TileId("property_03");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [mortgagedTileId] = new(mortgagedTileId, new PropertyStateData()),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 5, "property_03")) with
+        {
+            PropertyStates = propertyStates,
+        };
+        var auctionState = StartAuction(gameState);
+        var bidState = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(80),
+            FirstBidTime).AuctionState;
+        var finalizationState = gameState with { ActiveAuctionState = bidState };
+
+        var result = AuctionManager.FinalizeAuction(finalizationState, bidState);
+
+        Assert.True(result.WinnerFailedToPay);
+        Assert.Equal(LiquidationExecutionResultKind.Insolvent, result.PaymentLiquidation?.ResultKind);
+        Assert.True(result.GameState.Players[1].IsEliminated);
+        Assert.Equal(new Money(5), result.GameState.Players[1].Money);
+        Assert.DoesNotContain(auctionedTileId, result.GameState.Players[1].OwnedPropertyIds);
+        Assert.False(result.GameState.PropertyStates[mortgagedTileId].Data.IsMortgaged);
+    }
+
+    [Fact]
     public void FinalizeAuction_DoesNotLetEliminatedHighestBidderWin()
     {
         var gameStateForBids = CreateGameState(

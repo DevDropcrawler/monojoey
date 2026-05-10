@@ -39,7 +39,8 @@ public sealed record LiquidationStepResult(
     Money Amount,
     Money DebtorBalance,
     int? UpgradeLevel,
-    bool? IsMortgaged);
+    bool? IsMortgaged,
+    PlayerId? CreditorPlayerId = null);
 
 public enum LiquidationStepKind
 {
@@ -53,4 +54,27 @@ internal enum LiquidationExecutionContext
 {
     Normal,
     TileExecutionPayment,
+    AuctionPayment,
+}
+
+public sealed record MultiCreditorPaymentObligation(
+    PlayerId DebtorPlayerId,
+    Money AmountPerCreditor,
+    PaymentObligationKind Kind,
+    TileId? TileId = null,
+    CardId? CardId = null);
+
+public sealed record MultiCreditorLiquidationExecutionResult(
+    LiquidationExecutionResultKind ResultKind,
+    GameState GameState,
+    MultiCreditorPaymentObligation Obligation,
+    IReadOnlyList<PlayerId> CreditorPlayerIds,
+    IReadOnlyList<LiquidationStepResult> Steps,
+    Money AmountDue,
+    Money AmountPaid,
+    Money DebtorBalance,
+    IReadOnlyDictionary<PlayerId, Money> CreditorBalances,
+    string Message)
+{
+    public bool PaymentExecuted => ResultKind == LiquidationExecutionResultKind.PaymentExecuted;
 }
