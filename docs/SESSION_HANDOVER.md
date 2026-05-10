@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Loan Shark Integration Sequencing Hardening
-- Completion status: Loan Shark borrowing is now defensively rejected at the engine boundary when disabled, and regression coverage pins LoanState isolation from solvency, auction affordability, liquidation execution, extra turns, and unresolved tile payment flow.
+- Chunk: Failed Liquidation Realtime Hardening
+- Completion status: Realtime tax and single-debtor bank-card failed liquidation now eliminates through `BankruptcyManager.EliminateForFailedPayment` without fallback cash deductions, payout helpers, or partial mortgage/upgrade mutation.
 - Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; local has this chunk implemented and validated but not committed.
 - Previous commit: `748a2b3`
 - Last commit before this chunk: `748a2b3`
@@ -19,15 +19,14 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Loan Shark Integration Sequencing Hardening.
+Failed Liquidation Realtime Hardening.
 
 Completed:
 
-- Added engine-level disabled Loan Shark rejection in `LoanManager.TakeLoan`, mapped to the existing realtime `loan_mode_disabled` error.
-- Added solvency and auction coverage proving `Player.LoanState` is not available cash and untaken loans do not satisfy auction affordability.
-- Added liquidation coverage proving payment execution does not create or mutate loan state.
-- Added turn-flow coverage proving extra turns do not run start-turn loan interest or automatic property repair.
-- Added realtime coverage proving manual `take_loan` during unresolved tile flow only mutates cash plus loan state and does not execute payment/liquidation.
+- Hardened realtime tax failed liquidation so insolvency preserves cash/property state and emits `playerEliminations` only.
+- Hardened single-debtor bank-card failed liquidation the same way while preserving draw/discard behavior.
+- Added engine rollback coverage for ownership, mortgage flags, upgrade levels, property damage, and player balances after failed single- and multi-creditor liquidation.
+- Added realtime regression coverage for failed tax/card helper omission, preserved property state, card discard, and reconnect snapshot projection.
 
 Not included by explicit user scope:
 
@@ -51,19 +50,13 @@ Not included by explicit user scope:
 - Voluntary realtime pay-fine request UI/flow.
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
-- Realtime liquidation requests, UI, auto-liquidation outside auction finalization, forced property transfer, or any rewrite of the hard-elimination flow.
-- Any change to `GamePhase`, snapshot DTOs/version, ownership authority, mortgage authority, auction authority, Slimer/status effects, Earthquake/property repair behavior, or card execution.
+- Realtime liquidation requests, UI, auto-liquidation outside auction finalization, forced property transfer, or broad bankruptcy rewrites.
+- Any change to `GamePhase`, snapshot DTOs/version, ownership authority, mortgage authority, auction authority, Loan Shark, Slimer/status effects, Earthquake/property repair behavior, held cards, custom cards, or deck schemas.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LoanTakeResult.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/GameEngine/LiquidationExecutionManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LoanManagerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/SolvencyAnalyzerTests.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
 
@@ -159,12 +152,12 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
-- `dotnet test server-dotnet\MonoJoey.sln -v minimal --filter "Loan|Solvency|Auction|Liquidation|Turn"`
+- `dotnet test server-dotnet\MonoJoey.sln --filter "FullyQualifiedName~LiquidationExecutionManagerTests|FullyQualifiedName~LobbyMessageHandlerTests" -v minimal`
   - Result: succeeded.
-  - Output summary: 473 passed, 0 failed, 0 skipped.
+  - Output summary: 399 passed, 0 failed, 0 skipped.
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 924 passed, 0 failed, 0 skipped.
+  - Output summary: 929 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -172,6 +165,7 @@ Not included by explicit user scope:
 - `GameRules.Loans` rate-field defaults still do not match current runtime loan manager behavior. This chunk deliberately preserved runtime 20/30/50/+10/100 behavior and left schema/default correction for a separate phase.
 - No UI, persistence, stats, event replay, or reconnect catch-up was added.
 - Cash-only auction finalization may include a `liquidationSteps` entry for `bank_payment`; this is now documented as a persisted payment step.
+- Cash-only negative-balance elimination remains in non-liquidation paths such as Loan Shark interest and direct card cash-effect execution.
 
 ## Placeholders Introduced Or Preserved
 
@@ -214,13 +208,15 @@ Not included by explicit user scope:
 - `resolve_tile` sets only `GameState.HasResolvedTileThisTurn = true`; it does not execute tile effects, change `GamePhase`, advance turns, or mutate player money, position, ownership, held cards, lockup state, auctions, loans, cards, persistence, or stats. Successful resolves emit `tile_resolved`.
 - A second `resolve_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasResolvedTileThisTurn` is true.
 - `execute_tile` requires a successful roll and resolve in the same turn before execution.
-- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, nullable `auction`, `rent`, and `card` metadata, plus optional helper `movement`, `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`.
+- `execute_tile_result` contains `playerId`, `tileId`, `tileIndex`, string `tileType`, string `actionKind`, string `executionKind`, current string `phase`, `hasExecutedTileThisTurn`, nullable `auction`, `rent`, and `card` metadata, plus optional helper `movement`, `moneyDeltas`, `propertyOwnershipChanges`, `playerEliminations`, and `liquidationSteps`.
 - `execute_tile` starts mandatory auctions for unowned auctionable property placeholders, stores the resulting `AuctionState` in `GameState.ActiveAuctionState`, and schedules the server-owned auction timer from the persisted `TimerEndsAtUtc`; it does not place bids, finalize auctions, transfer auction ownership, or change `GamePhase`. Successful executions emit `tile_executed`.
 - `execute_tile` pays base rent for property placeholders owned by another player through `PropertyManager.PayRentForCurrentTile`; insufficient rent uses the existing hard-elimination bankruptcy behavior.
 - `execute_tile` reports `rent_not_charged` for self-owned properties and leaves balances unchanged.
 - `execute_tile` treats start/free/no-action tiles as no-op execution and only marks `GameState.HasExecutedTileThisTurn = true`.
-- `execute_tile` executes chance/table deck placeholders through persisted `GameState.CardDeckStates`; tax placeholders and go-to-lockup placeholders still return `unsupported_tile_effect` without mutating session state.
+- `execute_tile` executes tax placeholders as bank payment obligations using the rules income-tax amount; failed tax liquidation eliminates through `EliminateForFailedPayment` without emitting `moneyDeltas` or `liquidationSteps`.
+- `execute_tile` executes go-to-lockup placeholders by moving the player to lockup, marking them locked, and marking the tile executed.
 - Card-tile `execute_tile` maps tile type deterministically to `chance` or `table`, draws the top persisted card, resolves it, executes supported actions, replaces `GameState.CardDeckStates`, marks the tile executed, and returns card metadata in the same `execute_tile_result`.
+- Single-debtor bank-payment cards and multi-creditor payment cards attempt liquidation before card cash fallback; failed liquidation eliminates without payout helpers, while successful non-held cards still move to the deck discard pile.
 - Card-tile errors `card_deck_not_found`, `card_deck_empty`, `invalid_card`, and `unsupported_card_action` do not mutate session state and do not mark `GameState.HasExecutedTileThisTurn`.
 - A second `execute_tile` in the same turn is rejected through `invalid_session_state` while `GameState.HasExecutedTileThisTurn` is true.
 - An already-populated `GameState.ActiveAuctionState` rejects `execute_tile` through `invalid_session_state`.
@@ -396,7 +392,7 @@ Not included by explicit user scope:
 - `CardDeckManager.Draw()` and `CardDeckManager.Discard()` return new deck state instances and do not mutate previous deck state.
 - Drawing from an empty draw pile returns the unchanged `CardDeckState`; no automatic reshuffle or randomization is implemented.
 - Draw and discard logic affects only `CardDeckState`; it does not execute card actions, move players, change money, or alter lockup state.
-- WebSocket card tile execution is the integration boundary that composes `CardDeckManager.Draw()`, `CardResolver.ResolveCard()`, `CardEffectExecutor.ExecuteCardEffect()`, and a final immutable `GameState` replacement.
+- WebSocket card tile execution is the integration boundary that composes `CardDeckManager.Draw()`, `CardResolver.ResolveCard()`, payment liquidation for supported payment cards, `CardEffectExecutor.ExecuteCardEffect()` for the remaining supported actions, and a final immutable `GameState` replacement.
 - WebSocket card tile execution first checks `GameState.Rules.Cards.IsDeckEnabled(deckId)` after resolving the deck ID from tile type; disabled deck tiles skip runtime deck-state lookup and return an existing `no_action` execution result while marking the tile executed.
 - Card deck gating is per deck only through `CardRules.DecksEnabled`; there is no global cards-enabled flag or derived aggregate helper.
 - Slimer and Earthquake card execution uses deck-only gating for this phase: if an enabled deck contains the card and it is drawn, the card executes; `FutureRules.SlimerEnabled` and `FutureRules.EarthquakeEnabled` are not checked at draw time.

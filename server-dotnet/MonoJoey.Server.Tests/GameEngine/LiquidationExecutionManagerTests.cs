@@ -231,6 +231,42 @@ public class LiquidationExecutionManagerTests
         Assert.Same(propertyStates, result.GameState.PropertyStates);
         Assert.Equal(new Money(5), result.GameState.Players[0].Money);
         Assert.Same(loanState, result.GameState.Players[0].LoanState);
+        Assert.Equal(new[] { "property_03" }, result.GameState.Players[0].OwnedPropertyIds.Select(tileId => tileId.Value).OrderBy(value => value));
+        Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_ReturnsOriginalOwnershipAndUpgradeStateWhenAssetsCannotCover()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var property03 = new TileId("property_03");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+            [property03] = new(property03, new PropertyStateData(damagePercent: 20)),
+        };
+        var gameState = CreateGameState(CreatePlayer("player_1", 0, "property_01", "property_02", "property_03")) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            BankObligation("player_1", 500, PaymentObligationKind.Fine));
+
+        Assert.Equal(LiquidationExecutionResultKind.Insolvent, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Empty(result.Steps);
+        Assert.Equal(new Money(0), result.GameState.Players[0].Money);
+        Assert.Equal(
+            new[] { "property_01", "property_02", "property_03" },
+            result.GameState.Players[0].OwnedPropertyIds.Select(tileId => tileId.Value).OrderBy(value => value));
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
+        Assert.Equal(1, result.GameState.PropertyStates[property01].Data.UpgradeLevel);
+        Assert.False(result.GameState.PropertyStates[property01].Data.IsMortgaged);
+        Assert.False(PropertyRuleHelpers.GetPropertyStateData(result.GameState, property02).IsMortgaged);
+        Assert.Equal(20, result.GameState.PropertyStates[property03].Data.DamagePercent);
         Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
     }
 
@@ -546,7 +582,48 @@ public class LiquidationExecutionManagerTests
         Assert.Equal(new Money(5), result.GameState.Players[0].Money);
         Assert.Equal(new Money(50), result.GameState.Players[1].Money);
         Assert.Equal(new Money(60), result.GameState.Players[2].Money);
+        Assert.Equal(new[] { "property_03" }, result.GameState.Players[0].OwnedPropertyIds.Select(tileId => tileId.Value).OrderBy(value => value));
         Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
+    }
+
+    [Fact]
+    public void ExecuteMultiCreditorPaymentObligation_ReturnsOriginalOwnershipAndBalancesWhenAssetsCannotCover()
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+        };
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", 0, "property_01", "property_02"),
+            CreatePlayer("player_2", 50),
+            CreatePlayer("player_3", 60)) with
+        {
+            PropertyStates = propertyStates,
+        };
+
+        var result = LiquidationExecutionManager.ExecuteMultiCreditorPaymentObligation(
+            gameState,
+            new MultiCreditorPaymentObligation(
+                new PlayerId("player_1"),
+                new Money(100),
+                PaymentObligationKind.CardPayment,
+                CardId: new CardId("card_pay_all")));
+
+        Assert.Equal(LiquidationExecutionResultKind.Insolvent, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Empty(result.Steps);
+        Assert.Equal(new Money(0), result.GameState.Players[0].Money);
+        Assert.Equal(new Money(50), result.GameState.Players[1].Money);
+        Assert.Equal(new Money(60), result.GameState.Players[2].Money);
+        Assert.Equal(
+            new[] { "property_01", "property_02" },
+            result.GameState.Players[0].OwnedPropertyIds.Select(tileId => tileId.Value).OrderBy(value => value));
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
+        Assert.Equal(1, result.GameState.PropertyStates[property01].Data.UpgradeLevel);
+        Assert.False(result.GameState.PropertyStates[property01].Data.IsMortgaged);
+        Assert.False(PropertyRuleHelpers.GetPropertyStateData(result.GameState, property02).IsMortgaged);
     }
 
     [Theory]

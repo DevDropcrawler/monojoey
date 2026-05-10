@@ -2503,9 +2503,13 @@ public sealed class LobbyMessageHandler
                 PaymentObligationCreditor.Bank,
                 resolution.TileId),
             LiquidationExecutionContext.TileExecutionPayment);
+        var failedTaxElimination = liquidation.PaymentExecuted
+            ? null
+            : BankruptcyManager.EliminateForFailedPayment(gameState, resolution.PlayerId, taxAmount);
         var eliminatedGameState = liquidation.PaymentExecuted
             ? liquidation.GameState
-            : ApplyTaxHardEliminationFallback(gameState, resolution.PlayerId, taxAmount);
+            : failedTaxElimination?.GameState
+                ?? throw new InvalidOperationException("Failed tax liquidation must produce an elimination result.");
         var persistedGameState = eliminatedGameState with
         {
             HasExecutedTileThisTurn = true,
@@ -2527,16 +2531,14 @@ public sealed class LobbyMessageHandler
                 card: null,
                 moneyDeltas: liquidation.PaymentExecuted
                     ? CreateLiquidationMoneyDeltas(liquidation, "tax", persistence.Session.GameState)
-                    : CreateMoneyDeltasFromDiff(
+                    : null,
+                playerEliminations: liquidation.PaymentExecuted
+                    ? CreatePlayerEliminationsFromDiff(
                         gameState,
                         persistence.Session.GameState,
                         "tax",
-                        tileId: resolution.TileId),
-                playerEliminations: CreatePlayerEliminationsFromDiff(
-                    gameState,
-                    persistence.Session.GameState,
-                    "negative_balance",
-                    taxAmount.Amount),
+                        taxAmount.Amount)
+                    : CreatePlayerEliminationPayloads(failedTaxElimination),
                 liquidationSteps: CreateLiquidationStepPayloads(liquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
@@ -2655,17 +2657,36 @@ public sealed class LobbyMessageHandler
                 gameState,
                 multiCreditorObligation,
                 LiquidationExecutionContext.TileExecutionPayment);
-        var executionResult = multiCreditorLiquidation?.PaymentExecuted == true
-            ? new CardEffectExecutionResult(multiCreditorLiquidation.GameState)
-            : multiCreditorLiquidation?.ResultKind == LiquidationExecutionResultKind.Insolvent
-                ? new CardEffectExecutionResult(
-                    BankruptcyManager.EliminateForFailedPayment(
-                        gameState,
-                        multiCreditorLiquidation.Obligation.DebtorPlayerId,
-                        multiCreditorLiquidation.AmountDue).GameState)
-                : liquidation?.PaymentExecuted == true
-            ? new CardEffectExecutionResult(liquidation.GameState)
-            : CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
+        CardEffectExecutionResult executionResult;
+        if (multiCreditorLiquidation?.PaymentExecuted == true)
+        {
+            executionResult = new CardEffectExecutionResult(multiCreditorLiquidation.GameState);
+        }
+        else if (multiCreditorLiquidation?.ResultKind == LiquidationExecutionResultKind.Insolvent)
+        {
+            executionResult = new CardEffectExecutionResult(
+                BankruptcyManager.EliminateForFailedPayment(
+                    gameState,
+                    multiCreditorLiquidation.Obligation.DebtorPlayerId,
+                    multiCreditorLiquidation.AmountDue).GameState);
+        }
+        else if (liquidation?.PaymentExecuted == true)
+        {
+            executionResult = new CardEffectExecutionResult(liquidation.GameState);
+        }
+        else if (liquidation?.ResultKind == LiquidationExecutionResultKind.Insolvent)
+        {
+            executionResult = new CardEffectExecutionResult(
+                BankruptcyManager.EliminateForFailedPayment(
+                    gameState,
+                    liquidation.Obligation.DebtorPlayerId,
+                    liquidation.Obligation.Amount).GameState);
+        }
+        else
+        {
+            executionResult = CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
+        }
+
         var executedGameState = executionResult.GameState;
         var finalDeckState = ShouldDiscardCard(cardResolution.ActionKind)
             ? CardDeckManager.Discard(drawResult.DeckState, card)
@@ -4273,15 +4294,6 @@ public sealed class LobbyMessageHandler
             assessment.LandingPlayerId);
     }
 
-    private static GameState ApplyTaxHardEliminationFallback(
-        GameState gameState,
-        PlayerId playerId,
-        Money taxAmount)
-    {
-        var taxedGameState = ChangePlayerMoney(gameState, playerId, new Money(-taxAmount.Amount));
-        return BankruptcyManager.EliminateIfBankrupt(taxedGameState, playerId).GameState;
-    }
-
     private static IReadOnlyList<MoneyDeltaPayload>? CreateRentMoneyDeltas(
         RentPaymentResult rent,
         GameState gameState)
@@ -4629,6 +4641,24 @@ public sealed class LobbyMessageHandler
             .ToArray();
 
         return eliminations.Length == 0 ? null : eliminations;
+    }
+
+    private static IReadOnlyList<PlayerEliminationPayload>? CreatePlayerEliminationPayloads(
+        PlayerEliminationResult? elimination)
+    {
+        if (elimination?.WasEliminated != true)
+        {
+            return null;
+        }
+
+        return new[]
+        {
+            new PlayerEliminationPayload(
+                elimination.PlayerId.Value,
+                FormatEliminationReason(elimination.Reason),
+                elimination.Balance.Amount,
+                elimination.PaymentDue?.Amount),
+        };
     }
 
     private static int? GetCardPaymentDue(

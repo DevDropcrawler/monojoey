@@ -1727,18 +1727,84 @@ public class LobbyMessageHandlerTests
         var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
 
         Assert.Equal("tax_eliminated_player", executePayload.GetProperty("executionKind").GetString());
-        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
-        Assert.Equal(-100, moneyDelta.GetProperty("delta").GetInt32());
-        Assert.Equal(-50, moneyDelta.GetProperty("balance").GetInt32());
+        Assert.False(executePayload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(executePayload.TryGetProperty("liquidationSteps", out _));
         var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
         Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
-        Assert.Equal("negative_balance", elimination.GetProperty("reason").GetString());
-        Assert.Equal(-50, elimination.GetProperty("money").GetInt32());
+        Assert.Equal("cannot_fulfill_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(50, elimination.GetProperty("money").GetInt32());
         Assert.Equal(100, elimination.GetProperty("paymentDue").GetInt32());
-        Assert.Equal(new Money(-50), afterExecute.Players[0].Money);
+        Assert.Equal(new Money(50), afterExecute.Players[0].Money);
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
         Assert.Equal(new PlayerId("player_2"), afterExecute.WinnerPlayerId);
+    }
+
+    [Fact]
+    public void ExecuteTile_TaxFailedLiquidationOmitsHelpersAndPreservesPropertyState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var property03 = new TileId("property_03");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "tax_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            Money = new Money(10),
+                            OwnedPropertyIds = new HashSet<TileId> { property03 },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property03] = new(property03, new PropertyStateData(damagePercent: 15)),
+                },
+            });
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var debtor = afterExecute.Players.Single(player => player.PlayerId.Value == "player_1");
+
+        Assert.Equal("tax_eliminated_player", executePayload.GetProperty("executionKind").GetString());
+        Assert.False(executePayload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(executePayload.TryGetProperty("liquidationSteps", out _));
+        var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("cannot_fulfill_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(100, elimination.GetProperty("paymentDue").GetInt32());
+        Assert.Equal(new Money(10), debtor.Money);
+        Assert.Contains(property03, debtor.OwnedPropertyIds);
+        Assert.False(afterExecute.PropertyStates[property03].Data.IsMortgaged);
+        Assert.Equal(0, afterExecute.PropertyStates[property03].Data.UpgradeLevel);
+        Assert.Equal(15, afterExecute.PropertyStates[property03].Data.DamagePercent);
+
+        using var reconnectResponse = Handle(
+            handler,
+            new LobbyConnectionContext("connection_reconnect"),
+            ReconnectMessage(started.Session.SessionId, "player_1"));
+        var snapshot = AssertResponseType(reconnectResponse, "reconnect_result").GetProperty("snapshot");
+        var reconnectPlayer = snapshot.GetProperty("players")
+            .EnumerateArray()
+            .Single(player => player.GetProperty("playerId").GetString() == "player_1");
+        var reconnectProperty = Assert.Single(snapshot.GetProperty("propertyStates").EnumerateArray());
+
+        Assert.Equal(10, reconnectPlayer.GetProperty("money").GetInt32());
+        Assert.Contains(reconnectPlayer.GetProperty("ownedPropertyIds").EnumerateArray(), id => id.GetString() == "property_03");
+        Assert.True(reconnectPlayer.GetProperty("isEliminated").GetBoolean());
+        Assert.Equal("property_03", reconnectProperty.GetProperty("tileId").GetString());
+        Assert.False(reconnectProperty.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+        Assert.Equal(0, reconnectProperty.GetProperty("data").GetProperty("upgradeLevel").GetInt32());
+        Assert.Equal(15, reconnectProperty.GetProperty("data").GetProperty("damagePercent").GetInt32());
     }
 
     [Fact]
@@ -2312,19 +2378,17 @@ public class LobbyMessageHandlerTests
 
         Assert.Equal("card_payment_eliminated_player", executePayload.GetProperty("executionKind").GetString());
         Assert.Equal("pay_money", card.GetProperty("resolutionKind").GetString());
-        Assert.Equal(-5, card.GetProperty("money").GetInt32());
+        Assert.Equal(10, card.GetProperty("money").GetInt32());
         Assert.True(card.GetProperty("isEliminated").GetBoolean());
-        var moneyDelta = Assert.Single(executePayload.GetProperty("moneyDeltas").EnumerateArray());
-        Assert.Equal("player_1", moneyDelta.GetProperty("playerId").GetString());
-        Assert.Equal(-15, moneyDelta.GetProperty("delta").GetInt32());
-        Assert.Equal(-5, moneyDelta.GetProperty("balance").GetInt32());
-        Assert.Equal("card", moneyDelta.GetProperty("reason").GetString());
-        Assert.Equal("TEST_PAY_BANK", moneyDelta.GetProperty("cardId").GetString());
+        Assert.False(executePayload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(executePayload.TryGetProperty("liquidationSteps", out _));
         var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
         Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
         Assert.Equal("card_payment", elimination.GetProperty("reason").GetString());
         Assert.Equal(15, elimination.GetProperty("paymentDue").GetInt32());
+        Assert.Equal(10, elimination.GetProperty("money").GetInt32());
         Assert.True(afterExecute.Players[0].IsEliminated);
+        Assert.Equal(new Money(10), afterExecute.Players[0].Money);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
         Assert.Equal(new PlayerId("player_2"), afterExecute.WinnerPlayerId);
@@ -2383,6 +2447,141 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new Money(5), afterExecute.Players.First(player => player.PlayerId.Value == "player_1").Money);
         Assert.True(afterExecute.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
         Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+    }
+
+    [Fact]
+    public void ExecuteTile_PayBankCardFailedLiquidationOmitsHelpersAndPreservesDeckDiscard()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var property03 = new TileId("property_03");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var payCard = CreateCard(
+            "TEST_PAY_BANK_FAILED_LIQUIDATION",
+            CardActionKind.PayBank,
+            new CardActionParameters(Amount: new Money(100)));
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_1"
+                        ? player with
+                        {
+                            Money = new Money(10),
+                            OwnedPropertyIds = new HashSet<TileId> { property03 },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property03] = new(property03, new PropertyStateData(damagePercent: 20)),
+                },
+            });
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { payCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var debtor = afterExecute.Players.Single(player => player.PlayerId.Value == "player_1");
+
+        Assert.Equal("card_payment_eliminated_player", executePayload.GetProperty("executionKind").GetString());
+        Assert.False(executePayload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(executePayload.TryGetProperty("liquidationSteps", out _));
+        var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal("card_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(100, elimination.GetProperty("paymentDue").GetInt32());
+        Assert.Equal(10, elimination.GetProperty("money").GetInt32());
+        Assert.True(debtor.IsEliminated);
+        Assert.Equal(new Money(10), debtor.Money);
+        Assert.Contains(property03, debtor.OwnedPropertyIds);
+        Assert.False(afterExecute.PropertyStates[property03].Data.IsMortgaged);
+        Assert.Equal(0, afterExecute.PropertyStates[property03].Data.UpgradeLevel);
+        Assert.Equal(20, afterExecute.PropertyStates[property03].Data.DamagePercent);
+        Assert.Empty(afterExecute.CardDeckStates[CardDeckIds.Chance].DrawPile);
+        Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
+    }
+
+    [Fact]
+    public void ExecuteTile_PayEveryPlayerCardPaysCreditorsInPersistedPlayerOrderAndProjectsReconnect()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var session = sessionManager.CreateSession();
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        var thirdContext = new LobbyConnectionContext("connection_3");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_3"), thirdContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_3", isReady: true), thirdContext);
+        _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, session.SessionId, "player_1", "chance_01");
+        var payEveryPlayerCard = CreateCard(
+            "TEST_PAY_EVERY_PLAYER",
+            CardActionKind.PayEveryPlayer,
+            new CardActionParameters(Amount: new Money(10)));
+        _ = UpdateGameState(
+            sessionManager,
+            session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with { Money = new Money(100) },
+                        "player_2" => player with { Money = new Money(50) },
+                        "player_3" => player with { Money = new Money(60) },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+        _ = UpdateDeckState(
+            sessionManager,
+            session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { payEveryPlayerCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            firstContext,
+            ExecuteTileMessage(session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(session.SessionId)!.GameState;
+        var deltas = executePayload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal("card_executed", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal(new[] { "player_1", "player_2", "player_1", "player_3" }, deltas.Select(delta => delta.GetProperty("playerId").GetString()));
+        Assert.Equal(new[] { -10, 10, -10, 10 }, deltas.Select(delta => delta.GetProperty("delta").GetInt32()));
+        Assert.Equal(new[] { 90, 60, 80, 70 }, deltas.Select(delta => delta.GetProperty("balance").GetInt32()));
+        Assert.Equal(new Money(80), afterExecute.Players.Single(player => player.PlayerId.Value == "player_1").Money);
+        Assert.Equal(new Money(60), afterExecute.Players.Single(player => player.PlayerId.Value == "player_2").Money);
+        Assert.Equal(new Money(70), afterExecute.Players.Single(player => player.PlayerId.Value == "player_3").Money);
+
+        using var reconnectResponse = Handle(
+            handler,
+            new LobbyConnectionContext("connection_reconnect"),
+            ReconnectMessage(session.SessionId, "player_1"));
+        var snapshotPlayers = AssertResponseType(reconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("players")
+            .EnumerateArray()
+            .ToDictionary(player => player.GetProperty("playerId").GetString()!);
+
+        Assert.Equal(80, snapshotPlayers["player_1"].GetProperty("money").GetInt32());
+        Assert.Equal(60, snapshotPlayers["player_2"].GetProperty("money").GetInt32());
+        Assert.Equal(70, snapshotPlayers["player_3"].GetProperty("money").GetInt32());
     }
 
     [Fact]
