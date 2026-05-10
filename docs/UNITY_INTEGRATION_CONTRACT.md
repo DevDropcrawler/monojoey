@@ -206,8 +206,12 @@ Auctions:
 - `execute_tile` starts server-owned mandatory auctions for eligible unowned properties.
 - `place_bid` validates and records bids. Accepted bids return `bid_result` and broadcast
   `bid_accepted`.
+- Auction bid validation checks the bidder's current cash plus legal raiseable asset value from
+  sellable upgrades and mortgageable properties. It does not mutate money, loans, upgrades,
+  mortgages, or ownership; over-total bids return `insufficient_cash`.
 - `finalize_auction` finalizes active auctions and returns `auction_result`; successful finalization
-  emits `auction_finalized`, including no-sale outcomes.
+  emits `auction_finalized`, including no-sale outcomes. Auction liquidation, payment, and ownership
+  transfer happen only during finalization.
 - Countdown durations and `timerEndsAtUtc` are metadata from the server-owned timer/deadline model.
 
 Loans:
@@ -540,7 +544,7 @@ The following remain future systems and are not part of the current Unity contra
 - Cross-process persistence.
 - Event replay or missed-event catch-up.
 - Matchmaking.
-- Upgrades, asset liquidation, loan repayment, or debt recovery.
+- Manual asset liquidation, loan repayment, or debt recovery.
 - Client-selected repairs.
 - Custom card editing or user-defined runtime cards.
 - Cosmetics, ranked play, moderation, chat, or durable social features.

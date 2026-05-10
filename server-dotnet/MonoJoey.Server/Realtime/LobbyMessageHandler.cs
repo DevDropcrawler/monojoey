@@ -3939,6 +3939,9 @@ public sealed class LobbyMessageHandler
                 AuctionBidResultKind.BidBelowMinimumIncrement => CreateError(
                 LobbyErrorCodes.BidTooLow,
                 bidResult.Message),
+            AuctionBidResultKind.BidderCannotCoverBid => CreateError(
+                LobbyErrorCodes.InsufficientCash,
+                bidResult.Message),
             _ => CreateError(
                 LobbyErrorCodes.InvalidSessionState,
                 bidResult.Message),

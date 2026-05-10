@@ -15,4 +15,5 @@ public enum AuctionBidResultKind
     BidderEliminated,
     BidBelowStartingBid,
     BidBelowMinimumIncrement,
+    BidderCannotCoverBid,
 }

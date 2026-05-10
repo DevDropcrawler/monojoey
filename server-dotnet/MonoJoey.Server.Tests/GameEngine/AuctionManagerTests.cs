@@ -364,6 +364,121 @@ public class AuctionManagerTests
     }
 
     [Fact]
+    public void PlaceBid_AcceptsBidCoveredByMortgageableProperty()
+    {
+        var bidderId = new PlayerId("player_2");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 10, "property_03"));
+        var auctionState = StartAuction(gameState);
+
+        var result = AuctionManager.PlaceBid(gameState, auctionState, bidderId, new Money(60), FirstBidTime);
+
+        Assert.True(result.BidAccepted);
+        Assert.Equal(AuctionBidResultKind.Accepted, result.ResultKind);
+        Assert.Equal(new Money(60), result.AuctionState.HighestBid);
+        Assert.Equal(bidderId, result.AuctionState.HighestBidderId);
+        Assert.Equal(new Money(10), gameState.Players[1].Money);
+        Assert.DoesNotContain(new TileId("property_03"), gameState.PropertyStates.Keys);
+    }
+
+    [Fact]
+    public void PlaceBid_RejectsBidAboveCashAndLegalRaiseableAssets()
+    {
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_01"),
+            CreatePlayer("player_2", "start", money: 10, "property_03"));
+        var auctionState = StartAuction(gameState);
+
+        var result = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(61),
+            FirstBidTime);
+
+        Assert.False(result.BidAccepted);
+        Assert.Equal(AuctionBidResultKind.BidderCannotCoverBid, result.ResultKind);
+        Assert.Same(auctionState, result.AuctionState);
+        Assert.Empty(result.AuctionState.Bids);
+    }
+
+    [Fact]
+    public void PlaceBid_AcceptsBidCoveredByUpgradeSaleAndMortgageValue()
+    {
+        var bidderId = new PlayerId("player_2");
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_03"),
+            CreatePlayer("player_2", "start", money: 10, "property_01", "property_02")) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Economy = GameRulesPresets.MonoJoeyDefault.Economy with { UpgradesEnabled = true },
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                [property02] = new(property02, new PropertyStateData(upgradeLevel: 1)),
+            },
+        };
+        var auctionState = StartAuction(gameState, propertyTileId: "property_03");
+
+        var result = AuctionManager.PlaceBid(gameState, auctionState, bidderId, new Money(100), FirstBidTime);
+
+        Assert.True(result.BidAccepted);
+        Assert.Equal(AuctionBidResultKind.Accepted, result.ResultKind);
+        Assert.Equal(new Money(100), result.AuctionState.HighestBid);
+        Assert.Equal(bidderId, result.AuctionState.HighestBidderId);
+        Assert.Equal(new Money(10), gameState.Players[1].Money);
+        Assert.Equal(1, gameState.PropertyStates[property01].Data.UpgradeLevel);
+        Assert.False(gameState.PropertyStates[property01].Data.IsMortgaged);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void PlaceBid_RejectsAssetBackedBidWhenRelevantLiquidationRulesAreDisabled(
+        bool upgradesEnabled,
+        bool mortgagesEnabled)
+    {
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var gameState = CreateGameState(
+            CreatePlayer("player_1", "property_03"),
+            CreatePlayer("player_2", "start", money: 10, "property_01", "property_02")) with
+        {
+            Rules = GameRulesPresets.MonoJoeyDefault with
+            {
+                Economy = GameRulesPresets.MonoJoeyDefault.Economy with
+                {
+                    UpgradesEnabled = upgradesEnabled,
+                    MortgagesEnabled = mortgagesEnabled,
+                },
+            },
+            PropertyStates = new Dictionary<TileId, PropertyState>
+            {
+                [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                [property02] = new(property02, new PropertyStateData(upgradeLevel: 1)),
+            },
+        };
+        var auctionState = StartAuction(gameState, propertyTileId: "property_03");
+
+        var result = AuctionManager.PlaceBid(
+            gameState,
+            auctionState,
+            new PlayerId("player_2"),
+            new Money(70),
+            FirstBidTime);
+
+        Assert.False(result.BidAccepted);
+        Assert.Equal(AuctionBidResultKind.BidderCannotCoverBid, result.ResultKind);
+        Assert.Same(auctionState, result.AuctionState);
+        Assert.Empty(result.AuctionState.Bids);
+    }
+
+    [Fact]
     public void PlaceBid_PreservesBidHistory()
     {
         var gameState = CreateGameState(
@@ -537,18 +652,26 @@ public class AuctionManagerTests
     public void FinalizeAuction_WhenWinnerCannotAffordBidEliminatesWinnerAndLeavesPropertyUnowned()
     {
         var propertyTileId = new TileId("property_01");
-        var gameState = CreateGameState(
+        var biddingState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
-            CreatePlayer("player_2", "start", money: 50));
-        var auctionState = StartAuction(gameState);
+            CreatePlayer("player_2", "start", money: 100));
+        var auctionState = StartAuction(biddingState);
         var bidState = AuctionManager.PlaceBid(
-            gameState,
+            biddingState,
             auctionState,
             new PlayerId("player_2"),
             new Money(100),
             FirstBidTime).AuctionState;
+        var finalizationState = biddingState with
+        {
+            Players = new[]
+            {
+                biddingState.Players[0],
+                biddingState.Players[1] with { Money = new Money(50) },
+            },
+        };
 
-        var result = AuctionManager.FinalizeAuction(gameState, bidState);
+        var result = AuctionManager.FinalizeAuction(finalizationState, bidState);
 
         Assert.True(result.WinnerFailedToPay);
         Assert.Equal(AuctionFinalizationResultKind.WinnerFailedToPay, result.ResultKind);
@@ -603,20 +726,28 @@ public class AuctionManagerTests
         {
             [mortgagedTileId] = new(mortgagedTileId, new PropertyStateData()),
         };
-        var gameState = CreateGameState(
+        var biddingState = CreateGameState(
             CreatePlayer("player_1", "property_01"),
-            CreatePlayer("player_2", "start", money: 5, "property_03")) with
+            CreatePlayer("player_2", "start", money: 80, "property_03")) with
         {
             PropertyStates = propertyStates,
         };
-        var auctionState = StartAuction(gameState);
+        var auctionState = StartAuction(biddingState);
         var bidState = AuctionManager.PlaceBid(
-            gameState,
+            biddingState,
             auctionState,
             new PlayerId("player_2"),
             new Money(80),
             FirstBidTime).AuctionState;
-        var finalizationState = gameState with { ActiveAuctionState = bidState };
+        var finalizationState = biddingState with
+        {
+            ActiveAuctionState = bidState,
+            Players = new[]
+            {
+                biddingState.Players[0],
+                biddingState.Players[1] with { Money = new Money(5) },
+            },
+        };
 
         var result = AuctionManager.FinalizeAuction(finalizationState, bidState);
 
@@ -751,12 +882,15 @@ public class AuctionManagerTests
         };
     }
 
-    private static AuctionState StartAuction(GameState gameState, AuctionConfig? config = null)
+    private static AuctionState StartAuction(
+        GameState gameState,
+        AuctionConfig? config = null,
+        string propertyTileId = "property_01")
     {
         var result = AuctionManager.StartMandatoryAuction(
             gameState,
             new PlayerId("player_1"),
-            new TileId("property_01"),
+            new TileId(propertyTileId),
             config ?? DefaultAuctionConfig());
 
         Assert.True(result.AuctionStarted);

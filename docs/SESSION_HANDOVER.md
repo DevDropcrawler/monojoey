@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Jail/Joey Hole Runtime Parity
-- Completion status: Classic lockup and doubles runtime behavior is implemented server-side: doubles extra turns, triple-doubles lockup, jailed roll attempts, doubles release, max-attempt fine release, insufficient-fine handling, and no-extra-turn-after-jail-release.
+- Chunk: Total-Liquidation-Value Auction Bidding
+- Completion status: Auction bids are now validated against current cash plus legal raiseable value from sellable upgrades and mortgageable properties; accepted asset-backed bids remain non-mutating until auction finalization.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
 - Previous commit: `748a2b3`
 - Last commit before this chunk: `748a2b3`
@@ -19,18 +19,15 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Jail/Joey Hole Runtime Parity.
+Total-Liquidation-Value Auction Bidding.
 
 Completed:
 
-- Added server runtime handling for doubles extra turns when `rules.dice.doublesExtraTurnEnabled` is true.
-- Added triple-doubles direct lockup behavior through the existing lockup authority, with no landing execution and no extra turn.
-- Added jailed-player `roll_dice` behavior: failed attempts, doubles release, max-attempt `payFineAndRelease`, insufficient-fine deterministic stay-locked behavior, and completed-turn semantics for failed attempts.
-- Added no-extra-turn suppression after jail release by doubles, forced fine payment, disabled-jail release, or held escape card.
-- Added extra-turn advancement that keeps the same current player without re-running start-turn loan interest or automatic repairs.
-- Added additive `roll_result` helper fields for `rollKind`, `jailRollAttemptCount`, and roll-time `playerEliminations`.
-- Added tests for doubles extra turns, triple doubles, jailed failed attempts, jailed release movement, max-attempt payment, insufficient fine, snapshot/reconnect jail state, all-locked turn progression, held-card suppression, and loan-interest timing.
-- Verified `dotnet test server-dotnet\MonoJoey.sln -v minimal` passes: 892 passed, 0 failed, 0 skipped.
+- Added read-only auction bid affordability validation through `SolvencyAnalyzer.Analyze` using `AuctionPayment` obligations.
+- Bids may now be accepted when cash is insufficient but cash plus legal sellable upgrades and mortgageable properties covers the amount.
+- Bids above total legal raiseable value are rejected as `AuctionBidResultKind.BidderCannotCoverBid` and map to realtime `insufficient_cash`.
+- `place_bid` remains non-mutating except for persisted auction metadata after accepted bids; no loan, mortgage, upgrade-sale, payment, ownership, or finalization authority was added there.
+- Auction finalization remains the only path that performs liquidation, payment, elimination on failed payment, and ownership transfer.
 
 Not included by explicit user scope:
 
@@ -38,7 +35,7 @@ Not included by explicit user scope:
 - Persistence.
 - Stats.
 - Custom card editor or custom card creation.
-- Trade timers, chat, negotiation rounds, multi-party trades, multiple outgoing offers per proposer, replay redesign, persistence, stats, UI, async workflows, turn-flow changes, upgrade sell/downgrade, asset liquidation, loan repayment, or debt recovery.
+- Trade timers, chat, negotiation rounds, multi-party trades, multiple outgoing offers per proposer, replay redesign, persistence, stats, UI, async workflows, turn-flow changes, manual upgrade sell/downgrade, manual asset liquidation actions, loan repayment, or debt recovery.
 - `GamePhase` changes.
 - Turn loop restructuring.
 - Runtime randomness or random Earthquake tile selection.
@@ -54,18 +51,15 @@ Not included by explicit user scope:
 - Voluntary realtime pay-fine request UI/flow.
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
-- Realtime liquidation requests, UI, auto-liquidation, forced property transfer, auction liquidation, or any rewrite of the hard-elimination flow.
+- Realtime liquidation requests, UI, auto-liquidation outside auction finalization, forced property transfer, or any rewrite of the hard-elimination flow.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerTurnStateManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `docs/GAME_RULES_SPEC.md`
 - `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 - `docs/UNITY_INTEGRATION_CONTRACT.md`
@@ -164,7 +158,7 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 892 passed, 0 failed, 0 skipped.
+  - Output summary: 915 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
@@ -231,12 +225,11 @@ Not included by explicit user scope:
 - If `execute_tile` eliminated the current player and the match completed, later gameplay requests return `game_already_completed`; if the match did not complete, `end_turn` still returns `player_eliminated` and does not advance.
 - Successful `end_turn` advances through `TurnManager.AdvanceToNextTurn` for normal turn changes or `TurnManager.AdvanceToExtraTurn` for eligible doubles extra turns; the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
 - `end_turn` does not emit snapshots, finalize auctions, add persistence, add client behavior, or special-case eliminated players into a forced advance. Successful end-turn actions emit `turn_ended`.
-- `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`.
+- `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`, and bidder coverage from current cash plus legal raiseable asset value.
 - `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
-- Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, turn flags, or phase values are changed.
+- Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, loans, mortgages, upgrades, turn flags, or phase values are changed.
 - `bid_result` is the direct sender response and contains `bidderPlayerId`, `amount`, `currentHighestBid`, `highestBidderId`, `propertyTileId`, `status`, `minimumNextBid`, `bidCount`, `countdownDurationSeconds`, and `timerEndsAtUtc` from the persisted updated active auction state. Accepted bids emit `bid_accepted`.
-- Rejected `place_bid` calls return `error` and do not update `GameState`.
-- Bid affordability is still not checked in the WebSocket layer; this preserves existing `AuctionManager.PlaceBid` behavior and leaves loan/affordability policy to a later chunk.
+- Rejected `place_bid` calls return `error` and do not update `GameState`; under-total bids return `bid_too_low`, while bids above cash plus legal raiseable assets return `insufficient_cash`.
 - `finalize_auction` requires a bound in-game session/player connection, the current turn player, a non-eliminated caller, and `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`; locked current players may finalize active auctions.
 - Successful `finalize_auction` calls clear `GameState.ActiveAuctionState` and preserve `GamePhase`; turn advancement remains an explicit later `end_turn` request.
 - `auction_result` is the direct sender response and contains `resultType` (`won`, `no_sale`, or `failed_payment`), nullable `winnerPlayerId`, `amount`, `tileId`, and optional helper `moneyDeltas`, `propertyOwnershipChanges`, and `playerEliminations`. Successful finalization emits `auction_finalized`, including no-sale outcomes.
@@ -360,11 +353,12 @@ Not included by explicit user scope:
 - Core game engine code lives under `server-dotnet/MonoJoey.Server/GameEngine`.
 - Auctions still produce standalone `AuctionState`; `GameState.ActiveAuctionState` now stores the active mandatory auction started by `execute_tile`, is updated by `place_bid`, and is cleared by successful `finalize_auction`.
 - `AuctionManager.PlaceBid` returns a new `AuctionState` inside `AuctionBidResult`; rejected bids return the unchanged auction state.
+- `AuctionManager.PlaceBid` validates affordability with `SolvencyAnalyzer` using a bank `AuctionPayment` obligation for the bid amount and auctioned tile. This is valuation-only and does not execute liquidation.
 - `AuctionManager.PlaceBid` requires a caller-supplied `DateTimeOffset` for bid history and does not read wall-clock time.
-- Bid validation still does not check bidder cash balance; finalization handles payment failure deterministically.
+- Bid validation checks cash plus legal raiseable asset value; finalization still handles payment failure deterministically if the winner's state changes before payment.
 - `AuctionManager.FinalizeAuction` assumes the auction has already ended; it does not read wall-clock time or own timers. Timer expiry validation lives in `LobbyMessageHandler`.
 - Auction finalization selects the highest non-eliminated bidder from bid history.
-- Affordable auction winners pay the winning bid and receive ownership through `PropertyManager.AssignOwner`.
+- Affordable auction winners pay the winning bid through `LiquidationExecutionManager.ExecutePaymentObligation` and receive ownership through `PropertyManager.AssignOwner`.
 - Unaffordable auction winners are eliminated through `BankruptcyManager.EliminateForFailedPayment`; no money is deducted and the property remains unowned.
 - `AuctionManager.StartMandatoryAuction` treats `Tile.IsPurchasable && Tile.IsAuctionable` as auction eligibility.
 - Disabled mandatory auctions return a typed no-auction result before player/tile lookup.
@@ -455,7 +449,7 @@ Do not implement before its assigned chunk:
 - Loan repayment.
 - Auction retry logic.
 - Debt recovery.
-- Asset liquidation.
+- Manual asset liquidation actions outside auction finalization.
 - Automatic card reshuffling.
 - Voluntary realtime pay-fine request and client UI for jail choices.
 - Upgrade sell/downgrade and house UI.

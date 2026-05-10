@@ -290,7 +290,9 @@ Server validates:
 - Auction is active.
 - Bidder is active.
 - Amount meets minimum increment.
-- Bidder can pay or has valid separate borrowing path.
+- Bidder can cover the bid from current cash plus legal raiseable asset value: sellable upgrades and mortgageable properties.
+
+This affordability check is read-only. `place_bid` does not sell upgrades, mortgage property, take loans, move money, or transfer ownership. Bids above cash plus legal raiseable assets return `insufficient_cash`; bids below the required amount return `bid_too_low`. Actual liquidation/payment and auction ownership transfer happen only during `finalize_auction`.
 
 ### Take loan
 

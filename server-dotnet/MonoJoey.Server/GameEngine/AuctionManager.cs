@@ -106,6 +106,21 @@ public static class AuctionManager
             }
         }
 
+        var paymentObligation = new PaymentObligation(
+            bidderId,
+            amount,
+            PaymentObligationKind.AuctionPayment,
+            PaymentObligationCreditor.Bank,
+            auctionState.PropertyTileId);
+        var solvency = SolvencyAnalyzer.Analyze(gameState, paymentObligation);
+        if (!CanCoverAuctionBid(solvency))
+        {
+            return BidRejected(
+                AuctionBidResultKind.BidderCannotCoverBid,
+                auctionState,
+                "Auction bidder cannot cover bid with cash and legal raiseable assets.");
+        }
+
         var bid = new AuctionBid(bidderId, amount, placedAtUtc);
         var bids = auctionState.Bids.Concat(new[] { bid }).ToArray();
         var nextState = auctionState with
@@ -308,6 +323,12 @@ public static class AuctionManager
     private static bool IsKnownAuctionStatus(AuctionStatus status)
     {
         return status is AuctionStatus.AwaitingInitialBid or AuctionStatus.ActiveBidCountdown;
+    }
+
+    private static bool CanCoverAuctionBid(SolvencyAnalysisResult solvency)
+    {
+        return solvency.ResultKind is SolvencyAnalysisResultKind.SolventWithCash or
+            SolvencyAnalysisResultKind.SolventWithAssets;
     }
 
     private static int? FindPropertyOwnerIndex(IReadOnlyList<Player> players, TileId propertyTileId)

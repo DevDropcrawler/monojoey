@@ -3175,6 +3175,83 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void PlaceBid_BidAboveTotalRaiseableValueReturnsInsufficientCashWithoutSequenceOrTimerChange()
+    {
+        using var timerService = new AuctionTimerService();
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2), timerService);
+        var started = StartReadyGame(sessionManager, handler);
+        var session = StartActiveAuction(sessionManager, started.Session.SessionId);
+        var initialDeadline = session.GameState.ActiveAuctionState!.TimerEndsAtUtc!.Value;
+        timerService.Schedule(session.SessionId, initialDeadline);
+        _ = timerService.TryGetActiveTimerForTesting(session.SessionId, out _, out var initialVersion);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                Money = new Money(10),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+        var beforeRejectedBid = sessionManager.GetSession(started.Session.SessionId)!;
+        var beforeAuction = beforeRejectedBid.GameState.ActiveAuctionState;
+        var beforeSequence = beforeRejectedBid.LastEventSequence;
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 61));
+        var afterRejectedBid = sessionManager.GetSession(started.Session.SessionId)!;
+        var foundTimer = timerService.TryGetActiveTimerForTesting(
+            session.SessionId,
+            out var activeDeadline,
+            out var activeVersion);
+
+        AssertError(response, "insufficient_cash");
+        Assert.Same(beforeAuction, afterRejectedBid.GameState.ActiveAuctionState);
+        Assert.Equal(beforeSequence, afterRejectedBid.LastEventSequence);
+        Assert.True(foundTimer);
+        Assert.Equal(initialDeadline, activeDeadline);
+        Assert.Equal(initialVersion, activeVersion);
+        Assert.Equal(1, timerService.ActiveTimerCount);
+    }
+
+    [Fact]
+    public void PlaceBid_AssetBackedBidDoesNotMutateMoneyPropertyMortgageOrUpgradeState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                Money = new Money(10),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+
+        using var response = Handle(
+            handler,
+            started.SecondContext,
+            PlaceBidMessage(started.Session.SessionId, "player_2", 60));
+        var payload = AssertResponseType(response, "bid_result");
+        var afterBid = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var bidder = afterBid.Players.Single(player => player.PlayerId.Value == "player_2");
+
+        Assert.Equal(60, payload.GetProperty("currentHighestBid").GetInt32());
+        Assert.Equal("player_2", payload.GetProperty("highestBidderId").GetString());
+        Assert.Equal(new Money(10), bidder.Money);
+        Assert.Contains(new TileId("property_03"), bidder.OwnedPropertyIds);
+        Assert.DoesNotContain(new TileId("property_01"), bidder.OwnedPropertyIds);
+        Assert.DoesNotContain(new TileId("property_03"), afterBid.PropertyStates.Keys);
+        Assert.Equal(new Money(60), afterBid.ActiveAuctionState?.HighestBid);
+    }
+
+    [Fact]
     public void PlaceBid_NonCurrentPlayerCanPlaceHigherBid()
     {
         var sessionManager = new SessionManager();
