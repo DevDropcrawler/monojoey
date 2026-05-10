@@ -248,11 +248,128 @@ public class LiquidationExecutionManagerTests
 
         var result = LiquidationExecutionManager.ExecutePaymentObligation(
             gameState,
-            BankObligation("player_1", 40, PaymentObligationKind.Fine));
+            BankObligation("player_1", 40, PaymentObligationKind.Fine),
+            LiquidationExecutionContext.Normal);
 
         Assert.Equal(expectedKind, result.ResultKind);
         Assert.Same(gameState, result.GameState);
         Assert.Empty(result.Steps);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_TileExecutionPaymentPaysCashOnlyBankObligation()
+    {
+        var gameState = CreateUnresolvedTileExecutionState(CreateGameState(CreatePlayer("player_1", 100)));
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            BankObligation("player_1", 40, PaymentObligationKind.Tax),
+            LiquidationExecutionContext.TileExecutionPayment);
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(new[] { LiquidationStepKind.BankPayment }, result.Steps.Select(step => step.StepKind));
+        Assert.Equal(new Money(60), result.DebtorBalance);
+        Assert.Equal(new Money(60), result.GameState.Players[0].Money);
+        AssertUnresolvedTileExecutionPreserved(result.GameState);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_TileExecutionPaymentPaysBankObligationAfterUpgradeSaleAndMortgage()
+    {
+        var property01 = new TileId("property_01");
+        var gameState = CreateUnresolvedTileExecutionState(
+            CreateGameState(CreatePlayer("player_1", 0, "property_01", "property_02", "property_03")) with
+            {
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                },
+            });
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            BankObligation("player_1", 55, PaymentObligationKind.CardPayment),
+            LiquidationExecutionContext.TileExecutionPayment);
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(
+            new[]
+            {
+                (LiquidationStepKind.UpgradeSale, "property_01"),
+                (LiquidationStepKind.Mortgage, "property_01"),
+                (LiquidationStepKind.BankPayment, (string?)null),
+            },
+            result.Steps.Select(step => (step.StepKind, step.PropertyTileId?.Value)).ToArray());
+        Assert.Equal(Money.Zero, result.DebtorBalance);
+        Assert.Equal(0, result.GameState.PropertyStates[property01].Data.UpgradeLevel);
+        Assert.True(result.GameState.PropertyStates[property01].Data.IsMortgaged);
+        AssertUnresolvedTileExecutionPreserved(result.GameState);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_TileExecutionPaymentPaysPlayerObligationAfterLiquidation()
+    {
+        var gameState = CreateUnresolvedTileExecutionState(CreateGameState(
+            CreatePlayer("player_1", 10, "property_03"),
+            CreatePlayer("player_2", 50)));
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            PlayerObligation("player_1", "player_2", 60),
+            LiquidationExecutionContext.TileExecutionPayment);
+
+        Assert.True(result.PaymentExecuted);
+        Assert.Equal(
+            new[] { LiquidationStepKind.Mortgage, LiquidationStepKind.PlayerPayment },
+            result.Steps.Select(step => step.StepKind).ToArray());
+        Assert.Equal(Money.Zero, result.DebtorBalance);
+        Assert.Equal(new Money(110), result.CreditorBalance);
+        Assert.Equal(new Money(110), result.GameState.Players[1].Money);
+        AssertUnresolvedTileExecutionPreserved(result.GameState);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_TileExecutionPaymentRejectsActiveAuction()
+    {
+        var gameState = CreateUnresolvedTileExecutionState(CreateGameState(CreatePlayer("player_1", 100))) with
+        {
+            ActiveAuctionState = CreateAuctionState(),
+        };
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            BankObligation("player_1", 40, PaymentObligationKind.Tax),
+            LiquidationExecutionContext.TileExecutionPayment);
+
+        Assert.Equal(LiquidationExecutionResultKind.ActiveAuction, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Empty(result.Steps);
+    }
+
+    [Fact]
+    public void ExecutePaymentObligation_TileExecutionPaymentReturnsOriginalStateWhenAssetsCannotCover()
+    {
+        var property03 = new TileId("property_03");
+        var propertyStates = new Dictionary<TileId, PropertyState>
+        {
+            [property03] = new(property03, new PropertyStateData(damagePercent: 15)),
+        };
+        var gameState = CreateUnresolvedTileExecutionState(CreateGameState(CreatePlayer("player_1", 5, "property_03")) with
+        {
+            PropertyStates = propertyStates,
+        });
+
+        var result = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            BankObligation("player_1", 80, PaymentObligationKind.Tax),
+            LiquidationExecutionContext.TileExecutionPayment);
+
+        Assert.Equal(LiquidationExecutionResultKind.Insolvent, result.ResultKind);
+        Assert.Same(gameState, result.GameState);
+        Assert.Same(propertyStates, result.GameState.PropertyStates);
+        Assert.Equal(new Money(5), result.GameState.Players[0].Money);
+        Assert.False(result.GameState.PropertyStates[property03].Data.IsMortgaged);
+        AssertUnresolvedTileExecutionPreserved(result.GameState);
     }
 
     [Theory]
@@ -367,6 +484,23 @@ public class LiquidationExecutionManagerTests
         {
             Rules = UpgradeRules(),
         };
+    }
+
+    private static GameState CreateUnresolvedTileExecutionState(GameState gameState)
+    {
+        return gameState with
+        {
+            HasRolledThisTurn = true,
+            HasResolvedTileThisTurn = true,
+            HasExecutedTileThisTurn = false,
+        };
+    }
+
+    private static void AssertUnresolvedTileExecutionPreserved(GameState gameState)
+    {
+        Assert.True(gameState.HasRolledThisTurn);
+        Assert.True(gameState.HasResolvedTileThisTurn);
+        Assert.False(gameState.HasExecutedTileThisTurn);
     }
 
     private static Player CreatePlayer(

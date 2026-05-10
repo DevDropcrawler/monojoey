@@ -9,7 +9,15 @@ public static class LiquidationExecutionManager
         GameState gameState,
         PaymentObligation obligation)
     {
-        var validation = ValidateRequest(gameState, obligation);
+        return ExecutePaymentObligation(gameState, obligation, LiquidationExecutionContext.Normal);
+    }
+
+    internal static LiquidationExecutionResult ExecutePaymentObligation(
+        GameState gameState,
+        PaymentObligation obligation,
+        LiquidationExecutionContext context)
+    {
+        var validation = ValidateRequest(gameState, obligation, context);
         if (validation is not null)
         {
             return Rejected(validation.Value.Kind, gameState, obligation, validation.Value.Message);
@@ -26,7 +34,11 @@ public static class LiquidationExecutionManager
             var upgradeCandidate = FindNextUpgradeSaleCandidate(workingState, debtor);
             if (upgradeCandidate is not null)
             {
-                var sale = PropertyUpgradeManager.SellUpgrade(workingState, debtorId, upgradeCandidate.TileId);
+                var stateBeforeSale = workingState;
+                var sale = PropertyUpgradeManager.SellUpgrade(
+                    CreateAssetLiquidationState(workingState, context),
+                    debtorId,
+                    upgradeCandidate.TileId);
                 if (!sale.UpgradeSold)
                 {
                     return Rejected(
@@ -38,7 +50,7 @@ public static class LiquidationExecutionManager
                         sale.Message);
                 }
 
-                workingState = sale.GameState;
+                workingState = RestoreTileExecutionState(sale.GameState, stateBeforeSale, context);
                 steps.Add(new LiquidationStepResult(
                     LiquidationStepKind.UpgradeSale,
                     upgradeCandidate.TileId,
@@ -54,7 +66,11 @@ public static class LiquidationExecutionManager
             var mortgageCandidate = FindNextMortgageCandidate(workingState, debtor);
             if (mortgageCandidate is not null)
             {
-                var mortgage = MortgageManager.MortgageProperty(workingState, debtorId, mortgageCandidate.TileId);
+                var stateBeforeMortgage = workingState;
+                var mortgage = MortgageManager.MortgageProperty(
+                    CreateAssetLiquidationState(workingState, context),
+                    debtorId,
+                    mortgageCandidate.TileId);
                 if (!mortgage.MortgageAccepted)
                 {
                     return Rejected(
@@ -66,7 +82,7 @@ public static class LiquidationExecutionManager
                         mortgage.Message);
                 }
 
-                workingState = mortgage.GameState;
+                workingState = RestoreTileExecutionState(mortgage.GameState, stateBeforeMortgage, context);
                 steps.Add(new LiquidationStepResult(
                     LiquidationStepKind.Mortgage,
                     mortgageCandidate.TileId,
@@ -185,8 +201,18 @@ public static class LiquidationExecutionManager
             "Payment obligation paid to player.");
     }
 
-    private static RequestValidation? ValidateRequest(GameState gameState, PaymentObligation obligation)
+    private static RequestValidation? ValidateRequest(
+        GameState gameState,
+        PaymentObligation obligation,
+        LiquidationExecutionContext context)
     {
+        if (!Enum.IsDefined(context))
+        {
+            return new RequestValidation(
+                LiquidationExecutionResultKind.InvalidObligation,
+                "Payment liquidation context is not supported.");
+        }
+
         var obligationValidation = ValidateObligation(obligation);
         if (obligationValidation is not null)
         {
@@ -205,7 +231,7 @@ public static class LiquidationExecutionManager
                 "Payment liquidation is blocked during active auctions.");
         }
 
-        if (HasUnresolvedTileExecution(gameState))
+        if (HasUnresolvedTileExecution(gameState) && context != LiquidationExecutionContext.TileExecutionPayment)
         {
             return new RequestValidation(
                 LiquidationExecutionResultKind.UnresolvedTileExecution,
@@ -310,6 +336,31 @@ public static class LiquidationExecutionManager
         }
 
         return null;
+    }
+
+    private static GameState CreateAssetLiquidationState(
+        GameState gameState,
+        LiquidationExecutionContext context)
+    {
+        return context == LiquidationExecutionContext.TileExecutionPayment && HasUnresolvedTileExecution(gameState)
+            ? gameState with { HasExecutedTileThisTurn = true }
+            : gameState;
+    }
+
+    private static GameState RestoreTileExecutionState(
+        GameState updatedState,
+        GameState previousState,
+        LiquidationExecutionContext context)
+    {
+        return context == LiquidationExecutionContext.TileExecutionPayment && HasUnresolvedTileExecution(previousState)
+            ? updatedState with
+            {
+                CurrentTurnPlayerId = previousState.CurrentTurnPlayerId,
+                HasRolledThisTurn = previousState.HasRolledThisTurn,
+                HasResolvedTileThisTurn = previousState.HasResolvedTileThisTurn,
+                HasExecutedTileThisTurn = previousState.HasExecutedTileThisTurn,
+            }
+            : updatedState;
     }
 
     private static Tile? FindNextUpgradeSaleCandidate(GameState gameState, Player debtor)

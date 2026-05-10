@@ -48,3 +48,9 @@ public enum LiquidationStepKind
     BankPayment,
     PlayerPayment,
 }
+
+internal enum LiquidationExecutionContext
+{
+    Normal,
+    TileExecutionPayment,
+}
