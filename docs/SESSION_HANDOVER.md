@@ -5,11 +5,11 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Failed Liquidation Realtime Hardening
-- Completion status: Realtime tax and single-debtor bank-card failed liquidation now eliminates through `BankruptcyManager.EliminateForFailedPayment` without fallback cash deductions, payout helpers, or partial mortgage/upgrade mutation.
-- Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; local has this chunk implemented and validated but not committed.
-- Previous commit: `748a2b3`
-- Last commit before this chunk: `748a2b3`
+- Chunk: Loan Shark Turn Advancement Regression and V1 Protocol Freeze
+- Completion status: Start-of-turn Loan Shark interest elimination no longer strands non-terminal 3+ player matches; V1 protocol docs are aligned to current snake_case runtime messages and Unity handoff expectations.
+- Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; previous audit baseline was clean at `ef7adc4`, and this chunk is currently implemented and validated locally but not committed.
+- Previous commit: `ef7adc4`
+- Last commit before this chunk: `ef7adc4`
 - Last commit after this chunk: not committed
 - Date/time: 2026-05-10
 
@@ -19,14 +19,14 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Failed Liquidation Realtime Hardening.
+Loan Shark Turn Advancement Regression and V1 Protocol Freeze.
 
 Completed:
 
-- Hardened realtime tax failed liquidation so insolvency preserves cash/property state and emits `playerEliminations` only.
-- Hardened single-debtor bank-card failed liquidation the same way while preserving draw/discard behavior.
-- Added engine rollback coverage for ownership, mortgage flags, upgrade levels, property damage, and player balances after failed single- and multi-creditor liquidation.
-- Added realtime regression coverage for failed tax/card helper omission, preserved property state, card discard, and reconnect snapshot projection.
+- Added engine regression coverage for `TurnManager.AdvanceToNextTurn` when start-turn Loan Shark interest eliminates the selected next player in a 3+ player game.
+- Fixed normal turn advancement so a non-terminal eliminated candidate is skipped and the next active player becomes the current turn player.
+- Added realtime regression coverage for 3+ player `end_turn` loan-interest elimination, terminal loan-interest elimination with `game_completed`, auction reconnect state after finalization/liquidation, and direct-response/broadcast payload identity for auction finalization and loan-taking.
+- Updated the session handover, multiplayer protocol, and Unity integration contract around clean baseline status, V1 snake_case protocol shape, Loan Shark turn advancement, recovery limitations, and Unity handoff readiness.
 
 Not included by explicit user scope:
 
@@ -51,14 +51,16 @@ Not included by explicit user scope:
 - Client-owned Slimer application/removal requests, status aging, status mutation events, Unity client code, repair UI, or broad engine refactors.
 - Loan principal repayment and existing-loan-debt obligation kinds; those systems still do not exist.
 - Realtime liquidation requests, UI, auto-liquidation outside auction finalization, forced property transfer, or broad bankruptcy rewrites.
-- Any change to `GamePhase`, snapshot DTOs/version, ownership authority, mortgage authority, auction authority, Loan Shark, Slimer/status effects, Earthquake/property repair behavior, held cards, custom cards, or deck schemas.
+- Any change to `GamePhase`, snapshot DTOs/version, ownership authority, mortgage authority, auction authority, Loan Shark interest math/borrowing rules, Slimer/status effects, Earthquake/property repair behavior, held cards, custom cards, or deck schemas.
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/LiquidationExecutionManagerTests.cs`
+- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
+- `server-dotnet/MonoJoey.Server.Tests/GameEngine/TurnManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
 - `docs/SESSION_HANDOVER.md`
+- `docs/MULTIPLAYER_PROTOCOL.md`
+- `docs/UNITY_INTEGRATION_CONTRACT.md`
 
 ## Previous Chunk Files
 
@@ -152,20 +154,21 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
-- `dotnet test server-dotnet\MonoJoey.sln --filter "FullyQualifiedName~LiquidationExecutionManagerTests|FullyQualifiedName~LobbyMessageHandlerTests" -v minimal`
+- `dotnet test server-dotnet\MonoJoey.Server.Tests\MonoJoey.Server.Tests.csproj --filter "FullyQualifiedName~TurnManagerTests|FullyQualifiedName~LobbyMessageHandlerTests" -v minimal`
   - Result: succeeded.
-  - Output summary: 399 passed, 0 failed, 0 skipped.
+  - Output summary: 395 passed, 0 failed, 0 skipped.
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 929 passed, 0 failed, 0 skipped.
+  - Output summary: 935 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
-- `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
+- `AGENTS.md` was provided in conversation but is not present at the repo root in this sandbox view. `LEAN-CTX.md` resolves one directory above the repo; its MCP root was unavailable for this workspace, so local shell reads were used.
 - `GameRules.Loans` rate-field defaults still do not match current runtime loan manager behavior. This chunk deliberately preserved runtime 20/30/50/+10/100 behavior and left schema/default correction for a separate phase.
 - No UI, persistence, stats, event replay, or reconnect catch-up was added.
 - Cash-only auction finalization may include a `liquidationSteps` entry for `bank_payment`; this is now documented as a persisted payment step.
 - Cash-only negative-balance elimination remains in non-liquidation paths such as Loan Shark interest and direct card cash-effect execution.
+- Start-first-turn Loan Shark interest can still eliminate the first selected player before any roll; this chunk only fixed normal turn advancement after `end_turn`.
 
 ## Placeholders Introduced Or Preserved
 
@@ -226,8 +229,8 @@ Not included by explicit user scope:
 - `end_turn` rejects missing sessions through `invalid_session`, unbound or switched session/player connections through `player_switch_rejected`, lobby/non-game sessions through `invalid_session_state`, missing engine players through `player_not_found`, non-current players through `not_your_turn`, eliminated current players through `player_eliminated`, locked current players before the completed-turn state through `player_locked`, incomplete turn steps through `invalid_session_state`, and active auctions through `invalid_session_state`.
 - Locked status is ignored for `end_turn` only in the completed-turn state: `HasRolledThisTurn`, `HasResolvedTileThisTurn`, and `HasExecutedTileThisTurn` are all true and `ActiveAuctionState` is null.
 - If `execute_tile` eliminated the current player and the match completed, later gameplay requests return `game_already_completed`; if the match did not complete, `end_turn` still returns `player_eliminated` and does not advance.
-- Successful `end_turn` advances through `TurnManager.AdvanceToNextTurn` for normal turn changes or `TurnManager.AdvanceToExtraTurn` for eligible doubles extra turns; the handler persists that returned state through the same `SessionManager.UpdateGameState` pattern used by `roll_dice`, `resolve_tile`, and `execute_tile`.
-- `end_turn` does not emit snapshots, finalize auctions, add persistence, add client behavior, or special-case eliminated players into a forced advance. Successful end-turn actions emit `turn_ended`.
+- Successful `end_turn` advances through `TurnManager.AdvanceToNextTurn` for normal turn changes or `TurnManager.AdvanceToExtraTurn` for eligible doubles extra turns; the handler persists that returned state through terminal-aware event allocation so `game_completed` can follow terminal actions.
+- If start-turn Loan Shark interest eliminates the selected next player in a non-terminal match, `TurnManager.AdvanceToNextTurn` skips that eliminated player and selects the next active player before returning. Successful end-turn actions emit `turn_ended`; terminal actions additionally emit `game_completed`.
 - `place_bid` requires a positive integer `amount`, a bound in-game session/player connection, a non-eliminated engine player, `ActiveAuctionState.Status` of `AwaitingInitialBid` or `ActiveBidCountdown`, and bidder coverage from current cash plus legal raiseable asset value.
 - `place_bid` allows non-current players to bid, does not require turn ownership, and permits locked non-eliminated players during active auctions.
 - Accepted `place_bid` calls update only `GameState.ActiveAuctionState`; no player money, property ownership, loans, mortgages, upgrades, turn flags, or phase values are changed.
@@ -382,6 +385,7 @@ Not included by explicit user scope:
 - Start-of-turn loan interest uses the same interest calculation and is skipped entirely when `rules.loans.loanSharkEnabled` is false.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` derive `LoanSharkConfig` from `GameState.Rules.Loans` and call `LoanManager.StartTurnInterestCheck` before the returned `AwaitingRoll` turn can produce a current player for roll handling.
 - `TurnManager.StartFirstTurn` and `TurnManager.AdvanceToNextTurn` can select locked active players when `GameState.Rules.Jail.Enabled` is true, so jail turns are not stranded.
+- `TurnManager.AdvanceToNextTurn` now reselects after start-turn effects when the selected candidate is eliminated and more than one active player remains; it leaves terminal elimination state intact so completion can be emitted atomically.
 - Locked current players may `roll_dice` when `GameState.Rules.Jail.Enabled` is true; locked `resolve_tile` and `execute_tile` remain blocked unless the roll path released the player.
 - Unpaid start-turn interest is a forced deduction; if the resulting balance is negative, existing negative-balance bankruptcy elimination marks the player bankrupt/eliminated.
 - Loan enforcement does not interact with auctions, repayment, networking, UI, persistence, or stats.

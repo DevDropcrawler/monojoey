@@ -207,6 +207,10 @@ new action.
   player and does not re-run start-turn loan interest or automatic property repair.
 - Normal next-player advancement applies start-of-turn loan interest and automatic property repair for
   the selected next player.
+- If start-of-turn Loan Shark interest eliminates the selected next player and more than one active
+  player remains, the server skips the eliminated player and returns the next active player as
+  `nextPlayerId`. If that elimination leaves one active player, the same committed update emits
+  `turn_ended` followed by `game_completed`.
 - `end_turn_result.moneyDeltas` can include `loan_interest` and `property_repair`.
 
 Auctions:

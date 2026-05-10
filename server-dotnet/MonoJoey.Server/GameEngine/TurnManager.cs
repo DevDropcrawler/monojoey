@@ -82,7 +82,7 @@ public static class TurnManager
             ActiveAuctionState = null,
         };
 
-        return ApplyStartTurnEffects(nextGameState, nextPlayerId);
+        return ApplyStartTurnEffectsAndSkipEliminatedNonTerminalPlayers(nextGameState, nextPlayerId);
     }
 
     public static GameState AdvanceToExtraTurn(GameState gameState)
@@ -126,6 +126,29 @@ public static class TurnManager
         return player.IsEliminated
             ? afterLoanInterest
             : PropertyStateManager.RepairDamagedOwnedProperties(afterLoanInterest, playerId);
+    }
+
+    private static GameState ApplyStartTurnEffectsAndSkipEliminatedNonTerminalPlayers(
+        GameState gameState,
+        PlayerId playerId)
+    {
+        var afterStartTurnEffects = ApplyStartTurnEffects(gameState, playerId);
+        var player = afterStartTurnEffects.Players.Single(candidate => candidate.PlayerId == playerId);
+        if (!player.IsEliminated || CountActivePlayers(afterStartTurnEffects.Players) <= 1)
+        {
+            return afterStartTurnEffects;
+        }
+
+        var currentIndex = FindCurrentPlayerIndex(afterStartTurnEffects.Players, playerId);
+        var nextIndex = FindNextActivePlayerIndex(
+            afterStartTurnEffects.Players,
+            currentIndex,
+            afterStartTurnEffects.Rules.Jail.Enabled);
+        var nextPlayerId = afterStartTurnEffects.Players[nextIndex].PlayerId;
+
+        return ApplyStartTurnEffectsAndSkipEliminatedNonTerminalPlayers(
+            afterStartTurnEffects with { CurrentTurnPlayerId = nextPlayerId },
+            nextPlayerId);
     }
 
     private static int FindCurrentPlayerIndex(IReadOnlyList<Player> players, PlayerId currentTurnPlayerId)
@@ -181,5 +204,10 @@ public static class TurnManager
     private static bool IsActive(Player player)
     {
         return !player.IsEliminated;
+    }
+
+    private static int CountActivePlayers(IReadOnlyList<Player> players)
+    {
+        return players.Count(IsActive);
     }
 }

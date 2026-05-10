@@ -3140,6 +3140,99 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void EndTurn_WhenLoanInterestEliminatesNextPlayerInThreePlayerGameAdvancesToNextActivePlayer()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartThreePlayerReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = true,
+                HasExecutedTileThisTurn = true,
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with
+                        {
+                            Money = new Money(5),
+                            LoanState = new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1),
+                        }
+                        : player)
+                    .ToArray(),
+            });
+
+        var result = handler.HandleTextMessageResult(
+            EndTurnMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var payload = Assert.IsType<EndTurnResultPayload>(result.DirectResponse.Payload);
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("end_turn_result", result.DirectResponse.Type);
+        Assert.Equal("turn_ended", Assert.Single(result.Broadcasts).Type);
+        Assert.Equal("player_3", payload.NextPlayerId);
+        var elimination = Assert.Single(payload.PlayerEliminations ?? Array.Empty<PlayerEliminationPayload>());
+        Assert.Equal("player_2", elimination.PlayerId);
+        Assert.Equal("negative_balance", elimination.Reason);
+        Assert.Equal("player_3", afterEnd.CurrentTurnPlayerId?.Value);
+        Assert.True(afterEnd.Players.Single(player => player.PlayerId.Value == "player_2").IsEliminated);
+
+        using var player3RollResponse = Handle(
+            handler,
+            started.ThirdContext,
+            RollDiceMessage(started.Session.SessionId, "player_3"));
+
+        AssertResponseType(player3RollResponse, "roll_result");
+    }
+
+    [Fact]
+    public void EndTurn_WhenLoanInterestEliminatesLastOpponentEmitsGameCompleted()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                HasRolledThisTurn = true,
+                HasResolvedTileThisTurn = true,
+                HasExecutedTileThisTurn = true,
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with
+                        {
+                            Money = new Money(5),
+                            LoanState = new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1),
+                        }
+                        : player)
+                    .ToArray(),
+            });
+
+        var result = handler.HandleTextMessageResult(
+            EndTurnMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var endTurnPayload = Assert.IsType<EndTurnResultPayload>(result.DirectResponse.Payload);
+        var completionPayload = Assert.IsType<GameCompletedPayload>(result.Broadcasts[1].Payload);
+        var afterEnd = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("end_turn_result", result.DirectResponse.Type);
+        Assert.Equal(2, result.Broadcasts.Count);
+        Assert.Equal("turn_ended", result.Broadcasts[0].Type);
+        Assert.Equal("game_completed", result.Broadcasts[1].Type);
+        Assert.Equal(result.Broadcasts[0].Sequence + 1, result.Broadcasts[1].Sequence);
+        Assert.Equal("player_2", endTurnPayload.NextPlayerId);
+        Assert.Equal("player_1", completionPayload.WinnerPlayerId);
+        Assert.Equal(new[] { "player_2" }, completionPayload.EliminatedPlayerIds);
+        Assert.Equal(GameStatus.Completed, afterEnd.Status);
+        Assert.Equal(GamePhase.Completed, afterEnd.Phase);
+        Assert.Equal(new PlayerId("player_1"), afterEnd.WinnerPlayerId);
+    }
+
+    [Fact]
     public void EndTurn_PersistsRepairForSnapshotAndReconnect()
     {
         var sessionManager = new SessionManager();
@@ -3693,6 +3786,23 @@ public class LobbyMessageHandlerTests
         Assert.Equal("loan", moneyDelta.GetProperty("reason").GetString());
         Assert.Equal(new Money(1700), player.Money);
         Assert.Equal(new Money(200), player.LoanState?.TotalBorrowed);
+    }
+
+    [Fact]
+    public void TakeLoan_AcceptedLoanBroadcastMatchesDirectPayload()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+
+        var result = handler.HandleTextMessageResult(
+            TakeLoanMessage(started.Session.SessionId, "player_1", 200, "rent_payment"),
+            started.FirstContext);
+        var broadcast = Assert.Single(result.Broadcasts);
+
+        Assert.Equal("loan_result", result.DirectResponse.Type);
+        Assert.Equal("loan_taken", broadcast.Type);
+        Assert.Same(result.DirectResponse.Payload, broadcast.Payload);
     }
 
     [Fact]
@@ -5893,6 +6003,25 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void FinalizeAuction_BroadcastMatchesDirectPayload()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+
+        var result = handler.HandleTextMessageResult(
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var broadcast = Assert.Single(result.Broadcasts);
+
+        Assert.Equal("auction_result", result.DirectResponse.Type);
+        Assert.Equal("auction_finalized", broadcast.Type);
+        Assert.Same(result.DirectResponse.Payload, broadcast.Payload);
+    }
+
+    [Fact]
     public void FinalizeAuction_WinnerLiquidatesMortgageAndEmitsOrderedHelpers()
     {
         var sessionManager = new SessionManager();
@@ -5930,6 +6059,50 @@ public class LobbyMessageHandlerTests
         Assert.Equal(new[] { 260, 0 }, deltas.Select(delta => delta.GetProperty("balance").GetInt32()));
         Assert.True(afterFinalize.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
         Assert.Contains(new TileId("property_01"), afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2").OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_ReconnectSnapshotReflectsWinnerOwnershipAndLiquidationState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                Money = new Money(210),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+        _ = handler.HandleTextMessage(
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        using var reconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_2"));
+        var snapshot = AssertResponseType(reconnectResponse, "reconnect_result").GetProperty("snapshot");
+        var player2 = snapshot.GetProperty("players").EnumerateArray()
+            .Single(player => player.GetProperty("playerId").GetString() == "player_2");
+        var ownedPropertyIds = player2.GetProperty("ownedPropertyIds").EnumerateArray()
+            .Select(propertyId => propertyId.GetString())
+            .ToArray();
+        var property03State = snapshot.GetProperty("propertyStates").EnumerateArray()
+            .Single(state => state.GetProperty("tileId").GetString() == "property_03");
+        var property01Tile = snapshot.GetProperty("board").GetProperty("tiles").EnumerateArray()
+            .Single(tile => tile.GetProperty("tileId").GetString() == "property_01");
+
+        Assert.Contains("property_01", ownedPropertyIds);
+        Assert.Contains("property_03", ownedPropertyIds);
+        Assert.Equal("player_2", property01Tile.GetProperty("ownerPlayerId").GetString());
+        Assert.True(property03State.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, snapshot.GetProperty("activeAuction").ValueKind);
     }
 
     [Fact]
@@ -7403,6 +7576,35 @@ public class LobbyMessageHandlerTests
             secondContext);
     }
 
+    private static StartedThreePlayerRealtimeGame StartThreePlayerReadyGame(
+        SessionManager sessionManager,
+        LobbyMessageHandler handler,
+        string? rulesJson = null)
+    {
+        var session = sessionManager.CreateSession();
+        var firstContext = new LobbyConnectionContext("connection_1");
+        var secondContext = new LobbyConnectionContext("connection_2");
+        var thirdContext = new LobbyConnectionContext("connection_3");
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_1"), firstContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_2"), secondContext);
+        _ = handler.HandleTextMessage(JoinMessage(session.SessionId, "player_3"), thirdContext);
+        if (rulesJson is not null)
+        {
+            _ = handler.HandleTextMessage(SetRulesMessage(session.SessionId, "player_1", rulesJson), firstContext);
+        }
+
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_1", isReady: true), firstContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_2", isReady: true), secondContext);
+        _ = handler.HandleTextMessage(SetReadyMessage(session.SessionId, "player_3", isReady: true), thirdContext);
+        _ = handler.HandleTextMessage(StartGameMessage(session.SessionId, "player_1"), firstContext);
+
+        return new StartedThreePlayerRealtimeGame(
+            sessionManager.GetSession(session.SessionId)!,
+            firstContext,
+            secondContext,
+            thirdContext);
+    }
+
     private static bool CompleteCurrentTurn(
         LobbyMessageHandler handler,
         LobbyConnectionContext context,
@@ -7888,6 +8090,12 @@ public class LobbyMessageHandlerTests
         GameSession Session,
         LobbyConnectionContext FirstContext,
         LobbyConnectionContext SecondContext);
+
+    private sealed record StartedThreePlayerRealtimeGame(
+        GameSession Session,
+        LobbyConnectionContext FirstContext,
+        LobbyConnectionContext SecondContext,
+        LobbyConnectionContext ThirdContext);
 
     private sealed class FixedDiceRoller : IDiceRoller
     {

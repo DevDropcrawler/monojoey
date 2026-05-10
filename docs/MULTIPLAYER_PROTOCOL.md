@@ -15,14 +15,16 @@ The client must never send final authoritative outcomes.
 
 ## Message envelope
 
-Suggested common envelope:
+Current client request envelope:
 
 ```json
 {
-  "messageId": "msg_123",
-  "type": "PlaceBidRequest",
-  "sentAtUtc": "2026-04-25T00:00:00Z",
-  "payload": {}
+  "type": "place_bid",
+  "payload": {
+    "sessionId": "session_123",
+    "playerId": "player_2",
+    "amount": 220
+  }
 }
 ```
 
@@ -170,71 +172,69 @@ Example `auction_finalized` payload:
 
 Lobby:
 
-- `CreateLobbyRequest`
-- `JoinLobbyRequest`
-- `LeaveLobbyRequest`
-- `SetPlayerProfileRequest`
-- `SetReadyRequest`
-- `StartMatchRequest`
+- `create_lobby`
+- `join_lobby`
+- `leave_lobby`
+- `set_profile`
+- `set_ready`
+- `set_rules`
+- `start_game`
 
 Gameplay:
 
-- `RollDiceRequest`
-- `PlaceBidRequest`
-- `TakeLoanRequest`
-- `MortgagePropertyRequest`
-- `UnmortgagePropertyRequest`
-- `UpgradePropertyRequest`
-- `CreateTradeOfferRequest`
-- `AcceptTradeOfferRequest`
-- `DeclineTradeOfferRequest`
-- `CancelTradeOfferRequest`
-- `UseHeldCardRequest`
-- `EndTurnRequest`
-- `RequestSnapshot`
-- `ReconnectSession`
+- `roll_dice`
+- `resolve_tile`
+- `execute_tile`
+- `end_turn`
+- `place_bid`
+- `finalize_auction`
+- `take_loan`
+- `mortgage_property`
+- `unmortgage_property`
+- `upgrade_property`
+- `use_held_card`
+- `create_trade_offer`
+- `accept_trade_offer`
+- `decline_trade_offer`
+- `cancel_trade_offer`
 
-Future:
+Recovery:
 
-- `UpgradePropertyRequest`
-- `ChatMessageRequest`
+- `get_snapshot`
+- `reconnect_session`
 
 ## Server event types
 
 Lobby:
 
-- `LobbyCreated`
-- `LobbyJoined`
-- `LobbyPlayerUpdated`
-- `LobbyPlayerReadyChanged`
-- `LobbyStartRejected`
-- `MatchStarted`
+- `lobby_state`
+- `rules_updated`
+- `game_started`
 
 Gameplay:
 
-- `TurnStarted`
-- `LoanInterestCharged`
-- `PlayerEliminated`
-- `DiceRolled`
-- `PlayerMoved`
-- `TileResolved`
-- `AuctionStarted`
-- `BidAccepted`
-- `BidRejected`
-- `AuctionTimerReset`
-- `AuctionEndedNoSale`
-- `AuctionWon`
-- `PropertyTransferred`
-- `MoneyChanged`
-- `CardDrawn`
-- `CardResolved`
-- `TurnEnded`
-- `MatchCompleted`
+- `dice_rolled`
+- `tile_resolved`
+- `tile_executed`
+- `turn_ended`
+- `bid_accepted`
+- `auction_finalized`
+- `loan_taken`
+- `property_mortgaged`
+- `property_unmortgaged`
+- `property_upgraded`
+- `held_card_used`
+- `trade_offer_created`
+- `trade_offer_accepted`
+- `trade_offer_declined`
+- `trade_offer_cancelled`
+- `game_completed`
 
 State:
 
-- `SnapshotProvided`
-- `ErrorEvent`
+- `snapshot_result`
+- `reconnect_result`
+- `error`
 
 ## Request examples
 
@@ -242,7 +242,7 @@ State:
 
 ```json
 {
-  "type": "SetPlayerProfileRequest",
+  "type": "set_profile",
   "payload": {
     "username": "Josh",
     "tokenId": "token_car_placeholder",
@@ -262,9 +262,10 @@ Server validates:
 
 ```json
 {
-  "type": "RollDiceRequest",
+  "type": "roll_dice",
   "payload": {
-    "matchId": "match_123"
+    "sessionId": "session_123",
+    "playerId": "player_1"
   }
 }
 ```
@@ -282,15 +283,16 @@ Roll-time jail and doubles behavior is server-owned:
 - Locked players may roll when `rules.jail.enabled` is true. Failed jail rolls do not move, increment jail counters, and produce a completed turn.
 - Jail doubles release and max-attempt `payFineAndRelease` release the player, reset jail counters, move by the physical rolled total, and resume normal resolve/execute flow.
 - If max-attempt fine payment cannot be paid, no money is deducted, the player remains locked, and the completed turn can be ended.
+- If start-of-turn Loan Shark interest eliminates the selected next player in a non-terminal match, the server skips that eliminated player and selects the next active player before returning `end_turn_result`.
 
 ### Place bid
 
 ```json
 {
-  "type": "PlaceBidRequest",
+  "type": "place_bid",
   "payload": {
-    "matchId": "match_123",
-    "auctionId": "auction_123",
+    "sessionId": "session_123",
+    "playerId": "player_2",
     "amount": 220
   }
 }
@@ -770,64 +772,90 @@ Card-specific error codes are `card_deck_not_found`, `card_deck_empty`, `invalid
 
 ## Server event examples
 
-### AuctionStarted
+### tile_executed auction start
 
 ```json
 {
-  "type": "AuctionStarted",
+  "type": "tile_executed",
   "sequence": 104,
-  "payload": {
-    "auctionId": "auction_123",
-    "tileId": "tile_13",
-    "propertyName": "Placeholder Property 13",
-    "initialTimerSeconds": 9,
-    "minimumBidIncrement": 10,
-    "startingBid": 10
-  }
-}
-```
-
-### BidAccepted
-
-```json
-{
-  "type": "BidAccepted",
-  "sequence": 105,
-  "payload": {
-    "auctionId": "auction_123",
-    "bidderPlayerId": "player_2",
-    "amount": 220,
-    "countdownSeconds": 3
-  }
-}
-```
-
-### AuctionWon
-
-```json
-{
-  "type": "AuctionWon",
-  "sequence": 109,
-  "payload": {
-    "auctionId": "auction_123",
-    "winnerPlayerId": "player_2",
-    "tileId": "tile_13",
-    "amount": 260
-  }
-}
-```
-
-### LoanInterestCharged
-
-```json
-{
-  "type": "LoanInterestCharged",
-  "sequence": 140,
+  "sessionId": "session_123",
+  "matchId": "session_123",
+  "createdAtUtc": "2026-05-02T00:00:00Z",
   "payload": {
     "playerId": "player_1",
-    "amount": 75,
-    "remainingMoney": 120,
-    "bankrupted": false
+    "tileId": "property_01",
+    "actionKind": "auction_placeholder",
+    "executionKind": "auction_started",
+    "auction": {
+      "propertyTileId": "property_01",
+      "triggeringPlayerId": "player_1",
+      "status": "awaiting_initial_bid",
+      "startingBid": 10,
+      "minimumBidIncrement": 1,
+      "initialPreBidSeconds": 9,
+      "bidResetSeconds": 3
+    }
+  }
+}
+```
+
+### bid_accepted
+
+```json
+{
+  "type": "bid_accepted",
+  "sequence": 105,
+  "sessionId": "session_123",
+  "matchId": "session_123",
+  "createdAtUtc": "2026-05-02T00:00:01Z",
+  "payload": {
+    "bidderPlayerId": "player_2",
+    "amount": 220,
+    "currentHighestBid": 220,
+    "highestBidderId": "player_2",
+    "propertyTileId": "property_01",
+    "status": "active_bid_countdown",
+    "minimumNextBid": 221,
+    "bidCount": 1,
+    "countdownDurationSeconds": 3
+  }
+}
+```
+
+### auction_finalized
+
+```json
+{
+  "type": "auction_finalized",
+  "sequence": 109,
+  "sessionId": "session_123",
+  "matchId": "session_123",
+  "createdAtUtc": "2026-05-02T00:00:09Z",
+  "payload": {
+    "resultType": "won",
+    "winnerPlayerId": "player_2",
+    "amount": 260,
+    "tileId": "property_01"
+  }
+}
+```
+
+### turn_ended with loan interest
+
+```json
+{
+  "type": "turn_ended",
+  "sequence": 140,
+  "sessionId": "session_123",
+  "matchId": "session_123",
+  "createdAtUtc": "2026-05-02T00:00:10Z",
+  "payload": {
+    "previousPlayerId": "player_1",
+    "nextPlayerId": "player_2",
+    "turnIndex": 12,
+    "moneyDeltas": [
+      { "playerId": "player_2", "delta": -40, "balance": 1460, "reason": "loan_interest" }
+    ]
   }
 }
 ```
@@ -845,15 +873,15 @@ V1 supports a basic in-memory `reconnect_session` request for active games. Curr
 
 Use explicit error codes. Examples:
 
-- `NOT_CURRENT_PLAYER`
-- `INVALID_PHASE`
-- `AUCTION_NOT_ACTIVE`
-- `BID_TOO_LOW`
-- `TOKEN_ALREADY_TAKEN`
-- `COLOR_ALREADY_TAKEN`
-- `LOAN_REASON_BLOCKED`
-- `INSUFFICIENT_FUNDS`
-- `MATCH_NOT_FOUND`
+- `not_your_turn`
+- `invalid_session_state`
+- `auction_not_active`
+- `bid_too_low`
+- `token_taken`
+- `color_taken`
+- `loan_reason_blocked`
+- `insufficient_cash`
+- `invalid_session`
 - `trade_offer_active`
 - `trade_offer_not_found`
 - `trade_offer_not_for_player`

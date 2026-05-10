@@ -344,6 +344,36 @@ public class TurnManagerTests
     }
 
     [Fact]
+    public void AdvanceToNextTurn_WhenLoanInterestEliminatesNextPlayerSelectsNextActivePlayer()
+    {
+        var gameState = CreateGameState("player_1", "player_2", "player_3") with
+        {
+            CurrentTurnPlayerId = new PlayerId("player_1"),
+            TurnNumber = 1,
+            Players = new[]
+            {
+                CreatePlayer("player_1", new TileId("start")),
+                CreatePlayer(
+                    "player_2",
+                    new TileId("start"),
+                    money: 5,
+                    loanState: new PlayerLoanState(new Money(100), 20, Money.Zero, LoanTier: 1)),
+                CreatePlayer("player_3", new TileId("start")),
+            },
+        };
+
+        var next = TurnManager.AdvanceToNextTurn(gameState);
+
+        Assert.Equal("player_3", next.CurrentTurnPlayerId?.Value);
+        Assert.Equal(2, next.TurnNumber);
+        Assert.Equal(GamePhase.AwaitingRoll, next.Phase);
+        Assert.Equal(new Money(-15), next.Players[1].Money);
+        Assert.True(next.Players[1].IsBankrupt);
+        Assert.True(next.Players[1].IsEliminated);
+        Assert.False(next.Players[2].IsEliminated);
+    }
+
+    [Fact]
     public void AdvanceToNextTurn_WrapsToFirstPlayerAfterLastPlayer()
     {
         var gameState = CreateGameState("player_1", "player_2") with
