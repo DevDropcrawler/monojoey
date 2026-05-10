@@ -1734,6 +1734,7 @@ public class LobbyMessageHandlerTests
         Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
         Assert.Equal("negative_balance", elimination.GetProperty("reason").GetString());
         Assert.Equal(-50, elimination.GetProperty("money").GetInt32());
+        Assert.Equal(100, elimination.GetProperty("paymentDue").GetInt32());
         Assert.Equal(new Money(-50), afterExecute.Players[0].Money);
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
@@ -2322,6 +2323,7 @@ public class LobbyMessageHandlerTests
         var elimination = Assert.Single(executePayload.GetProperty("playerEliminations").EnumerateArray());
         Assert.Equal("player_1", elimination.GetProperty("playerId").GetString());
         Assert.Equal("card_payment", elimination.GetProperty("reason").GetString());
+        Assert.Equal(15, elimination.GetProperty("paymentDue").GetInt32());
         Assert.True(afterExecute.Players[0].IsEliminated);
         Assert.True(afterExecute.HasExecutedTileThisTurn);
         Assert.Equal(GameStatus.Completed, afterExecute.Status);
@@ -5645,6 +5647,107 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void FinalizeAuction_WinnerLiquidatesMortgageAndEmitsOrderedHelpers()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with
+            {
+                Money = new Money(210),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 260), started.SecondContext);
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var steps = payload.GetProperty("liquidationSteps").EnumerateArray().ToArray();
+        var deltas = payload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal("won", payload.GetProperty("resultType").GetString());
+        Assert.Equal(new[] { "mortgage", "bank_payment" }, steps.Select(step => step.GetProperty("kind").GetString()));
+        Assert.Equal("property_03", steps[0].GetProperty("propertyTileId").GetString());
+        Assert.Equal(50, steps[0].GetProperty("amount").GetInt32());
+        Assert.Equal(260, steps[0].GetProperty("debtorBalance").GetInt32());
+        Assert.True(steps[0].GetProperty("isMortgaged").GetBoolean());
+        Assert.Equal(new[] { "liquidation_mortgage", "auction_payment" }, deltas.Select(delta => delta.GetProperty("reason").GetString()));
+        Assert.Equal(new[] { 50, -260 }, deltas.Select(delta => delta.GetProperty("delta").GetInt32()));
+        Assert.Equal(new[] { 260, 0 }, deltas.Select(delta => delta.GetProperty("balance").GetInt32()));
+        Assert.True(afterFinalize.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+        Assert.Contains(new TileId("property_01"), afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2").OwnedPropertyIds);
+    }
+
+    [Fact]
+    public void FinalizeAuction_WinnerLiquidatesUpgradeSaleThenMortgageInDeterministicOrder()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler, UpgradeRulesJson);
+        var property01 = new TileId("property_01");
+        var property02 = new TileId("property_02");
+        var property03 = new TileId("property_03");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                ActiveAuctionState = new AuctionState(
+                    property03,
+                    new PlayerId("player_1"),
+                    AuctionStatus.ActiveBidCountdown,
+                    new Money(10),
+                    new Money(10),
+                    InitialPreBidSeconds: 9,
+                    BidResetSeconds: 3,
+                    Bids: new[] { new AuctionBid(new PlayerId("player_2"), new Money(75), DateTimeOffset.Parse("2026-04-26T00:00:00+00:00")) },
+                    HighestBid: new Money(75),
+                    HighestBidderId: new PlayerId("player_2"),
+                    CountdownDurationSeconds: 3,
+                    TimerEndsAtUtc: DateTimeOffset.Parse("2026-04-26T00:00:03+00:00")),
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with
+                        {
+                            Money = new Money(20),
+                            OwnedPropertyIds = new HashSet<TileId> { property01, property02 },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property01] = new(property01, new PropertyStateData(upgradeLevel: 1)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        Assert.Equal("won", payload.GetProperty("resultType").GetString());
+        var steps = payload.GetProperty("liquidationSteps").EnumerateArray().ToArray();
+        var deltas = payload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal(new[] { "upgrade_sale", "mortgage", "bank_payment" }, steps.Select(step => step.GetProperty("kind").GetString()));
+        Assert.Equal(new[] { "liquidation_upgrade_sale", "liquidation_mortgage", "auction_payment" }, deltas.Select(delta => delta.GetProperty("reason").GetString()));
+        Assert.Equal(new[] { 25, 30, -75 }, deltas.Select(delta => delta.GetProperty("delta").GetInt32()));
+        Assert.Equal(new[] { 45, 75, 0 }, deltas.Select(delta => delta.GetProperty("balance").GetInt32()));
+        Assert.Equal(0, afterFinalize.PropertyStates[property01].Data.UpgradeLevel);
+        Assert.True(afterFinalize.PropertyStates[property01].Data.IsMortgaged);
+        Assert.Contains(new TileId("property_03"), afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2").OwnedPropertyIds);
+    }
+
+    [Fact]
     public void FinalizeAuction_WinnerEmitsAuctionWonStat()
     {
         var stats = new CapturingStatEventSink();
@@ -5720,6 +5823,7 @@ public class LobbyMessageHandlerTests
         Assert.Equal("property_01", payload.GetProperty("tileId").GetString());
         Assert.False(payload.TryGetProperty("moneyDeltas", out _));
         Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
+        Assert.False(payload.TryGetProperty("liquidationSteps", out _));
         var elimination = Assert.Single(payload.GetProperty("playerEliminations").EnumerateArray());
         Assert.Equal("player_2", elimination.GetProperty("playerId").GetString());
         Assert.Equal("cannot_fulfill_payment", elimination.GetProperty("reason").GetString());
@@ -5730,6 +5834,62 @@ public class LobbyMessageHandlerTests
         Assert.Equal(100, failedWinner.Money.Amount);
         Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
         Assert.Null(afterFinalize.ActiveAuctionState);
+    }
+
+    [Fact]
+    public void FinalizeAuction_FailedLiquidationOmitsHelpersAndPersistsNoPartialAssetMutation()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var property03 = new TileId("property_03");
+        _ = StartActiveAuction(sessionManager, started.Session.SessionId);
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value == "player_2"
+                        ? player with
+                        {
+                            Money = new Money(50),
+                            OwnedPropertyIds = new HashSet<TileId> { property03 },
+                        }
+                        : player)
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property03] = new(property03, new PropertyStateData(damagePercent: 10)),
+                },
+            });
+        _ = handler.HandleTextMessage(PlaceBidMessage(started.Session.SessionId, "player_2", 100), started.SecondContext);
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_2",
+            player => player with { Money = new Money(10) });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            FinalizeAuctionMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "auction_result");
+        var afterFinalize = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var propertyState = afterFinalize.PropertyStates[property03].Data;
+        var failedWinner = afterFinalize.Players.Single(player => player.PlayerId.Value == "player_2");
+
+        Assert.Equal("failed_payment", payload.GetProperty("resultType").GetString());
+        Assert.False(payload.TryGetProperty("moneyDeltas", out _));
+        Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
+        Assert.False(payload.TryGetProperty("liquidationSteps", out _));
+        var elimination = Assert.Single(payload.GetProperty("playerEliminations").EnumerateArray());
+        Assert.Equal(100, elimination.GetProperty("paymentDue").GetInt32());
+        Assert.Equal(10, failedWinner.Money.Amount);
+        Assert.False(propertyState.IsMortgaged);
+        Assert.Equal(0, propertyState.UpgradeLevel);
+        Assert.Equal(10, propertyState.DamagePercent);
+        Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
     }
 
     [Fact]
@@ -5754,6 +5914,7 @@ public class LobbyMessageHandlerTests
         Assert.False(payload.TryGetProperty("moneyDeltas", out _));
         Assert.False(payload.TryGetProperty("propertyOwnershipChanges", out _));
         Assert.False(payload.TryGetProperty("playerEliminations", out _));
+        Assert.False(payload.TryGetProperty("liquidationSteps", out _));
         Assert.DoesNotContain(afterFinalize.Players, player => player.OwnedPropertyIds.Contains(new TileId("property_01")));
         Assert.Null(afterFinalize.ActiveAuctionState);
     }
@@ -7299,7 +7460,8 @@ public class LobbyMessageHandlerTests
     private static GameSession StartActiveAuction(
         SessionManager sessionManager,
         string sessionId,
-        AuctionConfig? config = null)
+        AuctionConfig? config = null,
+        string propertyTileId = "property_01")
     {
         return UpdateGameState(
             sessionManager,
@@ -7309,7 +7471,7 @@ public class LobbyMessageHandlerTests
                 var auctionStart = AuctionManager.StartMandatoryAuction(
                     gameState,
                     new PlayerId("player_1"),
-                    new TileId("property_01"),
+                    new TileId(propertyTileId),
                     config ?? AuctionConfig.FromRules(gameState.Rules.Auction));
 
                 return gameState with { ActiveAuctionState = auctionStart.AuctionState };

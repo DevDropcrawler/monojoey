@@ -315,6 +315,61 @@ public class WebSocketConnectionHandlerTests
     }
 
     [Fact]
+    public async Task TerminalFinalizeAuction_SendsDirectResponseThenAuctionAndCompletionBroadcasts()
+    {
+        var sessionManager = new SessionManager();
+        var startedSession = CreateReadyStartedSession(sessionManager);
+        var auctionTileId = new TileId("property_01");
+        var bidderId = new PlayerId("player_1");
+        var auctionState = new AuctionState(
+            auctionTileId,
+            bidderId,
+            AuctionStatus.ActiveBidCountdown,
+            StartingBid: new Money(10),
+            MinimumBidIncrement: new Money(10),
+            InitialPreBidSeconds: 9,
+            BidResetSeconds: 3,
+            Bids: new[] { new AuctionBid(bidderId, new Money(260), DateTimeOffset.Parse("2026-04-26T00:00:00+00:00")) },
+            HighestBid: new Money(260),
+            HighestBidderId: bidderId,
+            CountdownDurationSeconds: 3,
+            TimerEndsAtUtc: DateTimeOffset.Parse("2026-04-26T00:00:03+00:00"));
+        var readyGameState = startedSession.GameState with
+        {
+            ActiveAuctionState = auctionState,
+            Players = startedSession.GameState.Players
+                .Select(player => player.PlayerId == bidderId
+                    ? player with { Money = new Money(100) }
+                    : player)
+                .ToArray(),
+        };
+        _ = sessionManager.UpdateGameState(startedSession.SessionId, readyGameState);
+        var connectionManager = new TestConnectionManager("connection_reconnect");
+        var lobbyMessageHandler = new LobbyMessageHandler(sessionManager);
+        var handler = new WebSocketConnectionHandler(connectionManager, lobbyMessageHandler);
+        using var webSocket = new ScriptedWebSocket(
+            TextFrame(ReconnectMessage(startedSession.SessionId, "player_1")),
+            TextFrame(FinalizeAuctionMessage(startedSession.SessionId, "player_1")),
+            CloseFrame());
+
+        await handler.HandleAsync(webSocket, CancellationToken.None);
+
+        Assert.Equal(4, webSocket.SentTextMessages.Count);
+        using var reconnectResponse = JsonDocument.Parse(webSocket.SentTextMessages[0]);
+        Assert.Equal("reconnect_result", reconnectResponse.RootElement.GetProperty("type").GetString());
+        using var auctionResponse = JsonDocument.Parse(webSocket.SentTextMessages[1]);
+        Assert.Equal("auction_result", auctionResponse.RootElement.GetProperty("type").GetString());
+        Assert.Equal("failed_payment", auctionResponse.RootElement.GetProperty("payload").GetProperty("resultType").GetString());
+        using var auctionBroadcast = JsonDocument.Parse(webSocket.SentTextMessages[2]);
+        Assert.Equal("auction_finalized", auctionBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Equal(1, auctionBroadcast.RootElement.GetProperty("sequence").GetInt64());
+        using var completionBroadcast = JsonDocument.Parse(webSocket.SentTextMessages[3]);
+        Assert.Equal("game_completed", completionBroadcast.RootElement.GetProperty("type").GetString());
+        Assert.Equal(2, completionBroadcast.RootElement.GetProperty("sequence").GetInt64());
+        Assert.Equal("player_2", completionBroadcast.RootElement.GetProperty("payload").GetProperty("winnerPlayerId").GetString());
+    }
+
+    [Fact]
     public async Task GetSnapshot_SendsOneResponseForSnapshotMessage()
     {
         var sessionManager = new SessionManager();

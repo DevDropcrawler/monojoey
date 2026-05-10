@@ -5,12 +5,12 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: 5
-- Chunk: Total-Liquidation-Value Auction Bidding
-- Completion status: Auction bids are now validated against current cash plus legal raiseable value from sellable upgrades and mortgageable properties; accepted asset-backed bids remain non-mutating until auction finalization.
-- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
+- Chunk: Deterministic Liquidation Visibility + Payout Event Exposure
+- Completion status: Realtime tax/card eliminations now include `paymentDue` when the due amount is known; auction finalization helper tests cover cash, mortgage liquidation, upgrade-sale-plus-mortgage liquidation, failed liquidation omission, no-sale omission, and terminal broadcast ordering.
+- Branch: `deterministic-bankruptcy-integration` tracking `origin/deterministic-bankruptcy-integration`; local has this chunk implemented, validated, and committed.
 - Previous commit: `748a2b3`
 - Last commit before this chunk: `748a2b3`
-- Last commit after this chunk: not committed yet
+- Last commit after this chunk: this commit (`phase-5-liquidation-visibility: expose liquidation helpers`)
 - Date/time: 2026-05-10
 
 ## Docs Planning Note
@@ -19,15 +19,15 @@ This file must be updated at the end of every coding chunk.
 
 ## Last Completed Chunk
 
-Total-Liquidation-Value Auction Bidding.
+Deterministic Liquidation Visibility + Payout Event Exposure.
 
 Completed:
 
-- Added read-only auction bid affordability validation through `SolvencyAnalyzer.Analyze` using `AuctionPayment` obligations.
-- Bids may now be accepted when cash is insufficient but cash plus legal sellable upgrades and mortgageable properties covers the amount.
-- Bids above total legal raiseable value are rejected as `AuctionBidResultKind.BidderCannotCoverBid` and map to realtime `insufficient_cash`.
-- `place_bid` remains non-mutating except for persisted auction metadata after accepted bids; no loan, mortgage, upgrade-sale, payment, ownership, or finalization authority was added there.
-- Auction finalization remains the only path that performs liquidation, payment, elimination on failed payment, and ownership transfer.
+- Added `paymentDue` to diff-based tax/card elimination helper payloads when the payment amount is already known.
+- Preserved failed-liquidation omission semantics: failed liquidation payloads do not expose `liquidationSteps` or payout `moneyDeltas`, and no partial mortgage/upgrade mutation persists.
+- Added auction finalization realtime coverage for cash-only payment, mortgage liquidation, upgrade sale followed by mortgage, failed payment, and no-sale helper omission.
+- Added WebSocket sequencing coverage proving terminal auction finalization sends direct `auction_result`, then `auction_finalized` at sequence `N`, then `game_completed` at `N + 1`.
+- Updated multiplayer/Unity protocol docs to list `liquidationSteps`, liquidation step kinds, and liquidation money delta reasons.
 
 Not included by explicit user scope:
 
@@ -55,11 +55,9 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionBidResult.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/AuctionManager.cs`
 - `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server.Tests/GameEngine/AuctionManagerTests.cs`
 - `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
+- `server-dotnet/MonoJoey.Server.Tests/Realtime/WebSocketConnectionHandlerTests.cs`
 - `docs/MULTIPLAYER_PROTOCOL.md`
 - `docs/SESSION_HANDOVER.md`
 - `docs/UNITY_INTEGRATION_CONTRACT.md`
@@ -158,13 +156,14 @@ Not included by explicit user scope:
 
 - `dotnet test server-dotnet\MonoJoey.sln -v minimal`
   - Result: succeeded.
-  - Output summary: 915 passed, 0 failed, 0 skipped.
+  - Output summary: 919 passed, 0 failed, 0 skipped.
 
 ## Known Issues
 
 - `AGENTS.md` and `LEAN-CTX.md` were not present at the repo root in this sandbox view, though instructions referenced them.
 - `GameRules.Loans` rate-field defaults still do not match current runtime loan manager behavior. This chunk deliberately preserved runtime 20/30/50/+10/100 behavior and left schema/default correction for a separate phase.
 - No UI, persistence, stats, event replay, or reconnect catch-up was added.
+- Cash-only auction finalization may include a `liquidationSteps` entry for `bank_payment`; this is now documented as a persisted payment step.
 
 ## Placeholders Introduced Or Preserved
 

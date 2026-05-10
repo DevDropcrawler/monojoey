@@ -2535,7 +2535,8 @@ public sealed class LobbyMessageHandler
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "negative_balance"),
+                    "negative_balance",
+                    taxAmount.Amount),
                 liquidationSteps: CreateLiquidationStepPayloads(liquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
@@ -2712,7 +2713,8 @@ public sealed class LobbyMessageHandler
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "card_payment"),
+                    "card_payment",
+                    GetCardPaymentDue(cardObligation, multiCreditorLiquidation)),
                 liquidationSteps: liquidation?.PaymentExecuted == true
                     ? CreateLiquidationStepPayloads(liquidation)
                     : CreateLiquidationStepPayloads(multiCreditorLiquidation));
@@ -4609,7 +4611,8 @@ public sealed class LobbyMessageHandler
     private static IReadOnlyList<PlayerEliminationPayload>? CreatePlayerEliminationsFromDiff(
         GameState previousGameState,
         GameState gameState,
-        string reason)
+        string reason,
+        int? paymentDue = null)
     {
         var eliminations = gameState.Players
             .Where(player => player.IsEliminated)
@@ -4618,10 +4621,28 @@ public sealed class LobbyMessageHandler
             .Select(player => new PlayerEliminationPayload(
                 player.PlayerId.Value,
                 reason,
-                player.Money.Amount))
+                player.Money.Amount,
+                paymentDue))
             .ToArray();
 
         return eliminations.Length == 0 ? null : eliminations;
+    }
+
+    private static int? GetCardPaymentDue(
+        PaymentObligation? singleDebtorObligation,
+        MultiCreditorLiquidationExecutionResult? multiCreditorLiquidation)
+    {
+        if (singleDebtorObligation is not null)
+        {
+            return singleDebtorObligation.Amount.Amount;
+        }
+
+        if (multiCreditorLiquidation is not null)
+        {
+            return multiCreditorLiquidation.AmountDue.Amount;
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<MoneyDeltaPayload>? CreateAuctionMoneyDeltas(

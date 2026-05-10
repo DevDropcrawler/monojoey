@@ -94,6 +94,14 @@ Helper fields are additive and omitted when irrelevant:
 - `moneyDeltas`: `playerId`, `delta`, `balance`, `reason`, and optional `counterpartyPlayerId`, `tileId`, `cardId`.
 - `propertyOwnershipChanges`: `tileId`, nullable `previousOwnerPlayerId`, nullable `newOwnerPlayerId`, `reason`.
 - `playerEliminations`: `playerId`, `reason`, `money`, and optional `paymentDue`.
+- `liquidationSteps`: ordered persisted payment steps with `kind`, optional `propertyTileId`, `amount`,
+  `debtorBalance`, optional `upgradeLevel`, and optional `isMortgaged`.
+
+Liquidation-related `moneyDeltas.reason` values include `liquidation_upgrade_sale`,
+`liquidation_mortgage`, `rent`, `tax`, `card`, and `auction_payment`. `liquidationSteps.kind` values
+include `upgrade_sale`, `mortgage`, `bank_payment`, and `player_payment`. Failed liquidation attempts
+that do not persist asset mutation omit `liquidationSteps` and payout `moneyDeltas`; elimination helpers
+may still include `paymentDue` when the due amount is known.
 
 `roll_result` / `dice_rolled` also includes `total`, `isDouble`, optional `rollKind`, and optional `jailRollAttemptCount`. Dice and card path movement is sourced from `MovementManager`; direct lockup movement uses `movementKind = "direct"`. Lockup failed-roll and triple-doubles payloads may omit `movement` because no board path is traversed.
 
@@ -148,6 +156,9 @@ Example `auction_finalized` payload:
   "tileId": "property_01",
   "moneyDeltas": [
     { "playerId": "player_2", "delta": -260, "balance": 1240, "reason": "auction_payment", "tileId": "property_01" }
+  ],
+  "liquidationSteps": [
+    { "kind": "bank_payment", "amount": 260, "debtorBalance": 1240 }
   ],
   "propertyOwnershipChanges": [
     { "tileId": "property_01", "previousOwnerPlayerId": null, "newOwnerPlayerId": "player_2", "reason": "auction_won" }

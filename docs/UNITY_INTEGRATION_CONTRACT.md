@@ -144,7 +144,15 @@ Current helper payloads include:
 - `propertyOwnershipChanges`: `tileId`, nullable `previousOwnerPlayerId`, nullable `newOwnerPlayerId`,
   `reason`.
 - `playerEliminations`: `playerId`, `reason`, `money`, optional `paymentDue`.
+- `liquidationSteps`: ordered persisted payment steps with `kind`, optional `propertyTileId`, `amount`,
+  `debtorBalance`, optional `upgradeLevel`, and optional `isMortgaged`.
 - Auction, rent, and card metadata embedded in action payloads.
+
+Liquidation money delta reasons include `liquidation_upgrade_sale`, `liquidation_mortgage`, `rent`,
+`tax`, `card`, and `auction_payment`. Liquidation step kinds include `upgrade_sale`, `mortgage`,
+`bank_payment`, and `player_payment`. Failed liquidation attempts that do not persist asset changes omit
+`liquidationSteps` and payout `moneyDeltas`; Unity must hydrate from the next snapshot rather than infer
+asset mutation from a failed payment.
 
 Unity must tolerate helper fields being absent, null, or irrelevant for a given event. Optional helper
 fields are omitted when irrelevant by the current JSON serializer.
@@ -212,6 +220,8 @@ Auctions:
 - `finalize_auction` finalizes active auctions and returns `auction_result`; successful finalization
   emits `auction_finalized`, including no-sale outcomes. Auction liquidation, payment, and ownership
   transfer happen only during finalization.
+- Auction finalization payloads can include ordered `liquidationSteps`, ordered `moneyDeltas`, ownership
+  changes, and failed-payment `playerEliminations.paymentDue`.
 - Countdown durations and `timerEndsAtUtc` are metadata from the server-owned timer/deadline model.
 
 Loans:
