@@ -80,43 +80,31 @@ public static class PropertyManager
 
     public static RentPaymentResult PayRentForCurrentTile(GameState gameState, PlayerId landingPlayerId)
     {
+        var assessment = AssessRentForCurrentTile(gameState, landingPlayerId);
+        if (!assessment.PaymentRequired || assessment.OwnerId is null)
+        {
+            return NoRent(gameState, landingPlayerId, assessment.TileId, assessment.OwnerId);
+        }
+
         var landingPlayerIndex = FindPlayerIndex(
             gameState.Players,
             landingPlayerId,
             "Landing player must exist in the game player list before rent can be paid.");
+        var ownerIndex = FindPlayerIndex(
+            gameState.Players,
+            assessment.OwnerId.Value,
+            "Property owner must exist in the game player list before rent can be paid.");
         var landingPlayer = gameState.Players[landingPlayerIndex];
-        var tile = FindTileById(gameState.Board, landingPlayer.CurrentTileId);
+        var owner = gameState.Players[ownerIndex];
+        var rent = assessment.RentDue;
 
-        if (!tile.IsPurchasable)
-        {
-            return NoRent(gameState, landingPlayerId, tile.TileId, ownerId: null);
-        }
-
-        var ownerIndex = FindPropertyOwnerIndex(gameState.Players, tile.TileId);
-        if (ownerIndex is null)
-        {
-            return NoRent(gameState, landingPlayerId, tile.TileId, ownerId: null);
-        }
-
-        var owner = gameState.Players[ownerIndex.Value];
-        if (owner.PlayerId == landingPlayerId)
-        {
-            return NoRent(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
-        }
-
-        if (IsMortgaged(tile, gameState))
-        {
-            return NoRent(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
-        }
-
-        var rent = CalculateRent(tile, gameState);
         if (landingPlayer.Money.Amount < rent.Amount)
         {
             var eliminationResult = BankruptcyManager.EliminateForFailedPayment(gameState, landingPlayerId, rent);
             return new RentPaymentResult(
                 eliminationResult.GameState,
                 landingPlayerId,
-                tile.TileId,
+                assessment.TileId,
                 owner.PlayerId,
                 rent,
                 Money.Zero,
@@ -128,7 +116,7 @@ public static class PropertyManager
         {
             Money = new Money(landingPlayer.Money.Amount - rent.Amount),
         };
-        players[ownerIndex.Value] = owner with
+        players[ownerIndex] = owner with
         {
             Money = new Money(owner.Money.Amount + rent.Amount),
         };
@@ -136,15 +124,59 @@ public static class PropertyManager
         return new RentPaymentResult(
             gameState with { Players = players },
             landingPlayerId,
-            tile.TileId,
+            assessment.TileId,
             owner.PlayerId,
             rent,
             rent);
     }
 
+    public static RentAssessmentResult AssessRentForCurrentTile(GameState gameState, PlayerId landingPlayerId)
+    {
+        var landingPlayerIndex = FindPlayerIndex(
+            gameState.Players,
+            landingPlayerId,
+            "Landing player must exist in the game player list before rent can be paid.");
+        var landingPlayer = gameState.Players[landingPlayerIndex];
+        var tile = FindTileById(gameState.Board, landingPlayer.CurrentTileId);
+
+        if (!tile.IsPurchasable)
+        {
+            return NoRentAssessment(gameState, landingPlayerId, tile.TileId, ownerId: null);
+        }
+
+        var ownerIndex = FindPropertyOwnerIndex(gameState.Players, tile.TileId);
+        if (ownerIndex is null)
+        {
+            return NoRentAssessment(gameState, landingPlayerId, tile.TileId, ownerId: null);
+        }
+
+        var owner = gameState.Players[ownerIndex.Value];
+        if (owner.PlayerId == landingPlayerId)
+        {
+            return NoRentAssessment(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
+        }
+
+        if (IsMortgaged(tile, gameState))
+        {
+            return NoRentAssessment(gameState, landingPlayerId, tile.TileId, owner.PlayerId);
+        }
+
+        var rent = CalculateRent(tile, gameState);
+        return new RentAssessmentResult(gameState, landingPlayerId, tile.TileId, owner.PlayerId, rent);
+    }
+
     private static RentPaymentResult NoRent(GameState gameState, PlayerId landingPlayerId, TileId tileId, PlayerId? ownerId)
     {
         return new RentPaymentResult(gameState, landingPlayerId, tileId, ownerId, Money.Zero, Money.Zero);
+    }
+
+    private static RentAssessmentResult NoRentAssessment(
+        GameState gameState,
+        PlayerId landingPlayerId,
+        TileId tileId,
+        PlayerId? ownerId)
+    {
+        return new RentAssessmentResult(gameState, landingPlayerId, tileId, ownerId, Money.Zero);
     }
 
     private static Money CalculateRent(Tile tile, GameState gameState)

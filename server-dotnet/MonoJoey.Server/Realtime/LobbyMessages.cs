@@ -247,7 +247,9 @@ public sealed record ExecuteTileResultPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<PropertyOwnershipChangePayload>? PropertyOwnershipChanges = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null);
+    IReadOnlyList<PlayerEliminationPayload>? PlayerEliminations = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<LiquidationStepPayload>? LiquidationSteps = null);
 
 public sealed record ExecuteTileAuctionPayload(
     string PropertyTileId,
@@ -569,3 +571,14 @@ public sealed record PlayerEliminationPayload(
     int Money,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     int? PaymentDue = null);
+
+public sealed record LiquidationStepPayload(
+    string Kind,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? PropertyTileId,
+    int Amount,
+    int DebtorBalance,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? UpgradeLevel,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? IsMortgaged);

@@ -2441,7 +2441,19 @@ public sealed class LobbyMessageHandler
                 "This property tile effect is not supported yet.");
         }
 
-        var rent = PropertyManager.PayRentForCurrentTile(gameState, resolution.PlayerId);
+        var rentAssessment = PropertyManager.AssessRentForCurrentTile(gameState, resolution.PlayerId);
+        var liquidation = rentAssessment.PaymentRequired && rentAssessment.OwnerId is not null
+            ? LiquidationExecutionManager.ExecutePaymentObligation(
+                gameState,
+                new PaymentObligation(
+                    rentAssessment.LandingPlayerId,
+                    rentAssessment.RentDue,
+                    PaymentObligationKind.Rent,
+                    PaymentObligationCreditor.ForPlayer(rentAssessment.OwnerId.Value),
+                    rentAssessment.TileId),
+                LiquidationExecutionContext.TileExecutionPayment)
+            : null;
+        var rent = CreateRentPaymentResult(gameState, rentAssessment, liquidation);
         var rentGameState = rent.GameState with
         {
             HasExecutedTileThisTurn = true,
@@ -2459,8 +2471,11 @@ public sealed class LobbyMessageHandler
                 auction: null,
                 rent: CreateRentPayload(rent, rentPersistence.Session.GameState),
                 card: null,
-                moneyDeltas: CreateRentMoneyDeltas(rent, rentPersistence.Session.GameState),
-                playerEliminations: CreateRentPlayerEliminations(rent, rentPersistence.Session.GameState));
+                moneyDeltas: liquidation?.PaymentExecuted == true
+                    ? CreateLiquidationMoneyDeltas(liquidation, "rent", rentPersistence.Session.GameState)
+                    : CreateRentMoneyDeltas(rent, rentPersistence.Session.GameState),
+                playerEliminations: CreateRentPlayerEliminations(rent, rentPersistence.Session.GameState),
+                liquidationSteps: CreateLiquidationStepPayloads(liquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
             LobbyMessageTypes.TileExecuted,
@@ -2478,9 +2493,19 @@ public sealed class LobbyMessageHandler
         GameState gameState,
         TileResolutionResult resolution)
     {
-        var taxAmount = gameState.Rules.Economy.IncomeTaxAmount;
-        var taxedGameState = ChangePlayerMoney(gameState, resolution.PlayerId, new Money(-taxAmount));
-        var eliminatedGameState = BankruptcyManager.EliminateIfBankrupt(taxedGameState, resolution.PlayerId).GameState;
+        var taxAmount = new Money(gameState.Rules.Economy.IncomeTaxAmount);
+        var liquidation = LiquidationExecutionManager.ExecutePaymentObligation(
+            gameState,
+            new PaymentObligation(
+                resolution.PlayerId,
+                taxAmount,
+                PaymentObligationKind.Tax,
+                PaymentObligationCreditor.Bank,
+                resolution.TileId),
+            LiquidationExecutionContext.TileExecutionPayment);
+        var eliminatedGameState = liquidation.PaymentExecuted
+            ? liquidation.GameState
+            : ApplyTaxHardEliminationFallback(gameState, resolution.PlayerId, taxAmount);
         var persistedGameState = eliminatedGameState with
         {
             HasExecutedTileThisTurn = true,
@@ -2500,15 +2525,18 @@ public sealed class LobbyMessageHandler
                 auction: null,
                 rent: null,
                 card: null,
-                moneyDeltas: CreateMoneyDeltasFromDiff(
-                    gameState,
-                    persistence.Session.GameState,
-                    "tax",
-                    tileId: resolution.TileId),
+                moneyDeltas: liquidation.PaymentExecuted
+                    ? CreateLiquidationMoneyDeltas(liquidation, "tax", persistence.Session.GameState)
+                    : CreateMoneyDeltasFromDiff(
+                        gameState,
+                        persistence.Session.GameState,
+                        "tax",
+                        tileId: resolution.TileId),
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "negative_balance"));
+                    "negative_balance"),
+                liquidationSteps: CreateLiquidationStepPayloads(liquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
             LobbyMessageTypes.TileExecuted,
@@ -2612,7 +2640,16 @@ public sealed class LobbyMessageHandler
                 "Drawn card action is not supported yet.");
         }
 
-        var executionResult = CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
+        var cardObligation = CardEffectExecutor.CreateSingleDebtorBankPaymentObligation(gameState, cardResolution);
+        var liquidation = cardObligation is null
+            ? null
+            : LiquidationExecutionManager.ExecutePaymentObligation(
+                gameState,
+                cardObligation,
+                LiquidationExecutionContext.TileExecutionPayment);
+        var executionResult = liquidation?.PaymentExecuted == true
+            ? new CardEffectExecutionResult(liquidation.GameState)
+            : CardEffectExecutor.ExecuteCardEffectWithResult(gameState, cardResolution);
         var executedGameState = executionResult.GameState;
         var finalDeckState = ShouldDiscardCard(cardResolution.ActionKind)
             ? CardDeckManager.Discard(drawResult.DeckState, card)
@@ -2648,15 +2685,18 @@ public sealed class LobbyMessageHandler
                     player.PlayerId,
                     cardResolution,
                     executionResult.MovementResult),
-                moneyDeltas: CreateMoneyDeltasFromDiff(
-                    gameState,
-                    persistence.Session.GameState,
-                    "card",
-                    cardId: card.CardId),
+                moneyDeltas: liquidation?.PaymentExecuted == true
+                    ? CreateLiquidationMoneyDeltas(liquidation, "card", persistence.Session.GameState)
+                    : CreateMoneyDeltasFromDiff(
+                        gameState,
+                        persistence.Session.GameState,
+                        "card",
+                        cardId: card.CardId),
                 playerEliminations: CreatePlayerEliminationsFromDiff(
                     gameState,
                     persistence.Session.GameState,
-                    "card_payment"));
+                    "card_payment"),
+                liquidationSteps: CreateLiquidationStepPayloads(liquidation));
         var result = CreateTerminalBroadcastResult(
             directResponse,
             LobbyMessageTypes.TileExecuted,
@@ -3617,7 +3657,8 @@ public sealed class LobbyMessageHandler
         MovementPayload? movement = null,
         IReadOnlyList<MoneyDeltaPayload>? moneyDeltas = null,
         IReadOnlyList<PropertyOwnershipChangePayload>? propertyOwnershipChanges = null,
-        IReadOnlyList<PlayerEliminationPayload>? playerEliminations = null)
+        IReadOnlyList<PlayerEliminationPayload>? playerEliminations = null,
+        IReadOnlyList<LiquidationStepPayload>? liquidationSteps = null)
     {
         return new LobbyServerEnvelope(
             LobbyMessageTypes.ExecuteTileResult,
@@ -3636,7 +3677,8 @@ public sealed class LobbyMessageHandler
                 movement,
                 moneyDeltas,
                 propertyOwnershipChanges,
-                playerEliminations));
+                playerEliminations,
+                liquidationSteps));
     }
 
     private static LobbyServerEnvelope CreateEndTurnResult(
@@ -4171,6 +4213,47 @@ public sealed class LobbyMessageHandler
             : null;
     }
 
+    private static RentPaymentResult CreateRentPaymentResult(
+        GameState gameState,
+        RentAssessmentResult assessment,
+        LiquidationExecutionResult? liquidation)
+    {
+        if (!assessment.PaymentRequired || assessment.OwnerId is null)
+        {
+            return new RentPaymentResult(
+                gameState,
+                assessment.LandingPlayerId,
+                assessment.TileId,
+                assessment.OwnerId,
+                Money.Zero,
+                Money.Zero);
+        }
+
+        if (liquidation?.PaymentExecuted == true)
+        {
+            return new RentPaymentResult(
+                liquidation.GameState,
+                assessment.LandingPlayerId,
+                assessment.TileId,
+                assessment.OwnerId,
+                assessment.RentDue,
+                liquidation.AmountPaid);
+        }
+
+        return PropertyManager.PayRentForCurrentTile(
+            liquidation?.GameState ?? gameState,
+            assessment.LandingPlayerId);
+    }
+
+    private static GameState ApplyTaxHardEliminationFallback(
+        GameState gameState,
+        PlayerId playerId,
+        Money taxAmount)
+    {
+        var taxedGameState = ChangePlayerMoney(gameState, playerId, new Money(-taxAmount.Amount));
+        return BankruptcyManager.EliminateIfBankrupt(taxedGameState, playerId).GameState;
+    }
+
     private static IReadOnlyList<MoneyDeltaPayload>? CreateRentMoneyDeltas(
         RentPaymentResult rent,
         GameState gameState)
@@ -4256,6 +4339,95 @@ public sealed class LobbyMessageHandler
         }
 
         return deltas.Count == 0 ? null : deltas;
+    }
+
+    private static IReadOnlyList<MoneyDeltaPayload>? CreateLiquidationMoneyDeltas(
+        LiquidationExecutionResult liquidation,
+        string paymentReason,
+        GameState gameState)
+    {
+        if (!liquidation.PaymentExecuted)
+        {
+            return null;
+        }
+
+        var deltas = new List<MoneyDeltaPayload>();
+        foreach (var step in liquidation.Steps)
+        {
+            switch (step.StepKind)
+            {
+                case LiquidationStepKind.UpgradeSale:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, "liquidation_upgrade_sale"));
+                    break;
+                case LiquidationStepKind.Mortgage:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, "liquidation_mortgage"));
+                    break;
+                case LiquidationStepKind.BankPayment:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, paymentReason));
+                    break;
+                case LiquidationStepKind.PlayerPayment:
+                    deltas.Add(CreateDebtorLiquidationDelta(liquidation, step, paymentReason));
+                    if (liquidation.Obligation.Creditor.PlayerId is not null)
+                    {
+                        var creditor = gameState.Players.First(
+                            player => player.PlayerId == liquidation.Obligation.Creditor.PlayerId.Value);
+                        deltas.Add(new MoneyDeltaPayload(
+                            creditor.PlayerId.Value,
+                            step.Amount.Amount,
+                            creditor.Money.Amount,
+                            paymentReason,
+                            liquidation.Obligation.DebtorPlayerId.Value,
+                            liquidation.Obligation.TileId?.Value,
+                            liquidation.Obligation.CardId?.Value));
+                    }
+
+                    break;
+            }
+        }
+
+        return deltas.Count == 0 ? null : deltas;
+    }
+
+    private static MoneyDeltaPayload CreateDebtorLiquidationDelta(
+        LiquidationExecutionResult liquidation,
+        LiquidationStepResult step,
+        string reason)
+    {
+        var delta = step.StepKind is LiquidationStepKind.BankPayment or LiquidationStepKind.PlayerPayment
+            ? -step.Amount.Amount
+            : step.Amount.Amount;
+        var counterpartyPlayerId = step.StepKind == LiquidationStepKind.PlayerPayment &&
+            liquidation.Obligation.Creditor.PlayerId is not null
+                ? liquidation.Obligation.Creditor.PlayerId.Value.Value
+                : null;
+
+        return new MoneyDeltaPayload(
+            liquidation.Obligation.DebtorPlayerId.Value,
+            delta,
+            step.DebtorBalance.Amount,
+            reason,
+            counterpartyPlayerId,
+            step.PropertyTileId?.Value ?? liquidation.Obligation.TileId?.Value,
+            liquidation.Obligation.CardId?.Value);
+    }
+
+    private static IReadOnlyList<LiquidationStepPayload>? CreateLiquidationStepPayloads(
+        LiquidationExecutionResult? liquidation)
+    {
+        if (liquidation?.PaymentExecuted != true)
+        {
+            return null;
+        }
+
+        return liquidation.Steps
+            .Select(step => new LiquidationStepPayload(
+                FormatLiquidationStepKind(step.StepKind),
+                step.PropertyTileId?.Value,
+                step.Amount.Amount,
+                step.DebtorBalance.Amount,
+                step.UpgradeLevel,
+                step.IsMortgaged))
+            .ToArray();
     }
 
     private static IReadOnlyList<MoneyDeltaPayload>? CreateEndTurnMoneyDeltas(
@@ -4753,6 +4925,18 @@ public sealed class LobbyMessageHandler
             CardResolutionActionKind.GoToLockup => "go_to_lockup",
             CardResolutionActionKind.GetOutOfLockup => "get_out_of_lockup",
             _ => actionKind.ToString().ToLowerInvariant(),
+        };
+    }
+
+    private static string FormatLiquidationStepKind(LiquidationStepKind stepKind)
+    {
+        return stepKind switch
+        {
+            LiquidationStepKind.UpgradeSale => "upgrade_sale",
+            LiquidationStepKind.Mortgage => "mortgage",
+            LiquidationStepKind.BankPayment => "bank_payment",
+            LiquidationStepKind.PlayerPayment => "player_payment",
+            _ => stepKind.ToString().ToLowerInvariant(),
         };
     }
 

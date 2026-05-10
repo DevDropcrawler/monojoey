@@ -70,6 +70,30 @@ public static class CardEffectExecutor
         };
     }
 
+    public static PaymentObligation? CreateSingleDebtorBankPaymentObligation(
+        GameState gameState,
+        CardResolutionResult cardResolution)
+    {
+        Money? amount = cardResolution.ActionKind switch
+        {
+            CardResolutionActionKind.PayMoney => RequireAmount(cardResolution),
+            CardResolutionActionKind.RepairOwnedProperties => CalculatePropertyRepairCost(
+                gameState,
+                cardResolution.PlayerId,
+                RequireAmount(cardResolution)),
+            _ => null,
+        };
+
+        return amount is null || amount.Value.Amount <= 0
+            ? null
+            : new PaymentObligation(
+                cardResolution.PlayerId,
+                amount.Value,
+                PaymentObligationKind.CardPayment,
+                PaymentObligationCreditor.Bank,
+                CardId: cardResolution.CardId);
+    }
+
     private static CardEffectExecutionResult MoveToStart(GameState gameState, CardResolutionResult cardResolution)
     {
         var steps = CalculateForwardStepsToTile(gameState, cardResolution.PlayerId, StartTileId);

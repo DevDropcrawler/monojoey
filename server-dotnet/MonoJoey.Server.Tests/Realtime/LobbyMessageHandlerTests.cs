@@ -1274,6 +1274,114 @@ public class LobbyMessageHandlerTests
     }
 
     [Fact]
+    public void ExecuteTile_RentLiquidatesMortgagePaysOwnerAndProjectsReconnectState()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with
+                        {
+                            Money = Money.Zero,
+                            OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+                        },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+            });
+
+        var result = handler.HandleTextMessageResult(
+            ExecuteTileMessage(started.Session.SessionId, "player_1"),
+            started.FirstContext);
+        var payload = Assert.IsType<ExecuteTileResultPayload>(result.DirectResponse.Payload);
+        var broadcast = Assert.Single(result.Broadcasts);
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("rent_paid", payload.ExecutionKind);
+        Assert.Equal(payload, broadcast.Payload);
+        Assert.Equal(new[] { "mortgage", "player_payment" }, payload.LiquidationSteps!.Select(step => step.Kind));
+        Assert.Equal(new[] { "liquidation_mortgage", "rent", "rent" }, payload.MoneyDeltas!.Select(delta => delta.Reason));
+        Assert.Equal(new Money(48), afterExecute.Players.First(player => player.PlayerId.Value == "player_1").Money);
+        Assert.Equal(new Money(1502), afterExecute.Players.First(player => player.PlayerId.Value == "player_2").Money);
+        Assert.True(afterExecute.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+
+        var reconnectContext = new LobbyConnectionContext("connection_reconnect");
+        using var reconnectResponse = Handle(
+            handler,
+            reconnectContext,
+            ReconnectMessage(started.Session.SessionId, "player_1"));
+        var propertyState = AssertResponseType(reconnectResponse, "reconnect_result")
+            .GetProperty("snapshot")
+            .GetProperty("propertyStates")
+            .EnumerateArray()
+            .First(state => state.GetProperty("tileId").GetString() == "property_03");
+        Assert.True(propertyState.GetProperty("data").GetProperty("isMortgaged").GetBoolean());
+    }
+
+    [Fact]
+    public void ExecuteTile_InsufficientRentAfterFailedLiquidationDoesNotPersistMortgage()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        var property03 = new TileId("property_03");
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "property_01");
+        _ = UpdateGameState(
+            sessionManager,
+            started.Session.SessionId,
+            gameState => gameState with
+            {
+                Board = gameState.Board with
+                {
+                    Tiles = gameState.Board.Tiles
+                        .Select(tile => tile.TileId.Value == "property_01"
+                            ? tile with { RentTable = new[] { new Money(80) } }
+                            : tile)
+                        .ToArray(),
+                },
+                Players = gameState.Players
+                    .Select(player => player.PlayerId.Value switch
+                    {
+                        "player_1" => player with
+                        {
+                            Money = new Money(5),
+                            OwnedPropertyIds = new HashSet<TileId> { property03 },
+                        },
+                        "player_2" => player with { OwnedPropertyIds = new HashSet<TileId> { new("property_01") } },
+                        _ => player,
+                    })
+                    .ToArray(),
+                PropertyStates = new Dictionary<TileId, PropertyState>
+                {
+                    [property03] = new(property03, new PropertyStateData(damagePercent: 10)),
+                },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+
+        Assert.Equal("rent_unpaid_player_eliminated", payload.GetProperty("executionKind").GetString());
+        Assert.False(payload.TryGetProperty("liquidationSteps", out _));
+        Assert.False(afterExecute.PropertyStates[property03].Data.IsMortgaged);
+        Assert.Equal(0, afterExecute.PropertyStates[property03].Data.UpgradeLevel);
+        Assert.Equal(new Money(5), afterExecute.Players.First(player => player.PlayerId.Value == "player_1").Money);
+        Assert.Equal(new Money(1500), afterExecute.Players.First(player => player.PlayerId.Value == "player_2").Money);
+    }
+
+    [Fact]
     public void ExecuteTile_TerminalRentEmitsGameWonStatOnce()
     {
         var stats = new CapturingStatEventSink();
@@ -1563,6 +1671,39 @@ public class LobbyMessageHandlerTests
         Assert.Equal(1425, moneyDelta.GetProperty("balance").GetInt32());
         Assert.Equal(new Money(1425), afterExecute.Players[0].Money);
         Assert.Equal(25, afterExecute.Rules.Economy.LuxuryTaxAmount);
+    }
+
+    [Fact]
+    public void ExecuteTile_TaxLiquidatesMortgageAndPaysBank()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "tax_01");
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                Money = new Money(50),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+
+        using var response = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var payload = AssertResponseType(response, "execute_tile_result");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var steps = payload.GetProperty("liquidationSteps").EnumerateArray().ToArray();
+        var deltas = payload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal("tax_paid", payload.GetProperty("executionKind").GetString());
+        Assert.Equal(new[] { "mortgage", "bank_payment" }, steps.Select(step => step.GetProperty("kind").GetString()));
+        Assert.Equal(new[] { "liquidation_mortgage", "tax" }, deltas.Select(delta => delta.GetProperty("reason").GetString()));
+        Assert.Equal(new Money(0), afterExecute.Players.First(player => player.PlayerId.Value == "player_1").Money);
+        Assert.True(afterExecute.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
     }
 
     [Fact]
@@ -2193,6 +2334,53 @@ public class LobbyMessageHandlerTests
             EndTurnMessage(started.Session.SessionId, "player_1"));
 
         AssertError(endTurnResponse, "game_already_completed");
+    }
+
+    [Fact]
+    public void ExecuteTile_PayBankCardLiquidatesMortgageAndPaysBank()
+    {
+        var sessionManager = new SessionManager();
+        var handler = CreateHandler(sessionManager, new DiceRoll(1, 2));
+        var started = StartReadyGame(sessionManager, handler);
+        _ = SetCurrentPlayerReadyToExecuteTile(sessionManager, started.Session.SessionId, "player_1", "chance_01");
+        var payCard = CreateCard(
+            "TEST_PAY_BANK_LIQUIDATE",
+            CardActionKind.PayBank,
+            new CardActionParameters(Amount: new Money(55)));
+        _ = UpdateEnginePlayer(
+            sessionManager,
+            started.Session.SessionId,
+            "player_1",
+            player => player with
+            {
+                Money = new Money(10),
+                OwnedPropertyIds = new HashSet<TileId> { new("property_03") },
+            });
+        _ = UpdateDeckState(
+            sessionManager,
+            started.Session.SessionId,
+            CardDeckIds.Chance,
+            new CardDeckState(CardDeckIds.Chance, new[] { payCard }, Array.Empty<Card>()));
+
+        using var executeResponse = Handle(
+            handler,
+            started.FirstContext,
+            ExecuteTileMessage(started.Session.SessionId, "player_1"));
+        var executePayload = AssertResponseType(executeResponse, "execute_tile_result");
+        var card = executePayload.GetProperty("card");
+        var afterExecute = sessionManager.GetSession(started.Session.SessionId)!.GameState;
+        var steps = executePayload.GetProperty("liquidationSteps").EnumerateArray().ToArray();
+        var deltas = executePayload.GetProperty("moneyDeltas").EnumerateArray().ToArray();
+
+        Assert.Equal("card_executed", executePayload.GetProperty("executionKind").GetString());
+        Assert.Equal("pay_money", card.GetProperty("resolutionKind").GetString());
+        Assert.Equal(5, card.GetProperty("money").GetInt32());
+        Assert.False(card.GetProperty("isEliminated").GetBoolean());
+        Assert.Equal(new[] { "mortgage", "bank_payment" }, steps.Select(step => step.GetProperty("kind").GetString()));
+        Assert.Equal(new[] { "liquidation_mortgage", "card" }, deltas.Select(delta => delta.GetProperty("reason").GetString()));
+        Assert.Equal(new Money(5), afterExecute.Players.First(player => player.PlayerId.Value == "player_1").Money);
+        Assert.True(afterExecute.PropertyStates[new TileId("property_03")].Data.IsMortgaged);
+        Assert.Single(afterExecute.CardDeckStates[CardDeckIds.Chance].DiscardPile);
     }
 
     [Fact]
