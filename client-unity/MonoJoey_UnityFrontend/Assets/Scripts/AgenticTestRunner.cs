@@ -50,6 +50,15 @@ public sealed class AgenticTestRunner : MonoBehaviour
     [SerializeField] private string chunk11LiveSessionId = "";
     [SerializeField] private string chunk11LivePlayerId = "";
 
+    [Header("Chunk 13 Optional Live Gameplay Smoke")]
+    [SerializeField] private bool runChunk13LiveGameplaySmoke;
+    [SerializeField] private string chunk13LiveWebSocketUrl = "ws://127.0.0.1:5000/ws";
+    [SerializeField] private string chunk13LiveSessionId = "";
+    [SerializeField] private string chunk13LivePlayerId = "";
+    [SerializeField] private bool chunk13AllowAuctionBid;
+    [SerializeField] private int chunk13AuctionBidAmount;
+    [SerializeField] private float chunk13LiveTimeoutSeconds = 10f;
+
 #if UNITY_EDITOR
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void BootstrapForSampleScene()
@@ -318,6 +327,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
+        yield return RunOptionalChunk13LiveGameplaySmoke(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
     }
 
     private IEnumerator RunChunk9ReadOnlyTransportValidation(SnapshotHydrator hydrator)
@@ -885,6 +895,778 @@ public sealed class AgenticTestRunner : MonoBehaviour
         session.Connect();
         yield return WaitForChunk8State(session, MonoJoeyTransportConnectionState.BoundLive, 5f);
         Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke reconnect back to BoundLive: state={session.State}, reconnects={session.ReconnectAttemptCount}.");
+    }
+
+    private IEnumerator RunOptionalChunk13LiveGameplaySmoke(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        BoardTileController[] boardPath)
+    {
+        if (!runChunk13LiveGameplaySmoke)
+        {
+            yield break;
+        }
+
+        LiveSmokeValidationRecorder recorder = new LiveSmokeValidationRecorder("Chunk 13 live gameplay smoke");
+        if (string.IsNullOrWhiteSpace(chunk13LiveWebSocketUrl)
+            || string.IsNullOrWhiteSpace(chunk13LiveSessionId)
+            || string.IsNullOrWhiteSpace(chunk13LivePlayerId))
+        {
+            recorder.Fail("validation_failure", "Live smoke skipped: backendUrl/sessionId/playerId are required. No transport connection or gameplay command was sent.");
+            recorder.LogSummary(this);
+            yield break;
+        }
+
+        GameObject liveObject = new GameObject(
+            "MonoJoeyBackendTransport_Chunk13LiveGameplayRuntime",
+            typeof(MonoJoeyWebSocketTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyBackendMessageRouter router = liveObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = liveObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyGameplayCommandDispatcher dispatcher = liveObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+        MonoJoeyConnectionStatusController status = liveObject.GetComponent<MonoJoeyConnectionStatusController>();
+
+        hydrator.Configure(hud, turnController, auction, token, tokenAnimator, boardPath, chunk13LivePlayerId);
+        turnController.ConfigureLiveGameplayCommandDispatcher(dispatcher, chunk13LivePlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(dispatcher);
+        session.Configure(
+            MonoJoeySessionClientMode.LiveBackend,
+            chunk13LiveWebSocketUrl,
+            chunk13LiveSessionId,
+            chunk13LivePlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            false);
+        dispatcher.Configure(session);
+        status.Configure(session, router);
+
+        float timeout = Mathf.Max(1f, chunk13LiveTimeoutSeconds);
+        recorder.LogState(
+            "transport_success",
+            "connect",
+            "starting",
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            0f,
+            "connecting to live backend");
+        session.Connect();
+        yield return WaitForChunk13BoundLive(session, router, hydrator, recorder, timeout);
+        if (recorder.HasFailed)
+        {
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        recorder.LogState(
+            "hydration_success",
+            "reconnect_session",
+            "reconnect_result",
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            0f,
+            "bound live after authoritative reconnect hydration");
+
+        if (!ValidateChunk13Hydration("initial reconnect", chunk13LivePlayerId, hydrator, hud, turnController, auction, token, recorder, false))
+        {
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        yield return RunChunk13CommandStep(
+            MonoJoeyTransportMessageTypes.RollDice,
+            MonoJoeyTransportMessageTypes.RollResult,
+            () => turnController.RollButtonInteractable,
+            () => turnController.LastRollBlockedReason,
+            () => dispatcher.TryRollDice(),
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            recorder,
+            timeout,
+            () => ValidateChunk13PostRoll(hydrator, hud, turnController, auction, token, recorder));
+        if (recorder.HasFailed)
+        {
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        yield return RunChunk13CommandStep(
+            MonoJoeyTransportMessageTypes.ResolveTile,
+            MonoJoeyTransportMessageTypes.ResolveTileResult,
+            () => turnController.ResolveButtonInteractable,
+            () => turnController.LastResolveBlockedReason,
+            () => dispatcher.TryResolveTile(),
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            recorder,
+            timeout,
+            () => ValidateChunk13TurnFlag("resolve_tile hydration", hydrator, turnController, recorder, s => s.HasResolvedTileThisTurn));
+        if (recorder.HasFailed)
+        {
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        yield return RunChunk13CommandStep(
+            MonoJoeyTransportMessageTypes.ExecuteTile,
+            MonoJoeyTransportMessageTypes.ExecuteTileResult,
+            () => turnController.ExecuteButtonInteractable,
+            () => turnController.LastExecuteBlockedReason,
+            () => dispatcher.TryExecuteTile(),
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            recorder,
+            timeout,
+            () => ValidateChunk13TurnFlag("execute_tile hydration", hydrator, turnController, recorder, s => s.HasExecutedTileThisTurn));
+        if (recorder.HasFailed)
+        {
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        if (turnController.HasActiveAuctionFromHydration || auction.HasActiveAuctionSnapshot)
+        {
+            ValidateChunk13AuctionHydration(auction, recorder);
+            recorder.LogState(
+                "hydration_success",
+                "auction_observed",
+                "snapshot_result",
+                session,
+                router,
+                hydrator,
+                hud,
+                turnController,
+                auction,
+                token,
+                dispatcher,
+                0f,
+                chunk13AllowAuctionBid ? "active auction hydrated; optional bid gate enabled" : "active auction hydrated; bid gate disabled, no bid sent");
+
+            if (recorder.HasFailed || !chunk13AllowAuctionBid)
+            {
+                session.Disconnect();
+                recorder.LogSummary(liveObject);
+                yield break;
+            }
+
+            if (chunk13AuctionBidAmount <= 0)
+            {
+                recorder.Fail("validation_failure", $"Auction bid gate was enabled but chunk13AuctionBidAmount={chunk13AuctionBidAmount}; no bid sent.");
+                session.Disconnect();
+                recorder.LogSummary(liveObject);
+                yield break;
+            }
+
+            auction.SetBidInputTextForValidation(chunk13AuctionBidAmount.ToString());
+            yield return RunChunk13CommandStep(
+                MonoJoeyTransportMessageTypes.PlaceBid,
+                MonoJoeyTransportMessageTypes.BidResult,
+                () => auction.BidButtonInteractable,
+                () => auction.LastBidBlockedReason,
+                () =>
+                {
+                    auction.SubmitLocalBidRequest();
+                    return string.Equals(dispatcher.LastCommandRequestType, MonoJoeyTransportMessageTypes.PlaceBid, StringComparison.Ordinal)
+                        && string.IsNullOrWhiteSpace(dispatcher.LastCommandError);
+                },
+                session,
+                router,
+                hydrator,
+                hud,
+                turnController,
+                auction,
+                token,
+                dispatcher,
+                recorder,
+                timeout,
+                () => ValidateChunk13AuctionHydration(auction, recorder));
+
+            session.Disconnect();
+            recorder.LogSummary(liveObject);
+            yield break;
+        }
+
+        int beforeEndTurnIndex = turnController.LastSnapshot.TurnIndex;
+        string beforeEndCurrentPlayer = turnController.LastSnapshot.CurrentPlayerId;
+        yield return RunChunk13CommandStep(
+            MonoJoeyTransportMessageTypes.EndTurn,
+            MonoJoeyTransportMessageTypes.EndTurnResult,
+            () => turnController.EndTurnButtonInteractable,
+            () => turnController.LastEndTurnBlockedReason,
+            () => dispatcher.TryEndTurn(),
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            recorder,
+            timeout,
+            () => ValidateChunk13EndTurnProgression(hydrator, turnController, beforeEndTurnIndex, beforeEndCurrentPlayer, recorder));
+
+        session.Disconnect();
+        recorder.LogSummary(liveObject);
+    }
+
+    private static IEnumerator RunChunk13CommandStep(
+        string commandType,
+        string expectedDirectResultType,
+        Func<bool> commandGate,
+        Func<string> blockedReason,
+        Func<bool> sendCommand,
+        MonoJoeySessionClient session,
+        MonoJoeyBackendMessageRouter router,
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        MonoJoeyGameplayCommandDispatcher dispatcher,
+        LiveSmokeValidationRecorder recorder,
+        float timeoutSeconds,
+        Func<bool> validateAfterHydration)
+    {
+        if (recorder.HasFailed)
+        {
+            yield break;
+        }
+
+        if (commandGate == null || !commandGate.Invoke())
+        {
+            recorder.Fail("validation_failure", $"{commandType} blocked by hydrated UI/dispatcher gate: {DisplayLogValue(blockedReason == null ? "" : blockedReason.Invoke())}. No command sent.");
+            recorder.LogState("validation_failure", commandType, "", session, router, hydrator, hud, turnController, auction, token, dispatcher, 0f, "command gate rejected send");
+            yield break;
+        }
+
+        int initialDirectCount = router == null ? 0 : router.DirectCommandResultCount;
+        int initialSnapshotCount = router == null ? 0 : router.SnapshotResultCount;
+        string beforeSignature = Chunk13GameplayStateSignature(hud, turnController, auction, token);
+        float started = Time.realtimeSinceStartup;
+
+        bool sent = sendCommand != null && sendCommand.Invoke();
+        recorder.LogState(
+            sent ? "transport_success" : "validation_failure",
+            commandType,
+            "",
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            Time.realtimeSinceStartup - started,
+            sent ? "state-changing command sent once" : "dispatcher rejected command before transport send");
+        if (!sent)
+        {
+            recorder.Fail("validation_failure", $"{commandType} was not sent: {DisplayLogValue(dispatcher == null ? "" : dispatcher.LastCommandError)}.");
+            yield break;
+        }
+
+        yield return WaitForChunk13DirectResult(
+            expectedDirectResultType,
+            initialDirectCount,
+            session,
+            router,
+            dispatcher,
+            recorder,
+            timeoutSeconds);
+        if (recorder.HasFailed)
+        {
+            recorder.LogState("validation_failure", commandType, expectedDirectResultType, session, router, hydrator, hud, turnController, auction, token, dispatcher, Time.realtimeSinceStartup - started, "direct response failed");
+            yield break;
+        }
+
+        if (router != null
+            && router.SnapshotResultCount <= initialSnapshotCount
+            && !string.Equals(beforeSignature, Chunk13GameplayStateSignature(hud, turnController, auction, token), StringComparison.Ordinal))
+        {
+            recorder.Fail("validation_failure", $"{commandType} changed gameplay/UI state after direct {expectedDirectResultType} before authoritative snapshot hydration.");
+            recorder.LogState("validation_failure", commandType, expectedDirectResultType, session, router, hydrator, hud, turnController, auction, token, dispatcher, Time.realtimeSinceStartup - started, "direct-response-only local mutation suspected");
+            yield break;
+        }
+
+        recorder.LogState(
+            "direct_command_success",
+            commandType,
+            expectedDirectResultType,
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            Time.realtimeSinceStartup - started,
+            "direct command response observed; waiting for authoritative snapshot hydration");
+
+        yield return WaitForChunk13SnapshotHydration(
+            initialSnapshotCount,
+            session,
+            router,
+            hydrator,
+            recorder,
+            timeoutSeconds);
+        if (recorder.HasFailed)
+        {
+            recorder.LogState("validation_failure", commandType, expectedDirectResultType, session, router, hydrator, hud, turnController, auction, token, dispatcher, Time.realtimeSinceStartup - started, "authoritative hydration failed");
+            yield break;
+        }
+
+        bool validated = validateAfterHydration == null || validateAfterHydration.Invoke();
+        recorder.LogState(
+            validated ? "hydration_success" : "validation_failure",
+            commandType,
+            expectedDirectResultType,
+            session,
+            router,
+            hydrator,
+            hud,
+            turnController,
+            auction,
+            token,
+            dispatcher,
+            Time.realtimeSinceStartup - started,
+            validated ? "authoritative hydration validated" : "authoritative hydration did not match expected post-command state");
+        if (!validated && !recorder.HasFailed)
+        {
+            recorder.Fail("validation_failure", $"{commandType} authoritative hydration validation failed.");
+        }
+    }
+
+    private static IEnumerator WaitForChunk13BoundLive(
+        MonoJoeySessionClient session,
+        MonoJoeyBackendMessageRouter router,
+        SnapshotHydrator hydrator,
+        LiveSmokeValidationRecorder recorder,
+        float timeoutSeconds)
+    {
+        int initialReconnects = router == null ? 0 : router.ReconnectResultCount;
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (session != null && Time.realtimeSinceStartup < deadline)
+        {
+            if (Chunk13TransportStopped(session, router, recorder))
+            {
+                yield break;
+            }
+
+            if (session.State == MonoJoeyTransportConnectionState.BoundLive
+                && session.IsBoundToIdentity
+                && router != null
+                && router.ReconnectResultCount > initialReconnects
+                && hydrator != null
+                && hydrator.LastHydrationSucceeded)
+            {
+                yield break;
+            }
+
+            yield return null;
+        }
+
+        recorder.Fail("timeout", $"Timed out waiting for reconnect_result hydration and BoundLive state after {timeoutSeconds:0.0}s.");
+    }
+
+    private static IEnumerator WaitForChunk13DirectResult(
+        string expectedDirectResultType,
+        int initialDirectCount,
+        MonoJoeySessionClient session,
+        MonoJoeyBackendMessageRouter router,
+        MonoJoeyGameplayCommandDispatcher dispatcher,
+        LiveSmokeValidationRecorder recorder,
+        float timeoutSeconds)
+    {
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            if (Chunk13TransportStopped(session, router, recorder))
+            {
+                yield break;
+            }
+
+            if (dispatcher != null && !string.IsNullOrWhiteSpace(dispatcher.LastBackendErrorMessage))
+            {
+                recorder.Fail("backend_error", dispatcher.LastCommandError);
+                yield break;
+            }
+
+            if (router != null && router.DirectCommandResultCount > initialDirectCount)
+            {
+                if (string.Equals(router.LastDirectCommandResultType, expectedDirectResultType, StringComparison.Ordinal))
+                {
+                    yield break;
+                }
+
+                recorder.Fail("validation_failure", $"Expected direct result {expectedDirectResultType}, got {DisplayLogValue(router.LastDirectCommandResultType)}.");
+                yield break;
+            }
+
+            yield return null;
+        }
+
+        recorder.Fail("timeout", $"Timed out waiting for direct command result {expectedDirectResultType} after {timeoutSeconds:0.0}s.");
+    }
+
+    private static IEnumerator WaitForChunk13SnapshotHydration(
+        int initialSnapshotCount,
+        MonoJoeySessionClient session,
+        MonoJoeyBackendMessageRouter router,
+        SnapshotHydrator hydrator,
+        LiveSmokeValidationRecorder recorder,
+        float timeoutSeconds)
+    {
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            if (Chunk13TransportStopped(session, router, recorder))
+            {
+                yield break;
+            }
+
+            if (router != null && router.SnapshotResultCount > initialSnapshotCount)
+            {
+                if (hydrator != null
+                    && hydrator.LastHydrationSucceeded
+                    && string.Equals(hydrator.LastHydrationSourceMessageType, MonoJoeyTransportMessageTypes.SnapshotResult, StringComparison.Ordinal))
+                {
+                    yield break;
+                }
+
+                recorder.Fail("validation_failure", $"snapshot_result was observed but hydration failed or source was {DisplayLogValue(hydrator == null ? "" : hydrator.LastHydrationSourceMessageType)}.");
+                yield break;
+            }
+
+            yield return null;
+        }
+
+        recorder.Fail("timeout", $"Timed out waiting for authoritative snapshot_result hydration after {timeoutSeconds:0.0}s.");
+    }
+
+    private static bool Chunk13TransportStopped(MonoJoeySessionClient session, MonoJoeyBackendMessageRouter router, LiveSmokeValidationRecorder recorder)
+    {
+        if (router != null && router.ErrorEnvelopeCount > 0)
+        {
+            recorder.Fail("backend_error", $"Backend error envelope code={DisplayLogValue(router.LastErrorCode)} message={DisplayLogValue(router.LastErrorMessage)}.");
+            return true;
+        }
+
+        if (session == null)
+        {
+            recorder.Fail("validation_failure", "Session client was missing.");
+            return true;
+        }
+
+        if (session.State == MonoJoeyTransportConnectionState.Error)
+        {
+            recorder.Fail("backend_error", $"Transport error: {DisplayLogValue(session.LastError)}.");
+            return true;
+        }
+
+        if (session.State == MonoJoeyTransportConnectionState.Disconnected)
+        {
+            recorder.Fail("backend_error", "Transport disconnected during live smoke.");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ValidateChunk13Hydration(
+        string label,
+        string expectedPlayerId,
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        LiveSmokeValidationRecorder recorder,
+        bool allowCompletedGame)
+    {
+        if (hydrator == null || !hydrator.LastHydrationSucceeded || hydrator.LastSnapshot == null)
+        {
+            recorder.Fail("validation_failure", $"{label}: no successful authoritative hydration was available.");
+            return false;
+        }
+
+        if (!string.Equals(hydrator.LastHydratedPlayerId, expectedPlayerId, StringComparison.Ordinal)
+            || hud.LastPlayerSnapshot.PlayerId != expectedPlayerId
+            || token.PlayerId != expectedPlayerId)
+        {
+            recorder.Fail("validation_failure", $"{label}: selected player mismatch hydrator={DisplayLogValue(hydrator.LastHydratedPlayerId)}, hud={DisplayLogValue(hud.LastPlayerSnapshot.PlayerId)}, token={DisplayLogValue(token.PlayerId)}, expected={expectedPlayerId}.");
+            return false;
+        }
+
+        if (!allowCompletedGame && IsChunk13CompletedGame(hydrator.LastSnapshot))
+        {
+            recorder.Fail("validation_failure", $"{label}: game was already completed before the smoke flow could continue.");
+            return false;
+        }
+
+        if (!turnController.HasSnapshot)
+        {
+            recorder.Fail("validation_failure", $"{label}: turn UI has no hydrated snapshot.");
+            return false;
+        }
+
+        if (auction == null)
+        {
+            recorder.Fail("validation_failure", $"{label}: auction panel is missing.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateChunk13PostRoll(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        LiveSmokeValidationRecorder recorder)
+    {
+        if (!ValidateChunk13Hydration("roll_dice hydration", token.PlayerId, hydrator, hud, turnController, auction, token, recorder, true))
+        {
+            return false;
+        }
+
+        if (!IsChunk13CompletedGame(hydrator.LastSnapshot) && !turnController.LastSnapshot.HasRolledThisTurn)
+        {
+            recorder.Fail("validation_failure", "roll_dice hydration did not progress hasRolledThisTurn.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(hydrator.LastHydratedTileId) || token.CurrentTileIndex < 0)
+        {
+            recorder.Fail("validation_failure", $"roll_dice hydration did not record tile/token data: tile={DisplayLogValue(hydrator.LastHydratedTileId)}, tokenIndex={token.CurrentTileIndex}.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateChunk13TurnFlag(
+        string label,
+        SnapshotHydrator hydrator,
+        TurnController turnController,
+        LiveSmokeValidationRecorder recorder,
+        Func<HUDController.TurnHudSnapshot, bool> flagPredicate)
+    {
+        if (hydrator == null || hydrator.LastSnapshot == null || !hydrator.LastHydrationSucceeded)
+        {
+            recorder.Fail("validation_failure", $"{label}: no successful snapshot hydration was available.");
+            return false;
+        }
+
+        if (IsChunk13CompletedGame(hydrator.LastSnapshot))
+        {
+            return true;
+        }
+
+        if (flagPredicate == null || !flagPredicate.Invoke(turnController.LastSnapshot))
+        {
+            recorder.Fail("validation_failure", $"{label}: expected turn flag was not set by authoritative snapshot.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateChunk13AuctionHydration(AuctionPanelController auction, LiveSmokeValidationRecorder recorder)
+    {
+        if (auction == null || !auction.HasActiveAuctionSnapshot)
+        {
+            recorder.Fail("validation_failure", "Expected active auction hydration but auction UI has no active auction snapshot.");
+            return false;
+        }
+
+        if (auction.CurrentHighBid < 0)
+        {
+            recorder.Fail("validation_failure", $"Auction hydration produced invalid high bid {auction.CurrentHighBid}.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateChunk13EndTurnProgression(
+        SnapshotHydrator hydrator,
+        TurnController turnController,
+        int beforeTurnIndex,
+        string beforeCurrentPlayerId,
+        LiveSmokeValidationRecorder recorder)
+    {
+        if (hydrator == null || hydrator.LastSnapshot == null || !hydrator.LastHydrationSucceeded)
+        {
+            recorder.Fail("validation_failure", "end_turn hydration failed.");
+            return false;
+        }
+
+        if (IsChunk13CompletedGame(hydrator.LastSnapshot))
+        {
+            return true;
+        }
+
+        bool turnProgressed = turnController.LastSnapshot.TurnIndex > beforeTurnIndex
+            || !string.Equals(turnController.LastSnapshot.CurrentPlayerId, beforeCurrentPlayerId, StringComparison.Ordinal);
+        if (!turnProgressed)
+        {
+            recorder.Fail("validation_failure", $"end_turn hydration did not progress turn: before={beforeTurnIndex}/{DisplayLogValue(beforeCurrentPlayerId)}, after={turnController.LastSnapshot.TurnIndex}/{DisplayLogValue(turnController.LastSnapshot.CurrentPlayerId)}.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsChunk13CompletedGame(MonoJoeySnapshot snapshot)
+    {
+        if (snapshot == null)
+        {
+            return false;
+        }
+
+        return string.Equals(snapshot.gameStatus, "completed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(snapshot.status, "completed", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(snapshot.winnerPlayerId)
+            || !string.IsNullOrWhiteSpace(snapshot.endedAtUtc);
+    }
+
+    private static string Chunk13GameplayStateSignature(
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token)
+    {
+        HUDController.PlayerHudSnapshot player = hud.LastPlayerSnapshot;
+        HUDController.TurnHudSnapshot turn = turnController.LastSnapshot;
+        return $"player={DisplayLogValue(player.PlayerId)},money={player.Money},tile={DisplayLogValue(player.CurrentTileId)},turn={turn.TurnIndex}/{DisplayLogValue(turn.CurrentPlayerId)}/{turn.HasRolledThisTurn}/{turn.HasResolvedTileThisTurn}/{turn.HasExecutedTileThisTurn},auction={DisplayLogValue(auction.AuctionId)}/{auction.CurrentHighBid}/{DisplayLogValue(auction.HighBidderPlayerId)},token={DisplayLogValue(token.PlayerId)}/{token.CurrentTileIndex}";
+    }
+
+    private sealed class LiveSmokeValidationRecorder
+    {
+        private readonly string name;
+        private readonly List<string> entries = new List<string>();
+
+        public LiveSmokeValidationRecorder(string recorderName)
+        {
+            name = recorderName;
+        }
+
+        public bool HasFailed { get; private set; }
+        public string FailureLabel { get; private set; } = "";
+        public string FailureMessage { get; private set; } = "";
+
+        public void Fail(string label, string message)
+        {
+            if (!HasFailed)
+            {
+                HasFailed = true;
+                FailureLabel = label ?? "validation_failure";
+                FailureMessage = message ?? "";
+            }
+
+            Log($"{label}: {message}", null, true);
+        }
+
+        public void LogState(
+            string label,
+            string sentCommand,
+            string directResponseType,
+            MonoJoeySessionClient session,
+            MonoJoeyBackendMessageRouter router,
+            SnapshotHydrator hydrator,
+            HUDController hud,
+            TurnController turnController,
+            AuctionPanelController auction,
+            PlayerTokenController token,
+            MonoJoeyGameplayCommandDispatcher dispatcher,
+            float elapsedSeconds,
+            string validationResult)
+        {
+            HUDController.PlayerHudSnapshot player = hud.LastPlayerSnapshot;
+            HUDController.TurnHudSnapshot turn = turnController.LastSnapshot;
+            string message =
+                $"{label}: sent={DisplayLogValue(sentCommand)}, direct={DisplayLogValue(directResponseType)}, directError={DisplayLogValue(dispatcher == null ? "" : dispatcher.LastCommandError)}, " +
+                $"hydration={DisplayLogValue(hydrator == null ? "" : hydrator.LastHydrationSourceMessageType)}@{DisplayLogValue(hydrator == null || hydrator.LastHydrationUtc == DateTime.MinValue ? "" : hydrator.LastHydrationUtc.ToString("O"))}, snapshotVersion={(hydrator == null ? 0 : hydrator.LastHydratedSnapshotVersion)}, " +
+                $"player={DisplayLogValue(player.PlayerId)} money={player.Money} tile={DisplayLogValue(player.CurrentTileId)}, turn={turn.TurnIndex}/{DisplayLogValue(turn.CurrentPlayerId)} flags={turn.HasRolledThisTurn}/{turn.HasResolvedTileThisTurn}/{turn.HasExecutedTileThisTurn}, " +
+                $"auction={DisplayLogValue(auction == null ? "" : auction.AuctionId)} highBid={(auction == null ? 0 : auction.CurrentHighBid)} highBidder={DisplayLogValue(auction == null ? "" : auction.HighBidderPlayerId)}, " +
+                $"token={DisplayLogValue(token == null ? "" : token.PlayerId)} index={(token == null ? -1 : token.CurrentTileIndex)} position={(token == null ? Vector3.zero : token.transform.position)}, " +
+                $"sequences=last:{(router == null ? 0 : router.LastSequence)} advisory:{(router == null ? 0 : router.AdvisoryLastEventSequence)} snapshots:{(router == null ? 0 : router.SnapshotResultCount)} broadcasts:{(router == null ? 0 : router.SequencedBroadcastCount)} direct:{(router == null ? 0 : router.DirectCommandResultCount)}, " +
+                $"state={(session == null ? MonoJoeyTransportConnectionState.Error : session.State)}, elapsed={elapsedSeconds:0.000}s, validation={DisplayLogValue(validationResult)}";
+            Log(message, null, false);
+        }
+
+        public void LogSummary(UnityEngine.Object context)
+        {
+            string result = HasFailed
+                ? $"failed label={DisplayLogValue(FailureLabel)} message={DisplayLogValue(FailureMessage)}"
+                : "passed bounded live gameplay smoke";
+            Log($"summary: {result}; steps={entries.Count}", context, HasFailed);
+        }
+
+        private void Log(string message, UnityEngine.Object context, bool warning)
+        {
+            string line = $"[AgenticTestRunner] {DateTime.UtcNow:O} {name} {message}. Backend authoritative; no local gameplay state mutation.";
+            entries.Add(line);
+            if (warning)
+            {
+                Debug.LogWarning(line, context);
+            }
+            else
+            {
+                Debug.Log(line, context);
+            }
+        }
     }
 
     private static IEnumerator WaitForChunk8State(MonoJoeySessionClient session, MonoJoeyTransportConnectionState state, float timeoutSeconds)
