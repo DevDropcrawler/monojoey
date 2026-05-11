@@ -504,6 +504,8 @@ Not included by explicit user scope:
 
 ## Next Recommended Chunk
 
+Frontend Chunk 16 was completed in this session: the Unity turn and auction UI now separate primary player-facing flow copy from secondary diagnostics, keep direct command responses non-authoritative, and extend `AgenticTestRunner` with mock-live validation for readable flow prompts, auction prompts, bid-disabled reasons, diagnostics availability, direct-result non-mutation, and later authoritative hydration.
+
 Phase 5 follow-up - choose the next narrow networking/session or liquidation slice only if explicitly requested.
 
 Possible next scopes:

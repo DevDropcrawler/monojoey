@@ -346,6 +346,20 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
   - Code commit: `a77f15d`.
 
+### Chunk 16 Runtime Notes
+
+- `TurnController` now separates primary player-facing flow copy from diagnostics. `currentPlayerText`, `turnStatusText`, and `commandFeedbackText` render concise gameplay states such as `Your turn`, `Waiting for player-2`, `Roll dice`, `Resolve tile`, `Auction in progress`, `Waiting for server`, and `Waiting for server update`.
+- Protocol details such as request IDs, raw message types, sequence state, direct-result payloads, and backend diagnostics remain in `debugLog` and `MonoJoeyConnectionStatusController`, not in the primary turn flow.
+- Turn buttons now use the player-facing labels `Roll dice`, `Resolve tile`, `Execute tile`, and `End turn` at runtime and in `TurnUIPrefab`.
+- `AuctionPanelController` now renders the active auction as a gameplay prompt: auction tile/current bid, high bidder, countdown, bid prompt, and concise bid-disabled feedback. The bid button label is `Place bid`; detailed bid/request logs remain in the existing log text.
+- The authority boundary is unchanged: command clicks send intent only, direct command success updates progress/result feedback only, and gameplay HUD/token/auction/turn state still changes only through `snapshot_result` or `reconnect_result` hydration.
+- `AgenticTestRunner` adds Chunk 16 mock-live validation for readable primary turn prompts, not-your-turn copy, in-flight/waiting copy, active-auction prompt, bid-disabled copy, secondary diagnostics availability, direct-result non-mutation, and later snapshot hydration clearing waiting state.
+- Validation results for this handoff:
+  - `git diff --check` passed with line-ending warnings only.
+  - Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed for `Assets/Scripts/*.cs`; serialized-field warnings only.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Unity batch mode was attempted but produced no log/output in this shell session, so Play Mode/UI object validation was not confirmed.
+
 ## Optional Visual Polish
 
 - Replace fallback dice number labels with dedicated dice face sprites or icon assets.
