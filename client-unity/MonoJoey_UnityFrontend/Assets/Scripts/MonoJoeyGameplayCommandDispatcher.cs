@@ -37,7 +37,12 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
     public int CommandRequestCount { get; private set; }
     public DateTime LastCommandSentUtc { get; private set; } = DateTime.MinValue;
     public bool IsLiveBackend => sessionClient != null && sessionClient.Mode == MonoJoeySessionClientMode.LiveBackend;
+    public bool IsGameplayCommandModeAvailable => sessionClient != null && (sessionClient.Mode == MonoJoeySessionClientMode.LiveBackend || sessionClient.EnableMockGameplayCommandTestMode);
+    public bool IsMockGameplayCommandTestMode => sessionClient != null && sessionClient.EnableMockGameplayCommandTestMode;
     public bool IsBoundToIdentity => sessionClient != null && sessionClient.IsBoundToIdentity;
+    public string LastBlockedCommandType { get; private set; } = "";
+    public string LastBlockedReason { get; private set; } = "";
+    public string LastInFlightStateLog { get; private set; } = "";
 
     public void Configure(MonoJoeySessionClient client)
     {
@@ -55,9 +60,19 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         return TrySendSessionPlayerCommand(MonoJoeyTransportMessageTypes.RollDice);
     }
 
+    public bool CanRollDice(out string reason)
+    {
+        return CanSendCommand(MonoJoeyTransportMessageTypes.RollDice, out reason);
+    }
+
     public bool TryResolveTile()
     {
         return TrySendSessionPlayerCommand(MonoJoeyTransportMessageTypes.ResolveTile);
+    }
+
+    public bool CanResolveTile(out string reason)
+    {
+        return CanSendCommand(MonoJoeyTransportMessageTypes.ResolveTile, out reason);
     }
 
     public bool TryExecuteTile()
@@ -65,21 +80,36 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         return TrySendSessionPlayerCommand(MonoJoeyTransportMessageTypes.ExecuteTile);
     }
 
+    public bool CanExecuteTile(out string reason)
+    {
+        return CanSendCommand(MonoJoeyTransportMessageTypes.ExecuteTile, out reason);
+    }
+
     public bool TryEndTurn()
     {
         return TrySendSessionPlayerCommand(MonoJoeyTransportMessageTypes.EndTurn);
     }
 
-    public bool TryPlaceBid(int amount)
+    public bool CanEndTurn(out string reason)
+    {
+        return CanSendCommand(MonoJoeyTransportMessageTypes.EndTurn, out reason);
+    }
+
+    public bool CanPlaceBid(int amount, out string reason)
     {
         if (amount <= 0)
         {
-            LastCommandError = $"place_bid blocked: amount must be positive, got {amount}.";
-            Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}", this);
+            reason = $"amount must be positive, got {amount}";
+            RecordBlockedCommand(MonoJoeyTransportMessageTypes.PlaceBid, reason);
             return false;
         }
 
-        if (!CanSendCommand(MonoJoeyTransportMessageTypes.PlaceBid, out string reason))
+        return CanSendCommand(MonoJoeyTransportMessageTypes.PlaceBid, out reason);
+    }
+
+    public bool TryPlaceBid(int amount)
+    {
+        if (!CanPlaceBid(amount, out string reason))
         {
             LastCommandError = $"place_bid blocked: {reason}.";
             Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}", this);
@@ -105,22 +135,32 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         if (!ApprovedCommandTypes.Contains(type ?? ""))
         {
             reason = $"command type {Display(type)} is not approved";
+            RecordBlockedCommand(type, reason);
             return false;
         }
 
         if (IsCommandInFlight)
         {
             reason = $"command {Display(InFlightRequestType)} is already in flight";
+            RecordBlockedCommand(type, reason);
             return false;
         }
 
         if (sessionClient == null)
         {
             reason = "session client is not configured";
+            RecordBlockedCommand(type, reason);
             return false;
         }
 
-        return sessionClient.CanSendGameplayCommand(type, out reason);
+        if (!sessionClient.CanSendGameplayCommand(type, out reason))
+        {
+            RecordBlockedCommand(type, reason);
+            return false;
+        }
+
+        reason = "";
+        return true;
     }
 
     public void HandleDirectCommandResult(string resultType, string rawJson)
@@ -138,7 +178,7 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
 
         if (clearsInFlight)
         {
-            ClearInFlight();
+            ClearInFlight($"direct result {Display(safeResultType)}");
         }
     }
 
@@ -146,7 +186,7 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
     {
         LastCommandError = $"backend error code={Display(code)} message={Display(message)}";
         Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}. Clearing any in-flight command without local compensation.", this);
-        ClearInFlight();
+        ClearInFlight("backend error");
     }
 
     public void HandleAuthoritativeHydration(string messageType)
@@ -157,7 +197,7 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         }
 
         Debug.Log($"[MonoJoeyGameplayCommandDispatcher] {Display(messageType)} observed; clearing in-flight command {Display(InFlightRequestType)}.", this);
-        ClearInFlight();
+        ClearInFlight($"authoritative hydration {Display(messageType)}");
     }
 
     public void HandleDisconnectedOrTransportError(string reason)
@@ -169,7 +209,7 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
 
         LastCommandError = $"{Display(reason)} cleared in-flight command {Display(InFlightRequestType)}";
         Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}. No retry attempted.", this);
-        ClearInFlight();
+        ClearInFlight(reason);
     }
 
     private void Awake()
@@ -205,7 +245,7 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
 
         LastCommandError = $"command {Display(InFlightRequestType)} timed out after {timeout:0.0}s";
         Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}. No retry attempted.", this);
-        ClearInFlight();
+        ClearInFlight("timeout");
     }
 
     private bool TrySendSessionPlayerCommand(string requestType)
@@ -236,16 +276,22 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         IsCommandInFlight = true;
         InFlightRequestType = requestType;
         InFlightLocalRequestId = localRequestId;
+        LastInFlightStateLog = $"in-flight started type={requestType}, localRequestId={localRequestId}";
         LastCommandRequestType = requestType;
         LastCommandLocalRequestId = localRequestId;
         inFlightStartedRealtime = Time.realtimeSinceStartup;
         LastCommandSentUtc = DateTime.UtcNow;
         LastCommandError = "";
+        LastBlockedCommandType = "";
+        LastBlockedReason = "";
+
+        Debug.Log($"[MonoJoeyGameplayCommandDispatcher] Command attempt accepted for send: type={requestType}, localRequestId={localRequestId}, mode={(IsMockGameplayCommandTestMode ? "mock-command-test" : "live")}.", this);
 
         if (!sessionClient.TrySendGameplayCommandJson(requestType, json, localRequestId, out string reason))
         {
-            ClearInFlight();
+            ClearInFlight("session gateway rejected send");
             LastCommandError = $"{requestType} blocked by session gateway: {reason}.";
+            RecordBlockedCommand(requestType, reason);
             Debug.LogWarning($"[MonoJoeyGameplayCommandDispatcher] {LastCommandError}", this);
             return false;
         }
@@ -255,12 +301,22 @@ public sealed class MonoJoeyGameplayCommandDispatcher : MonoBehaviour
         return true;
     }
 
-    private void ClearInFlight()
+    private void ClearInFlight(string reason)
     {
+        string previousType = InFlightRequestType;
+        string previousRequestId = InFlightLocalRequestId;
         IsCommandInFlight = false;
         InFlightRequestType = "";
         InFlightLocalRequestId = "";
         inFlightStartedRealtime = 0f;
+        LastInFlightStateLog = $"in-flight cleared type={Display(previousType)}, localRequestId={Display(previousRequestId)}, reason={Display(reason)}";
+        Debug.Log($"[MonoJoeyGameplayCommandDispatcher] {LastInFlightStateLog}.", this);
+    }
+
+    private void RecordBlockedCommand(string type, string reason)
+    {
+        LastBlockedCommandType = type ?? "";
+        LastBlockedReason = reason ?? "";
     }
 
     private static string Display(string value)

@@ -62,6 +62,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
     public MonoJoeyMoneyDeltaPayload[] LastMoneyDeltas { get; private set; } = Array.Empty<MonoJoeyMoneyDeltaPayload>();
     public MonoJoeyPropertyOwnershipChangePayload[] LastPropertyOwnershipChanges { get; private set; } = Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
     public MonoJoeyPlayerEliminationPayload[] LastPlayerEliminations { get; private set; } = Array.Empty<MonoJoeyPlayerEliminationPayload>();
+    public bool LastHydratedHasActiveAuction { get; private set; }
 
     public event Action<HydrationHookEvent> HydrationStarted;
     public event Action<HydrationHookEvent> HudUpdated;
@@ -133,6 +134,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
         LastMoneyDeltas = snapshot.moneyDeltas ?? Array.Empty<MonoJoeyMoneyDeltaPayload>();
         LastPropertyOwnershipChanges = snapshot.propertyOwnershipChanges ?? Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
         LastPlayerEliminations = snapshot.playerEliminations ?? Array.Empty<MonoJoeyPlayerEliminationPayload>();
+        LastHydratedHasActiveAuction = snapshot.activeAuction != null;
 
         MonoJoeyTurnSnapshot turn = snapshot.turn ?? new MonoJoeyTurnSnapshot();
         MonoJoeyPlayerSnapshot player = SelectPlayer(snapshot.players);
@@ -163,6 +165,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
         if (turnController != null)
         {
             turnController.BindHudSnapshot(playerHud, turnHud);
+            turnController.BindTurnActionContext(snapshot.activeAuction != null);
             Emit(TurnUpdated, "turn-updated", turnHud.CurrentPlayerId, playerHud.CurrentTileId, true, $"Turn UI updated: turn={turnHud.TurnIndex}, phase={Display(turnHud.Phase)}.");
         }
 
@@ -510,6 +513,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
         LastMoneyDeltas = Array.Empty<MonoJoeyMoneyDeltaPayload>();
         LastPropertyOwnershipChanges = Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
         LastPlayerEliminations = Array.Empty<MonoJoeyPlayerEliminationPayload>();
+        LastHydratedHasActiveAuction = false;
         LastHydrationUtc = DateTime.MinValue;
     }
 

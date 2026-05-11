@@ -304,6 +304,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
 
         yield return RunChunk9ReadOnlyTransportValidation(hydrator);
         yield return RunChunk9GameplayCommandDispatcherValidation(hydrator, hud, turnController, auction, token);
+        yield return RunChunk10PlayableTurnUiCommandFlow(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
     }
 
@@ -465,6 +466,87 @@ public sealed class AgenticTestRunner : MonoBehaviour
         mockTransport.EmitCannedError();
         status.Refresh();
         Debug.Log($"[AgenticTestRunner] Chunk 9 backend error status: inFlight={dispatcher.IsCommandInFlight}, error={DisplayLogValue(dispatcher.LastCommandError)}, rendered={status.LastRenderedStatus}.", commandObject);
+        yield return null;
+    }
+
+    private IEnumerator RunChunk10PlayableTurnUiCommandFlow(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        BoardTileController[] boardPath)
+    {
+        GameObject commandObject = new GameObject(
+            "MonoJoeyPlayableTurnUi_Chunk10Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = commandObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = commandObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = commandObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyGameplayCommandDispatcher dispatcher = commandObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+        MonoJoeyConnectionStatusController status = commandObject.GetComponent<MonoJoeyConnectionStatusController>();
+
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "session_chunk_10",
+            testPlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            true);
+        dispatcher.Configure(session);
+        status.Configure(session, router);
+        turnController.ConfigureLiveGameplayCommandDispatcher(dispatcher, testPlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(dispatcher);
+
+        session.Connect();
+        Debug.Log($"[AgenticTestRunner] Chunk 10 mock-live command flow connected: state={session.State}, bound={session.IsBoundToIdentity}, dispatcherTestMode={session.EnableMockGameplayCommandTestMode}, mockCommandResponses={mockTransport.EnableGameplayCommandTestResponses}.", commandObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", testPlayerId, 20, false, false, false, 1500, "start", false, 0, ""));
+        LogChunk10UiState("initial authoritative snapshot", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
+
+        string beforeRollDirect = Chunk10StateSignature(hud, turnController, auction, token);
+        turnController.RollDice();
+        string afterRollDirect = Chunk10StateSignature(hud, turnController, auction, token);
+        Debug.Log($"[AgenticTestRunner] Chunk 10 roll_dice clicked: requestType={DisplayLogValue(dispatcher.LastCommandRequestType)}, localRequestId={DisplayLogValue(dispatcher.LastCommandLocalRequestId)}, directResultType={DisplayLogValue(router.LastDirectCommandResultType)}, inFlight={dispatcher.IsCommandInFlight}, inFlightLog={DisplayLogValue(dispatcher.LastInFlightStateLog)}, uiBefore={beforeRollDirect}, uiAfter={afterRollDirect}. Direct result clears in-flight only; no snapshot mutation.", commandObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_tile_resolution", testPlayerId, 20, true, false, false, 1488, "property_01", false, 0, ""));
+        LogChunk10UiState("post-roll snapshot_result", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
+
+        turnController.ResolveTile();
+        Debug.Log($"[AgenticTestRunner] Chunk 10 resolve_tile clicked: requestType={DisplayLogValue(dispatcher.LastCommandRequestType)}, localRequestId={DisplayLogValue(dispatcher.LastCommandLocalRequestId)}, directResultType={DisplayLogValue(router.LastDirectCommandResultType)}, inFlight={dispatcher.IsCommandInFlight}, blocked={DisplayLogValue(turnController.LastResolveBlockedReason)}.", commandObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("auction_bidding", testPlayerId, 20, true, true, false, 1488, "auction_test", true, 240, "player-2"));
+        auction.SetBidInputTextForValidation("260");
+        LogChunk10UiState("post-resolve active-auction snapshot_result", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
+
+        auction.SubmitLocalBidRequest();
+        Debug.Log($"[AgenticTestRunner] Chunk 10 place_bid clicked during active auction: bidButton={auction.BidButtonInteractable}, blocked={DisplayLogValue(auction.LastBidBlockedReason)}, requestType={DisplayLogValue(dispatcher.LastCommandRequestType)}, localRequestId={DisplayLogValue(dispatcher.LastCommandLocalRequestId)}, directResultType={DisplayLogValue(router.LastDirectCommandResultType)}, inFlight={dispatcher.IsCommandInFlight}.", commandObject);
+
+        turnController.ExecuteTile();
+        Debug.Log($"[AgenticTestRunner] Chunk 10 execute_tile clicked: requestType={DisplayLogValue(dispatcher.LastCommandRequestType)}, localRequestId={DisplayLogValue(dispatcher.LastCommandLocalRequestId)}, directResultType={DisplayLogValue(router.LastDirectCommandResultType)}, inFlight={dispatcher.IsCommandInFlight}, blocked={DisplayLogValue(turnController.LastExecuteBlockedReason)}.", commandObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_end_turn", testPlayerId, 20, true, true, true, 1460, "auction_test", false, 0, testPlayerId));
+        LogChunk10UiState("post-execute no-auction snapshot_result", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
+
+        turnController.EndTurn();
+        Debug.Log($"[AgenticTestRunner] Chunk 10 end_turn clicked: requestType={DisplayLogValue(dispatcher.LastCommandRequestType)}, localRequestId={DisplayLogValue(dispatcher.LastCommandLocalRequestId)}, directResultType={DisplayLogValue(router.LastDirectCommandResultType)}, inFlight={dispatcher.IsCommandInFlight}, blocked={DisplayLogValue(turnController.LastEndTurnBlockedReason)}.", commandObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", "player-2", 21, false, false, false, 1460, "auction_test", false, 0, testPlayerId));
+        LogChunk10UiState("next-turn snapshot_result", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
+        Debug.Log($"[AgenticTestRunner] Chunk 10 final local-turn buttons disabled: roll={turnController.RollButtonInteractable}, resolve={turnController.ResolveButtonInteractable}, execute={turnController.ExecuteButtonInteractable}, end={turnController.EndTurnButtonInteractable}, rollBlocked={DisplayLogValue(turnController.LastRollBlockedReason)}.", commandObject);
+
         yield return null;
     }
 
@@ -632,6 +714,111 @@ public sealed class AgenticTestRunner : MonoBehaviour
         }
 
         return null;
+    }
+
+    private static void LogChunk10UiState(
+        string label,
+        UnityEngine.Object context,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        SnapshotHydrator hydrator,
+        MonoJoeyGameplayCommandDispatcher dispatcher,
+        MonoJoeyMockTransport mockTransport,
+        IReadOnlyList<BoardTileController> boardPath)
+    {
+        BoardTileController currentTile = FindBoardTile(boardPath, hud == null ? "" : hud.LastPlayerSnapshot.CurrentTileId);
+        Debug.Log($"[AgenticTestRunner] Chunk 10 {label}: hydrationSource={DisplayLogValue(hydrator.LastHydrationSourceMessageType)}, hudMoney={hud.LastPlayerSnapshot.Money}, hudTile={DisplayLogValue(hud.LastPlayerSnapshot.CurrentTileId)}, turn={turnController.LastSnapshot.TurnIndex}/{DisplayLogValue(turnController.LastSnapshot.Phase)}, flags=rolled:{turnController.LastSnapshot.HasRolledThisTurn},resolved:{turnController.LastSnapshot.HasResolvedTileThisTurn},executed:{turnController.LastSnapshot.HasExecutedTileThisTurn}, activeAuction={turnController.HasActiveAuctionFromHydration}, auctionId={DisplayLogValue(auction.AuctionId)}, highBid={auction.CurrentHighBid}, bidButton={auction.BidButtonInteractable}, buttons=roll:{turnController.RollButtonInteractable},resolve:{turnController.ResolveButtonInteractable},execute:{turnController.ExecuteButtonInteractable},end:{turnController.EndTurnButtonInteractable}, blocked=roll:{DisplayLogValue(turnController.LastRollBlockedReason)},resolve:{DisplayLogValue(turnController.LastResolveBlockedReason)},execute:{DisplayLogValue(turnController.LastExecuteBlockedReason)},end:{DisplayLogValue(turnController.LastEndTurnBlockedReason)},bid:{DisplayLogValue(auction.LastBidBlockedReason)}, tokenPlayer={DisplayLogValue(token.PlayerId)}, tokenTileIndex={token.CurrentTileIndex}, tokenPosition={token.transform.position}, tokenAnimatorFinal={DisplayLogValue(tokenAnimator.LastCompletedTileId)}, boardTileOwner={DisplayLogValue(currentTile == null ? "" : currentTile.OwnerPlayerId)}, boardTileHighlighted={(currentTile != null && currentTile.IsHighlighted)}, dispatcherInFlight={dispatcher.IsCommandInFlight}, dispatcherInFlightLog={DisplayLogValue(dispatcher.LastInFlightStateLog)}, requestCount={dispatcher.CommandRequestCount}, mockMutationRequests={mockTransport.GameplayMutationRequestCount}. Backend authoritative; no local gameplay state mutation.", context);
+    }
+
+    private static string Chunk10StateSignature(
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token)
+    {
+        return $"money={hud.LastPlayerSnapshot.Money},tile={DisplayLogValue(hud.LastPlayerSnapshot.CurrentTileId)},phase={DisplayLogValue(turnController.LastSnapshot.Phase)},flags={turnController.LastSnapshot.HasRolledThisTurn}/{turnController.LastSnapshot.HasResolvedTileThisTurn}/{turnController.LastSnapshot.HasExecutedTileThisTurn},auction={DisplayLogValue(auction.AuctionId)}/{auction.CurrentHighBid},token={token.CurrentTileIndex}";
+    }
+
+    private static string Chunk10SnapshotResultJson(
+        string phase,
+        string currentPlayerId,
+        int turnIndex,
+        bool rolled,
+        bool resolved,
+        bool executed,
+        int localMoney,
+        string localTileId,
+        bool activeAuction,
+        int auctionHighBid,
+        string auctionHighBidderId)
+    {
+        string auctionJson = activeAuction
+            ? $@",
+    ""activeAuction"": {{
+      ""propertyTileId"": ""auction_test"",
+      ""triggeringPlayerId"": ""player-agentic"",
+      ""status"": ""active"",
+      ""startingBid"": 100,
+      ""minimumBidIncrement"": 10,
+      ""initialPreBidSeconds"": 5,
+      ""bidResetSeconds"": 10,
+      ""highestBid"": {auctionHighBid},
+      ""highestBidderId"": ""{auctionHighBidderId}"",
+      ""countdownDurationSeconds"": 11,
+      ""timerEndsAtUtc"": ""2026-05-11T00:10:11Z"",
+      ""bids"": [
+        {{ ""bidderPlayerId"": ""player-agentic"", ""amount"": 220, ""placedAtUtc"": ""2026-05-11T00:10:01Z"" }},
+        {{ ""bidderPlayerId"": ""player-2"", ""amount"": {auctionHighBid}, ""placedAtUtc"": ""2026-05-11T00:10:02Z"" }}
+      ]
+    }}"
+            : @",
+    ""activeAuction"": null";
+
+        return $@"{{
+  ""type"": ""snapshot_result"",
+  ""payload"": {{
+    ""snapshotVersion"": 10,
+    ""sessionId"": ""session_chunk_10"",
+    ""status"": ""in_game"",
+    ""gameStatus"": ""in_progress"",
+    ""serverNowUtc"": ""2026-05-11T00:10:00Z"",
+    ""matchId"": ""session_chunk_10"",
+    ""phase"": ""{phase}"",
+    ""turn"": {{ ""currentPlayerId"": ""{currentPlayerId}"", ""turnIndex"": {turnIndex}, ""hasRolledThisTurn"": {JsonBool(rolled)}, ""hasResolvedTileThisTurn"": {JsonBool(resolved)}, ""hasExecutedTileThisTurn"": {JsonBool(executed)} }},
+    ""players"": [
+      {{ ""playerId"": ""player-agentic"", ""username"": ""Agentic Player"", ""tokenId"": ""token_agentic"", ""colorId"": ""gold"", ""money"": {localMoney}, ""currentTileId"": ""{localTileId}"", ""ownedPropertyIds"": [], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": {{ ""totalBorrowed"": 120, ""currentInterestRatePercent"": 10, ""nextTurnInterestDue"": 12, ""loanTier"": 1 }}, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }},
+      {{ ""playerId"": ""player-2"", ""username"": ""Blue Player"", ""tokenId"": ""token_blue"", ""colorId"": ""blue"", ""money"": 1580, ""currentTileId"": ""property_01"", ""ownedPropertyIds"": [""property_01""], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": {{ ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 }}, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }}
+    ],
+    ""board"": {{
+      ""boardId"": ""chunk_10_board"",
+      ""version"": 10,
+      ""displayName"": ""Chunk 10 Board"",
+      ""tiles"": [
+        {{ ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null }},
+        {{ ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" }},
+        {{ ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-agentic"" }},
+        {{ ""tileId"": ""auction_test"", ""index"": 3, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""ownerPlayerId"": {OwnerJson(auctionHighBidderId)} }}
+      ]
+    }}{auctionJson},
+    ""movement"": {{ ""playerId"": ""player-agentic"", ""fromTileId"": ""start"", ""toTileId"": ""{localTileId}"", ""pathTileIds"": [""{localTileId}""], ""stepCount"": 1, ""movementKind"": ""snap"", ""passedStart"": false }},
+    ""moneyDeltas"": [],
+    ""propertyOwnershipChanges"": [],
+    ""playerEliminations"": []
+  }}
+}}";
+    }
+
+    private static string JsonBool(bool value)
+    {
+        return value ? "true" : "false";
+    }
+
+    private static string OwnerJson(string ownerPlayerId)
+    {
+        return string.IsNullOrWhiteSpace(ownerPlayerId) ? "null" : $"\"{ownerPlayerId}\"";
     }
 
     private static string Chunk5SnapshotJson(bool activeAuction)
