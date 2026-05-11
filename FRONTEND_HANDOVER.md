@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-12 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-13 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states.
+The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states. Chunk 13 adds a disabled-by-default live gameplay smoke harness that uses the existing WebSocket transport, backend router, snapshot hydrator, and gameplay dispatcher for one bounded backend-authoritative pass.
 
 ## Workflow Rule
 
@@ -167,11 +167,12 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - read-only backend transport routing and mock recovery,
   - live backend binding/reconnect validation in mock mode,
   - session join panel field validation, button gating, reconnect, disconnect, and snapshot recovery,
+  - optional live gameplay smoke validation through the real backend transport/dispatcher,
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
   - one to two local mock turn flows.
-- Expected backend behavior: none. Runtime validation should remain read-only and local.
+- Expected backend behavior by default: none. Runtime validation should remain read-only and local unless an optional live smoke flag plus URL/session/player values are explicitly set at runtime.
 
 ### Chunk 4 Runtime Notes
 
@@ -294,6 +295,22 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Direct Roslyn compile using the Unity 6000.4.6f1 generated project references passed for all `Assets/Scripts/*.cs`, with serialized-field assignment warnings only.
   - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
+
+### Chunk 13 Runtime Notes
+
+- `AgenticTestRunner` now has an optional `Chunk 13 Optional Live Gameplay Smoke` path, disabled by default.
+- Required runtime fields are `chunk13LiveWebSocketUrl`, `chunk13LiveSessionId`, and `chunk13LivePlayerId`. If the flag is enabled without all three values, the runner logs `validation_failure` and sends nothing.
+- The harness creates runtime-only `MonoJoeyWebSocketTransport`, `MonoJoeyBackendMessageRouter`, `MonoJoeySessionClient`, `MonoJoeyGameplayCommandDispatcher`, and status components. It does not add a backend protocol path, local simulation path, scene object, prefab change, or `ProjectSettings` change.
+- Before connecting, the shared `SnapshotHydrator`, turn UI, and auction UI are reconfigured to the requested live player id. Button gating therefore validates the real player supplied for the smoke run.
+- Live flow: connect to `/ws`, wait for `reconnect_result` hydration and `BoundLive`, validate selected player and current-turn gating, send one `roll_dice`, require direct `roll_result`, then require a later authoritative `snapshot_result` hydration before any next command. The same direct-result plus snapshot rule is used for `resolve_tile`, `execute_tile`, optional `place_bid`, and `end_turn`.
+- If an active auction is hydrated after `execute_tile`, the default behavior is to validate auction UI state and stop without bidding. `chunk13AllowAuctionBid` defaults false; when true, `chunk13AuctionBidAmount` must be positive before a bid is sent.
+- Stop conditions are immediate: disconnect, transport error, backend `error`, direct-result mismatch, timeout, missing player, failed hydration, unbound state, command gate failure, or desync suspicion such as direct-response-only gameplay mutation or no authoritative snapshot after a command.
+- Logs use labels including `transport_success`, `direct_command_success`, `hydration_success`, `validation_failure`, `timeout`, and `backend_error`, with UTC timestamp, command, direct response/error, hydration type/time, snapshot version, selected player money/tile, turn flags, auction state, token state, sequence counters, elapsed time, and a final summary.
+- Validation results for this handoff:
+  - `git diff --check` passed with line-ending warnings only.
+  - Direct Roslyn compile using the Unity 6000.4.6f1 generated project references passed for `Assets/Scripts/*.cs`; the local Unity source generators emitted analyzer-load warnings, but no project code errors.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Live backend execution was not run because no real backend session/player values were provided in this coding session.
 
 ## Optional Visual Polish
 

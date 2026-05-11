@@ -5,17 +5,31 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 12 - Gameplay Command Feedback UX
-- Completion status: Unity now shows player-facing command feedback for gameplay intents, in-flight sends, direct results, backend errors, disabled reasons, bid feedback, and waiting-for-authoritative-snapshot state without local gameplay authority.
-- Branch: `main` tracking `origin/main`; implementation committed in `80f1fac`, docs committed in the latest handover commit.
-- Previous commit: `7d62c52`
-- Last commit before this chunk: `7d62c52`
+- Chunk: 13 - Live Gameplay Smoke-Test Harness
+- Completion status: Unity now has a disabled-by-default live gameplay smoke harness that validates one bounded backend-authoritative pass through the existing live transport, router, snapshot hydrator, UI gating, and gameplay dispatcher.
+- Branch: `main` tracking `origin/main`; implementation committed in `2a04ca2`, docs committed in the latest handover commit.
+- Previous commit: `80f1fac`
+- Last commit before this chunk: `80f1fac`
 - Last commit after this chunk: latest handover commit
 - Date/time: 2026-05-11
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 13 Addendum
+
+- `AgenticTestRunner` now includes `Chunk 13 Optional Live Gameplay Smoke`, disabled by default.
+- Required runtime fields are `chunk13LiveWebSocketUrl`, `chunk13LiveSessionId`, and `chunk13LivePlayerId`; if any are missing while enabled, the harness logs `validation_failure` and sends no transport request or gameplay command.
+- The live harness uses only the existing authority path: `MonoJoeySessionClientMode.LiveBackend`, `MonoJoeyWebSocketTransport`, `MonoJoeyBackendMessageRouter`, shared `SnapshotHydrator`, and `MonoJoeyGameplayCommandDispatcher`.
+- Before connecting, the shared hydrator plus turn and auction UI command references are reconfigured to the live smoke player id, so command gating validates the requested real player.
+- Flow: connect, wait for `reconnect_result` hydration to `BoundLive`, require selected-player hydration, send exactly one `roll_dice`, wait for direct `roll_result`, then wait for authoritative `snapshot_result` hydration before `resolve_tile`. The same direct-plus-hydration rule is used for `resolve_tile`, `execute_tile`, optional `place_bid`, and `end_turn`.
+- After `execute_tile`, active auctions are observation-only by default. `chunk13AllowAuctionBid` defaults false; when true, `chunk13AuctionBidAmount` must be positive before `place_bid` is sent.
+- Stop conditions: disconnect, transport error, backend `error`, timeout, direct-result mismatch, failed hydration, missing player, unbound state, UI/dispatcher gate failure, or desync suspicion such as direct-result-only gameplay mutation or no authoritative snapshot after a command.
+- Logging labels include `transport_success`, `direct_command_success`, `hydration_success`, `validation_failure`, `timeout`, and `backend_error`; each state log includes UTC timestamp, sent command, direct result/error, hydration type/time, snapshot version, selected player money/tile, turn flags, auction state, token state, sequence counters, elapsed timing, and final summary.
+- Authority rule remains unchanged: Unity does not roll dice locally, move tokens from direct command responses, mutate HUD money, mutate ownership, advance turns, or update auction state from direct command success. Snapshot hydration is the accepted source after each command.
+- Required backend state for a successful live run: existing session is `in_game`, supplied player can reconnect through `reconnect_session`, and that player is the current turn player at the start. Otherwise the harness stops with command gating or hydration validation failure.
+- Validation: `git diff --check` passed with line-ending warnings only. Direct Roslyn compile using Unity 6000.4.6f1 generated references passed for `Assets/Scripts/*.cs` with Unity source-generator analyzer-load warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Live backend execution was not run because no real backend session/player values were provided.
 
 ## Frontend Chunk 12 Addendum
 
@@ -103,13 +117,7 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `client-unity/MonoJoey_UnityFrontend/Assets/Prefabs/TurnUIPrefab.prefab`
 - `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/AgenticTestRunner.cs`
-- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/AuctionPanelController.cs`
-- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyConnectionStatusController.cs`
-- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyGameplayCommandDispatcher.cs`
-- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyMockTransport.cs`
-- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/TurnController.cs`
 - `FRONTEND_HANDOVER.md`
 - `docs/SESSION_HANDOVER.md`
 
