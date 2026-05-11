@@ -34,6 +34,12 @@ public sealed class AgenticTestRunner : MonoBehaviour
     [SerializeField] private GameObject auctionPanelPrefab;
     [SerializeField] private bool instantiateAuctionPanel = true;
 
+    [Header("Chunk 8 Optional Live Backend Smoke")]
+    [SerializeField] private bool runChunk8LiveBackendSmoke;
+    [SerializeField] private string chunk8LiveWebSocketUrl = "ws://127.0.0.1:5000/ws";
+    [SerializeField] private string chunk8LiveSessionId = "";
+    [SerializeField] private string chunk8LivePlayerId = "";
+
 #if UNITY_EDITOR
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void BootstrapForSampleScene()
@@ -295,13 +301,14 @@ public sealed class AgenticTestRunner : MonoBehaviour
         BoardTileController auctionTile = FindBoardTile(boardPath, "auction_test");
         Debug.Log($"[AgenticTestRunner] {UtcNowStamp()} Chunk 6 mock session update hydrated={liveHydrated}: hudMoneyLoan {beforeLiveMoneyLoan}->{hud.LastPlayerSnapshot.Money}/{hud.LastPlayerSnapshot.LoanTotalBorrowed}, turnPhase {beforeLivePhase}->{turnController.LastSnapshot.Phase}, hasRolled={turnController.LastSnapshot.HasRolledThisTurn}, hasResolved={turnController.LastSnapshot.HasResolvedTileThisTurn}, token {beforeLiveToken}->{hydrator.LastHydratedTileId}/{token.CurrentTileIndex}/{token.transform.position}, auction {beforeLiveAuction}->{auction.HighBidderPlayerId}/{auction.CurrentHighBid}, auctionTileOwner={auctionTile?.OwnerPlayerId}, auctionTileHighlighted={(auctionTile != null && auctionTile.IsHighlighted)}. Read-only mock live session update; no backend mutation.", hydratorObject);
 
-        yield return RunChunk7ReadOnlyTransportValidation(hydrator);
+        yield return RunChunk8ReadOnlyTransportValidation(hydrator);
+        yield return RunOptionalChunk8LiveBackendSmoke(hydrator);
     }
 
-    private IEnumerator RunChunk7ReadOnlyTransportValidation(SnapshotHydrator hydrator)
+    private IEnumerator RunChunk8ReadOnlyTransportValidation(SnapshotHydrator hydrator)
     {
-        GameObject chunk7Object = new GameObject(
-            "MonoJoeyBackendTransport_Chunk7Runtime",
+        GameObject missingIdentityObject = new GameObject(
+            "MonoJoeyBackendTransport_Chunk8MissingIdentityRuntime",
             typeof(MonoJoeyMockTransport),
             typeof(MonoJoeyBackendMessageRouter),
             typeof(MonoJoeySessionClient),
@@ -310,41 +317,159 @@ public sealed class AgenticTestRunner : MonoBehaviour
             hideFlags = HideFlags.DontSave
         };
 
-        MonoJoeyMockTransport mockTransport = chunk7Object.GetComponent<MonoJoeyMockTransport>();
-        MonoJoeyBackendMessageRouter router = chunk7Object.GetComponent<MonoJoeyBackendMessageRouter>();
-        MonoJoeySessionClient session = chunk7Object.GetComponent<MonoJoeySessionClient>();
-        MonoJoeyConnectionStatusController status = chunk7Object.GetComponent<MonoJoeyConnectionStatusController>();
+        MonoJoeyMockTransport missingIdentityTransport = missingIdentityObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter missingIdentityRouter = missingIdentityObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient missingIdentitySession = missingIdentityObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyConnectionStatusController missingIdentityStatus = missingIdentityObject.GetComponent<MonoJoeyConnectionStatusController>();
+        missingIdentitySession.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "",
+            "",
+            hydrator,
+            missingIdentityRouter,
+            true,
+            false,
+            false);
+        missingIdentityStatus.Configure(missingIdentitySession, missingIdentityRouter);
+        missingIdentitySession.Connect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 missing session/player connect: state={missingIdentitySession.State}, bound={missingIdentitySession.IsBoundToIdentity}, sentRequests={missingIdentityTransport.SentRequestTypes.Count}. Expected connected unbound with no request.", missingIdentityObject);
+        missingIdentitySession.RequestSnapshot();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 missing identity get_snapshot skipped: sentRequests={missingIdentityTransport.SentRequestTypes.Count}, lastRequest={DisplayLogValue(missingIdentitySession.LastSentRequestType)}. Read-only backend transport; no gameplay mutation request.", missingIdentityObject);
+        missingIdentitySession.Disconnect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 missing identity disconnect: state={missingIdentitySession.State}.", missingIdentityObject);
+
+        GameObject chunk8Object = new GameObject(
+            "MonoJoeyBackendTransport_Chunk8Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = chunk8Object.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = chunk8Object.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = chunk8Object.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyConnectionStatusController status = chunk8Object.GetComponent<MonoJoeyConnectionStatusController>();
         session.Configure(
             MonoJoeySessionClientMode.MockValidation,
             "",
-            "session_chunk_7",
+            "session_chunk_8",
             testPlayerId,
             hydrator,
             router,
             true,
+            false,
             false);
         status.Configure(session, router);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 mode switching default: mode={session.Mode}, experimentalMutations={session.EnableExperimentalMutationRequests}, fallback={session.AllowMockFallbackOnLiveFailure}. Mock validation remains default.", chunk8Object);
 
         session.Connect();
-        Debug.Log($"[AgenticTestRunner] Chunk 7 mock transport connected: state={session.State}, lastRequest={session.LastSentRequestType}, reconnectHydrated={router.ReconnectResultCount}, hydratorSource={hydrator.LastHydrationSourceMessageType}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 mock transport connected/reconnect hydrated: state={session.State}, bound={session.IsBoundToIdentity}, reconnectHydrated={router.ReconnectResultCount}, reconnects={session.ReconnectAttemptCount}, advisorySequence={router.AdvisoryLastEventSequence}, hydratorSource={hydrator.LastHydrationSourceMessageType}. Read-only backend transport; no gameplay mutation request.", chunk8Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 reconnect observability: snapshotVersion={hydrator.LastHydratedSnapshotVersion}, session={DisplayLogValue(hydrator.LastHydratedSessionId)}, serverNowUtc={DisplayLogValue(hydrator.LastHydratedServerNowUtc)}, player={DisplayLogValue(hydrator.LastHydratedPlayerId)}, tile={DisplayLogValue(hydrator.LastHydratedTileId)}, phase={DisplayLogValue(hydrator.LastHydratedPhase)}, turn={hydrator.LastHydratedTurnIndex}.", chunk8Object);
 
         session.RequestSnapshot();
-        Debug.Log($"[AgenticTestRunner] Chunk 7 snapshot_result hydrated through SnapshotHydrator: snapshotHydrated={router.SnapshotResultCount}, hydratorSource={hydrator.LastHydrationSourceMessageType}, player={hydrator.LastHydratedPlayerId}, tile={hydrator.LastHydratedTileId}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 manual snapshot_result hydrated after reconnect: snapshotHydrated={router.SnapshotResultCount}, hydratorSource={hydrator.LastHydrationSourceMessageType}, player={hydrator.LastHydratedPlayerId}, tile={hydrator.LastHydratedTileId}, phase={hydrator.LastHydratedPhase}. Read-only backend transport; no gameplay mutation request.", chunk8Object);
 
         mockTransport.EmitCannedError();
-        Debug.Log($"[AgenticTestRunner] Chunk 7 backend error envelope logged: errors={router.ErrorEnvelopeCount}, code={DisplayLogValue(router.LastErrorCode)}, message={DisplayLogValue(router.LastErrorMessage)}. Read-only backend transport; no local gameplay compensation.", chunk7Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 backend error envelope logged: errors={router.ErrorEnvelopeCount}, code={DisplayLogValue(router.LastErrorCode)}, message={DisplayLogValue(router.LastErrorMessage)}. Read-only backend transport; no local gameplay compensation.", chunk8Object);
 
-        mockTransport.EmitIgnoredBroadcast(8);
+        mockTransport.EmitIgnoredBroadcast(9);
         mockTransport.EmitIgnoredBroadcast(7);
         mockTransport.EmitUnknownMessage();
         yield return new WaitForSeconds(0.75f);
 
         status.Refresh();
-        Debug.Log($"[AgenticTestRunner] Chunk 7 sequenced broadcast ignored/read-only refresh: broadcasts={router.SequencedBroadcastCount}, stale={router.StaleSequenceCount}, outOfOrder={router.OutOfOrderSequenceCount}, snapshotRequests={session.ReadOnlyRequestCount}, lastSequence={router.LastSequence}. No incremental gameplay application.", chunk7Object);
-        Debug.Log($"[AgenticTestRunner] Chunk 7 connection status updated: {status.LastRenderedStatus}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 stale/out-of-order sequenced broadcasts ignored/read-only refresh: broadcasts={router.SequencedBroadcastCount}, stale={router.StaleSequenceCount}, outOfOrder={router.OutOfOrderSequenceCount}, snapshotRequests={session.ReadOnlyRequestCount}, lastSequence={router.LastSequence}. No incremental gameplay application.", chunk8Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 connection status updated: {status.LastRenderedStatus}. Read-only backend transport; no gameplay mutation request.", chunk8Object);
+
+        session.ExperimentalDebugRollDice();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 experimental mutation default guard: enabled={session.EnableExperimentalMutationRequests}, experimentalRequests={session.ExperimentalMutationRequestCount}, mockMutationRequests={mockTransport.GameplayMutationRequestCount}. Expected zero mutation requests.", chunk8Object);
+
+        session.Disconnect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 disconnect transition: state={session.State}, bound={session.IsBoundToIdentity}.", chunk8Object);
+        session.Connect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 reconnect transition: state={session.State}, bound={session.IsBoundToIdentity}, reconnects={session.ReconnectAttemptCount}, reconnectHydrated={router.ReconnectResultCount}.", chunk8Object);
         Debug.Log(mockTransport.GameplayMutationRequestCount == 0
-            ? $"[AgenticTestRunner] Chunk 7 no gameplay mutation request sent. Sent read-only types={string.Join(", ", mockTransport.SentRequestTypes)}."
-            : $"[AgenticTestRunner] Chunk 7 validation failed: gameplay mutation requests sent={mockTransport.GameplayMutationRequestCount}.", chunk7Object);
+            ? $"[AgenticTestRunner] Chunk 8 no gameplay mutation request sent. Sent read-only types={string.Join(", ", mockTransport.SentRequestTypes)}."
+            : $"[AgenticTestRunner] Chunk 8 validation failed: gameplay mutation requests sent={mockTransport.GameplayMutationRequestCount}.", chunk8Object);
+    }
+
+    private IEnumerator RunOptionalChunk8LiveBackendSmoke(SnapshotHydrator hydrator)
+    {
+        if (!runChunk8LiveBackendSmoke)
+        {
+            yield break;
+        }
+
+        if (string.IsNullOrWhiteSpace(chunk8LiveWebSocketUrl)
+            || string.IsNullOrWhiteSpace(chunk8LiveSessionId)
+            || string.IsNullOrWhiteSpace(chunk8LivePlayerId))
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 8 live backend smoke skipped because URL/sessionId/playerId were not all provided at runtime.");
+            yield break;
+        }
+
+        GameObject liveObject = new GameObject(
+            "MonoJoeyBackendTransport_Chunk8OptionalLiveRuntime",
+            typeof(MonoJoeyWebSocketTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyBackendMessageRouter router = liveObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = liveObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyConnectionStatusController status = liveObject.GetComponent<MonoJoeyConnectionStatusController>();
+        session.Configure(
+            MonoJoeySessionClientMode.LiveBackend,
+            chunk8LiveWebSocketUrl,
+            chunk8LiveSessionId,
+            chunk8LivePlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            false);
+        status.Configure(session, router);
+
+        session.Connect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke connected/reconnecting: state={session.State}, lastRequest={DisplayLogValue(session.LastSentRequestType)}.");
+        yield return WaitForChunk8State(session, MonoJoeyTransportConnectionState.BoundLive, 5f);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke reconnect_result hydrated: state={session.State}, bound={session.IsBoundToIdentity}, message={DisplayLogValue(router.LastMessageType)}, status={status.LastRenderedStatus}.");
+
+        session.RequestSnapshot();
+        yield return WaitForChunk8Snapshot(router, 5f);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke snapshot_result hydrated: snapshots={router.SnapshotResultCount}, player={DisplayLogValue(hydrator.LastHydratedPlayerId)}, tile={DisplayLogValue(hydrator.LastHydratedTileId)}.");
+
+        session.Disconnect();
+        Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke disconnect: state={session.State}.");
+        session.Connect();
+        yield return WaitForChunk8State(session, MonoJoeyTransportConnectionState.BoundLive, 5f);
+        Debug.Log($"[AgenticTestRunner] Chunk 8 optional live smoke reconnect back to BoundLive: state={session.State}, reconnects={session.ReconnectAttemptCount}.");
+    }
+
+    private static IEnumerator WaitForChunk8State(MonoJoeySessionClient session, MonoJoeyTransportConnectionState state, float timeoutSeconds)
+    {
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (session != null && session.State != state && Time.realtimeSinceStartup < deadline)
+        {
+            yield return null;
+        }
+    }
+
+    private static IEnumerator WaitForChunk8Snapshot(MonoJoeyBackendMessageRouter router, float timeoutSeconds)
+    {
+        int initialCount = router == null ? 0 : router.SnapshotResultCount;
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (router != null && router.SnapshotResultCount <= initialCount && Time.realtimeSinceStartup < deadline)
+        {
+            yield return null;
+        }
     }
 
     private static void SubscribeToChunk6HydratorHooks(SnapshotHydrator hydrator, UnityEngine.Object logContext)

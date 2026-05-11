@@ -48,6 +48,11 @@ public sealed class SnapshotHydrator : MonoBehaviour
     [SerializeField] private bool logHydration = true;
 
     public MonoJoeySnapshot LastSnapshot { get; private set; }
+    public int LastHydratedSnapshotVersion { get; private set; }
+    public string LastHydratedSessionId { get; private set; } = "";
+    public string LastHydratedServerNowUtc { get; private set; } = "";
+    public string LastHydratedPhase { get; private set; } = "";
+    public int LastHydratedTurnIndex { get; private set; } = -1;
     public string LastHydratedPlayerId { get; private set; } = "";
     public string LastHydratedTileId { get; private set; } = "";
     public bool LastHydrationSucceeded { get; private set; }
@@ -118,6 +123,11 @@ public sealed class SnapshotHydrator : MonoBehaviour
         }
 
         LastSnapshot = snapshot;
+        LastHydratedSnapshotVersion = snapshot.snapshotVersion;
+        LastHydratedSessionId = snapshot.sessionId ?? "";
+        LastHydratedServerNowUtc = snapshot.serverNowUtc ?? "";
+        LastHydratedPhase = snapshot.phase ?? "";
+        LastHydratedTurnIndex = snapshot.turn == null ? -1 : snapshot.turn.turnIndex;
         Emit(HydrationStarted, "hydration-started", "", "", true, "Snapshot hydration started.");
         LastMovement = snapshot.movement;
         LastMoneyDeltas = snapshot.moneyDeltas ?? Array.Empty<MonoJoeyMoneyDeltaPayload>();
@@ -126,6 +136,11 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
         MonoJoeyTurnSnapshot turn = snapshot.turn ?? new MonoJoeyTurnSnapshot();
         MonoJoeyPlayerSnapshot player = SelectPlayer(snapshot.players);
+        if (tokenAnimator != null)
+        {
+            tokenAnimator.StopMovement(false);
+        }
+
         if (player == null)
         {
             BindAuction(snapshot.activeAuction);
@@ -301,11 +316,6 @@ public sealed class SnapshotHydrator : MonoBehaviour
         if (playerTokenController == null || player == null)
         {
             return;
-        }
-
-        if (tokenAnimator != null)
-        {
-            tokenAnimator.StopMovement(false);
         }
 
         playerTokenController.SetPlayer(player.playerId, ColorForPlayer(player));
@@ -488,6 +498,11 @@ public sealed class SnapshotHydrator : MonoBehaviour
     private void ClearFreshSnapshotState()
     {
         LastSnapshot = null;
+        LastHydratedSnapshotVersion = 0;
+        LastHydratedSessionId = "";
+        LastHydratedServerNowUtc = "";
+        LastHydratedPhase = "";
+        LastHydratedTurnIndex = -1;
         LastHydratedPlayerId = "";
         LastHydratedTileId = "";
         LastHydrationSucceeded = false;

@@ -46,7 +46,9 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
     public int SequencedBroadcastCount { get; private set; }
     public int StaleSequenceCount { get; private set; }
     public int OutOfOrderSequenceCount { get; private set; }
+    public DateTime LastMessageReceivedUtc { get; private set; } = DateTime.MinValue;
     public DateTime LastSnapshotHydratedUtc { get; private set; } = DateTime.MinValue;
+    public SnapshotHydrator Hydrator => snapshotHydrator;
 
     public void Configure(SnapshotHydrator hydrator, MonoJoeySessionClient client, bool requestSnapshotAfterBroadcast)
     {
@@ -76,11 +78,16 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
         }
 
         LastMessageType = envelope == null ? "" : envelope.type ?? "";
+        LastMessageReceivedUtc = DateTime.UtcNow;
         if (LastMessageType == "snapshot_result")
         {
             SnapshotResultCount++;
             bool hydrated = snapshotHydrator != null && snapshotHydrator.HydrateSnapshotResultJson(json);
-            LastSnapshotHydratedUtc = DateTime.UtcNow;
+            if (hydrated)
+            {
+                LastSnapshotHydratedUtc = DateTime.UtcNow;
+            }
+
             Debug.Log($"[MonoJoeyBackendMessageRouter] snapshot_result routed to SnapshotHydrator hydrated={hydrated}. Read-only transport; no backend mutation.", this);
             return;
         }
@@ -92,9 +99,17 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
             AdvisoryLastEventSequence = reconnect == null || reconnect.payload == null ? 0 : reconnect.payload.lastEventSequence;
             LastSequence = Math.Max(LastSequence, AdvisoryLastEventSequence);
             bool hydrated = snapshotHydrator != null && snapshotHydrator.HydrateReconnectResultJson(json);
-            LastSnapshotHydratedUtc = DateTime.UtcNow;
+            if (hydrated)
+            {
+                LastSnapshotHydratedUtc = DateTime.UtcNow;
+                sessionClient?.MarkBoundAfterHydration();
+            }
+            else
+            {
+                sessionClient?.ReportReconnectHydrationFailure("reconnect_result hydration failed; socket remains unbound.");
+            }
+
             Debug.Log($"[MonoJoeyBackendMessageRouter] reconnect_result routed to SnapshotHydrator hydrated={hydrated}, advisoryLastEventSequence={AdvisoryLastEventSequence}. Read-only transport; no backend mutation.", this);
-            sessionClient?.MarkBoundAfterHydration();
             return;
         }
 

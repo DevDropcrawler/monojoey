@@ -42,7 +42,7 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
         _ = webSocketUrl;
         IsConnected = true;
         State = MonoJoeyTransportConnectionState.ConnectedUnbound;
-        Debug.Log("[MonoJoeyMockTransport] Chunk 7 mock transport connected. Mock/read-only; no backend mutation.", this);
+        Debug.Log("[MonoJoeyMockTransport] Chunk 8 mock transport connected. Mock/read-only; no backend mutation.", this);
         Connected?.Invoke();
     }
 
@@ -96,7 +96,7 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
 
     public void EmitIgnoredBroadcast(long sequence)
     {
-        EmitServerMessage($@"{{""type"":""dice_rolled"",""sequence"":{sequence},""sessionId"":""session_chunk_7"",""matchId"":""session_chunk_7"",""createdAtUtc"":""2026-05-11T00:02:00Z"",""payload"":{{""playerId"":""player-agentic"",""roll"":7}}}}");
+        EmitServerMessage($@"{{""type"":""dice_rolled"",""sequence"":{sequence},""sessionId"":""session_chunk_8"",""matchId"":""session_chunk_8"",""createdAtUtc"":""2026-05-11T00:02:00Z"",""payload"":{{""playerId"":""player-agentic"",""roll"":7}}}}");
     }
 
     public void EmitUnknownMessage()
@@ -146,16 +146,16 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
         return @"{
   ""type"": ""reconnect_result"",
   ""payload"": {
-    ""sessionId"": ""session_chunk_7"",
+    ""sessionId"": ""session_chunk_8"",
     ""playerId"": ""player-agentic"",
     ""lastEventSequence"": 7,
     ""snapshot"": {
       ""snapshotVersion"": 1,
-      ""sessionId"": ""session_chunk_7"",
+      ""sessionId"": ""session_chunk_8"",
       ""status"": ""in_game"",
       ""gameStatus"": ""in_progress"",
       ""serverNowUtc"": ""2026-05-11T00:02:00Z"",
-      ""matchId"": ""session_chunk_7"",
+      ""matchId"": ""session_chunk_8"",
       ""phase"": ""awaiting_roll"",
       ""turn"": { ""currentPlayerId"": ""player-agentic"", ""turnIndex"": 12, ""hasRolledThisTurn"": false, ""hasResolvedTileThisTurn"": false, ""hasExecutedTileThisTurn"": false },
       ""players"": [
@@ -163,9 +163,9 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
         { ""playerId"": ""player-2"", ""username"": ""Blue Player"", ""tokenId"": ""token_blue"", ""colorId"": ""blue"", ""money"": 1580, ""currentTileId"": ""property_01"", ""ownedPropertyIds"": [], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 }, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }
       ],
       ""board"": {
-        ""boardId"": ""chunk_7_board"",
+        ""boardId"": ""chunk_8_board"",
         ""version"": 1,
-        ""displayName"": ""Chunk 7 Board"",
+        ""displayName"": ""Chunk 8 Board"",
         ""tiles"": [
           { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null },
           { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" },
@@ -185,11 +185,11 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
   ""type"": ""snapshot_result"",
   ""payload"": {
     ""snapshotVersion"": 1,
-    ""sessionId"": ""session_chunk_7"",
+    ""sessionId"": ""session_chunk_8"",
     ""status"": ""in_game"",
     ""gameStatus"": ""in_progress"",
     ""serverNowUtc"": ""2026-05-11T00:02:10Z"",
-    ""matchId"": ""session_chunk_7"",
+    ""matchId"": ""session_chunk_8"",
     ""phase"": ""auction_bidding"",
     ""turn"": { ""currentPlayerId"": ""player-agentic"", ""turnIndex"": 12, ""hasRolledThisTurn"": true, ""hasResolvedTileThisTurn"": true, ""hasExecutedTileThisTurn"": false },
     ""players"": [
@@ -197,9 +197,9 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
       { ""playerId"": ""player-2"", ""username"": ""Blue Player"", ""tokenId"": ""token_blue"", ""colorId"": ""blue"", ""money"": 1580, ""currentTileId"": ""property_01"", ""ownedPropertyIds"": [""property_01""], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 }, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }
     ],
     ""board"": {
-      ""boardId"": ""chunk_7_board"",
+      ""boardId"": ""chunk_8_board"",
       ""version"": 2,
-      ""displayName"": ""Chunk 7 Board"",
+      ""displayName"": ""Chunk 8 Board"",
       ""tiles"": [
         { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null },
         { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" },

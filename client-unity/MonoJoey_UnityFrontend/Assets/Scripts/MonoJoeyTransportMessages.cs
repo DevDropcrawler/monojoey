@@ -69,3 +69,25 @@ public sealed class MonoJoeySessionPlayerPayload
     public string sessionId;
     public string playerId;
 }
+
+[Serializable]
+public sealed class MonoJoeyExperimentalDebugSessionPlayerRequestEnvelope
+{
+    public string type;
+    public MonoJoeySessionPlayerPayload payload;
+}
+
+[Serializable]
+public sealed class MonoJoeyExperimentalDebugPlaceBidRequestEnvelope
+{
+    public string type;
+    public MonoJoeyExperimentalDebugPlaceBidPayload payload;
+}
+
+[Serializable]
+public sealed class MonoJoeyExperimentalDebugPlaceBidPayload
+{
+    public string sessionId;
+    public string playerId;
+    public int amount;
+}

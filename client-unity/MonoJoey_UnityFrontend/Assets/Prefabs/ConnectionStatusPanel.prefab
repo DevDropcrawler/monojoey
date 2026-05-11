@@ -125,6 +125,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::MonoJoeyConnectionStatusController
   sessionClient: {fileID: 0}
   messageRouter: {fileID: 0}
+  snapshotHydrator: {fileID: 0}
+  createRuntimeControls: 1
   modeText: {fileID: 3000003}
   stateText: {fileID: 4000003}
   sessionText: {fileID: 5000003}
