@@ -326,6 +326,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk12GameplayCommandFeedbackValidation(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
         yield return RunChunk14LiveSessionEntryValidation(hydrator);
+        yield return RunChunk15LiveSmokeExecutionHelperValidation(hydrator);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk13LiveGameplaySmoke(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
@@ -845,6 +846,173 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.Log(onlySessionEntryRequests && mockTransport.GameplayMutationRequestCount == 0 && session.GameplayCommandRequestCount == 0
             ? $"[AgenticTestRunner] Chunk 14 session UI sent only reconnect_session/get_snapshot: sentTypes={string.Join(", ", mockTransport.SentRequestTypes)}, gameplayMutations={mockTransport.GameplayMutationRequestCount}, gameplayCommands={session.GameplayCommandRequestCount}."
             : $"[AgenticTestRunner] Chunk 14 validation failed: sentTypes={string.Join(", ", mockTransport.SentRequestTypes)}, gameplayMutations={mockTransport.GameplayMutationRequestCount}, gameplayCommands={session.GameplayCommandRequestCount}.", panelObject);
+    }
+
+    private IEnumerator RunChunk15LiveSmokeExecutionHelperValidation(SnapshotHydrator hydrator)
+    {
+        GameObject mockPanelObject;
+        GameObject mockSessionObject;
+        LiveSmokeExecutionHelper mockHelper;
+        MonoJoeyMockTransport mockTransport;
+        MonoJoeySessionClient mockSession;
+        MonoJoeyBackendMessageRouter mockRouter;
+        MonoJoeyGameplayCommandDispatcher mockDispatcher;
+        if (!CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15MockMode",
+            MonoJoeySessionClientMode.MockValidation,
+            false,
+            out mockPanelObject,
+            out mockSessionObject,
+            out mockHelper,
+            out mockTransport,
+            out mockSession,
+            out mockRouter,
+            out mockDispatcher))
+        {
+            yield break;
+        }
+
+        bool mockStart = mockHelper.TryStartSmokeOnce();
+        Debug.Log($"[AgenticTestRunner] Chunk 15 normal MockValidation helper runnable={mockStart}, result={DisplayLogValue(mockHelper.LastRunResult)}, failure={DisplayLogValue(mockHelper.LastFailureLabel)}, gameplayMutations={mockTransport.GameplayMutationRequestCount}, gameplayCommands={mockSession.GameplayCommandRequestCount}. Expected not runnable and zero gameplay commands.", mockPanelObject);
+
+        GameObject lockedPanelObject;
+        GameObject lockedSessionObject;
+        LiveSmokeExecutionHelper lockedHelper;
+        MonoJoeyMockTransport lockedTransport;
+        MonoJoeySessionClient lockedSession;
+        MonoJoeyBackendMessageRouter lockedRouter;
+        MonoJoeyGameplayCommandDispatcher lockedDispatcher;
+        CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15RunLock",
+            MonoJoeySessionClientMode.LiveBackend,
+            true,
+            out lockedPanelObject,
+            out lockedSessionObject,
+            out lockedHelper,
+            out lockedTransport,
+            out lockedSession,
+            out lockedRouter,
+            out lockedDispatcher);
+        lockedTransport.SetGameplayCommandTestResponsesHeld(true);
+        bool firstStart = lockedHelper.TryStartSmokeOnce();
+        yield return WaitForChunk15CommandCount(lockedDispatcher, 1, 2f);
+        bool secondStart = lockedHelper.TryStartSmokeOnce();
+        int commandCountAfterSecondStart = lockedDispatcher.CommandRequestCount;
+        lockedHelper.CancelOrCleanupFromPanel();
+        bool cooldownStart = lockedHelper.TryStartSmokeOnce();
+        Debug.Log($"[AgenticTestRunner] Chunk 15 run lock/cooldown: firstStart={firstStart}, secondStart={secondStart}, cooldownStart={cooldownStart}, running={lockedHelper.IsSmokeRunning}, commandsAfterSecondStart={commandCountAfterSecondStart}, mutations={lockedTransport.GameplayMutationRequestCount}, result={DisplayLogValue(lockedHelper.LastRunResult)}, failure={DisplayLogValue(lockedHelper.LastFailureLabel)}. Expected one roll_dice max and rejected repeat/cooldown.", lockedPanelObject);
+
+        GameObject timeoutPanelObject;
+        GameObject timeoutSessionObject;
+        LiveSmokeExecutionHelper timeoutHelper;
+        MonoJoeyMockTransport timeoutTransport;
+        MonoJoeySessionClient timeoutSession;
+        MonoJoeyBackendMessageRouter timeoutRouter;
+        MonoJoeyGameplayCommandDispatcher timeoutDispatcher;
+        CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15Timeout",
+            MonoJoeySessionClientMode.LiveBackend,
+            true,
+            out timeoutPanelObject,
+            out timeoutSessionObject,
+            out timeoutHelper,
+            out timeoutTransport,
+            out timeoutSession,
+            out timeoutRouter,
+            out timeoutDispatcher);
+        timeoutTransport.SetGameplayCommandTestResponsesHeld(true);
+        timeoutHelper.SetTimeoutForValidation(0.2f);
+        timeoutHelper.TryStartSmokeOnce();
+        yield return WaitForChunk15HelperSettled(timeoutHelper, 2f);
+        Debug.Log($"[AgenticTestRunner] Chunk 15 timeout cleanup: running={timeoutHelper.IsSmokeRunning}, result={DisplayLogValue(timeoutHelper.LastRunResult)}, failure={DisplayLogValue(timeoutHelper.LastFailureLabel)}, lockReleased={!timeoutHelper.IsSmokeRunning}. Expected timeout with released run lock.", timeoutPanelObject);
+
+        GameObject wrongTurnPanelObject;
+        GameObject wrongTurnSessionObject;
+        LiveSmokeExecutionHelper wrongTurnHelper;
+        MonoJoeyMockTransport wrongTurnTransport;
+        MonoJoeySessionClient wrongTurnSession;
+        MonoJoeyBackendMessageRouter wrongTurnRouter;
+        MonoJoeyGameplayCommandDispatcher wrongTurnDispatcher;
+        CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15WrongTurn",
+            MonoJoeySessionClientMode.LiveBackend,
+            true,
+            out wrongTurnPanelObject,
+            out wrongTurnSessionObject,
+            out wrongTurnHelper,
+            out wrongTurnTransport,
+            out wrongTurnSession,
+            out wrongTurnRouter,
+            out wrongTurnDispatcher);
+        wrongTurnSession.Connect();
+        wrongTurnRouter.RouteRawMessage(Chunk15SnapshotResultJson("session_chunk_8", "player-2", false, false, "awaiting_roll"));
+        wrongTurnHelper.TryStartSmokeOnce();
+        yield return WaitForChunk15HelperSettled(wrongTurnHelper, 2f);
+        Debug.Log($"[AgenticTestRunner] Chunk 15 wrong-turn blocks before command: result={DisplayLogValue(wrongTurnHelper.LastRunResult)}, failure={DisplayLogValue(wrongTurnHelper.LastFailureLabel)}, mutations={wrongTurnTransport.GameplayMutationRequestCount}, commands={wrongTurnDispatcher.CommandRequestCount}. Expected blocked:not_local_turn and zero gameplay command mutation.", wrongTurnPanelObject);
+
+        GameObject auctionPanelObject;
+        GameObject auctionSessionObject;
+        LiveSmokeExecutionHelper auctionHelper;
+        MonoJoeyMockTransport auctionTransport;
+        MonoJoeySessionClient auctionSession;
+        MonoJoeyBackendMessageRouter auctionRouter;
+        MonoJoeyGameplayCommandDispatcher auctionDispatcher;
+        CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15ActiveAuction",
+            MonoJoeySessionClientMode.LiveBackend,
+            true,
+            out auctionPanelObject,
+            out auctionSessionObject,
+            out auctionHelper,
+            out auctionTransport,
+            out auctionSession,
+            out auctionRouter,
+            out auctionDispatcher);
+        auctionSession.Connect();
+        auctionRouter.RouteRawMessage(Chunk15SnapshotResultJson("session_chunk_8", testPlayerId, false, true, "auction_bidding"));
+        auctionHelper.TryStartSmokeOnce();
+        yield return WaitForChunk15HelperSettled(auctionHelper, 2f);
+        Debug.Log($"[AgenticTestRunner] Chunk 15 active-auction blocks before command: result={DisplayLogValue(auctionHelper.LastRunResult)}, failure={DisplayLogValue(auctionHelper.LastFailureLabel)}, mutations={auctionTransport.GameplayMutationRequestCount}, commands={auctionDispatcher.CommandRequestCount}. Expected blocked:active_auction and zero gameplay command mutation.", auctionPanelObject);
+
+        GameObject commandPanelObject;
+        GameObject commandSessionObject;
+        LiveSmokeExecutionHelper commandHelper;
+        MonoJoeyMockTransport commandTransport;
+        MonoJoeySessionClient commandSession;
+        MonoJoeyBackendMessageRouter commandRouter;
+        MonoJoeyGameplayCommandDispatcher commandDispatcher;
+        CreateChunk15SmokeHelperRuntime(
+            hydrator,
+            "SessionJoinPanel_Chunk15CommandRun",
+            MonoJoeySessionClientMode.LiveBackend,
+            true,
+            out commandPanelObject,
+            out commandSessionObject,
+            out commandHelper,
+            out commandTransport,
+            out commandSession,
+            out commandRouter,
+            out commandDispatcher);
+        bool commandStart = commandHelper.TryStartSmokeOnce();
+        yield return WaitForChunk15HelperSettled(commandHelper, 3f);
+        bool exactlyOneRoll = CountRequestType(commandTransport.SentRequestTypes, MonoJoeyTransportMessageTypes.RollDice) == 1;
+        bool noOtherGameplay = CountRequestType(commandTransport.SentRequestTypes, MonoJoeyTransportMessageTypes.ResolveTile) == 0
+            && CountRequestType(commandTransport.SentRequestTypes, MonoJoeyTransportMessageTypes.ExecuteTile) == 0
+            && CountRequestType(commandTransport.SentRequestTypes, MonoJoeyTransportMessageTypes.EndTurn) == 0
+            && CountRequestType(commandTransport.SentRequestTypes, MonoJoeyTransportMessageTypes.PlaceBid) == 0;
+        bool reportComplete = !string.IsNullOrWhiteSpace(commandHelper.LastReportText)
+            && commandHelper.LastReportText.Contains("result:")
+            && commandHelper.LastReportText.Contains("session:")
+            && commandHelper.LastReportText.Contains("player:")
+            && commandHelper.LastReportText.Contains("command:")
+            && commandHelper.LastReportText.Contains("direct:")
+            && commandHelper.LastReportText.Contains("snapshot:");
+        Debug.Log($"[AgenticTestRunner] Chunk 15 explicit mock command smoke: started={commandStart}, result={DisplayLogValue(commandHelper.LastRunResult)}, failure={DisplayLogValue(commandHelper.LastFailureLabel)}, sentTypes={string.Join(", ", commandTransport.SentRequestTypes)}, exactlyOneRoll={exactlyOneRoll}, noResolveExecuteEndBid={noOtherGameplay}, direct={DisplayLogValue(commandRouter.LastDirectCommandResultType)}, snapshots={commandRouter.SnapshotResultCount}, reportComplete={reportComplete}. Expected one roll_dice, roll_result, authoritative snapshot_result, and clipboard-ready report.", commandPanelObject);
     }
 
     private IEnumerator RunOptionalChunk11LiveBackendSmoke(SnapshotHydrator hydrator)
@@ -1817,6 +1985,112 @@ public sealed class AgenticTestRunner : MonoBehaviour
         return true;
     }
 
+    private bool CreateChunk15SmokeHelperRuntime(
+        SnapshotHydrator hydrator,
+        string objectName,
+        MonoJoeySessionClientMode mode,
+        bool enableCommandTestMode,
+        out GameObject panelObject,
+        out GameObject sessionObject,
+        out LiveSmokeExecutionHelper helper,
+        out MonoJoeyMockTransport mockTransport,
+        out MonoJoeySessionClient session,
+        out MonoJoeyBackendMessageRouter router,
+        out MonoJoeyGameplayCommandDispatcher dispatcher)
+    {
+        panelObject = InstantiateRequiredPrefab(sessionJoinPanelPrefab, "Assets/Prefabs/SessionJoinPanel.prefab", objectName);
+        sessionObject = null;
+        helper = null;
+        mockTransport = null;
+        session = null;
+        router = null;
+        dispatcher = null;
+
+        if (panelObject == null)
+        {
+            Debug.LogWarning($"[AgenticTestRunner] Chunk 15 validation skipped because SessionJoinPanel prefab was unavailable for {objectName}.", this);
+            return false;
+        }
+
+        SessionJoinController panel = panelObject.GetComponentInChildren<SessionJoinController>();
+        helper = panelObject.GetComponentInChildren<LiveSmokeExecutionHelper>();
+        if (panel == null || helper == null)
+        {
+            Debug.LogError($"[AgenticTestRunner] Chunk 15 validation skipped because panel components were missing: SessionJoinController={panel != null}, LiveSmokeExecutionHelper={helper != null}.", panelObject);
+            return false;
+        }
+
+        sessionObject = new GameObject(
+            objectName + "_Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        mockTransport = sessionObject.GetComponent<MonoJoeyMockTransport>();
+        router = sessionObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        session = sessionObject.GetComponent<MonoJoeySessionClient>();
+        dispatcher = sessionObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+
+        session.Configure(
+            mode,
+            "ws://127.0.0.1:5000/ws",
+            "session_chunk_8",
+            testPlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            enableCommandTestMode);
+        session.BindTransportForValidation(mockTransport);
+        dispatcher.Configure(session);
+        panel.Configure(session, router, hydrator);
+        panel.SetFormValues("ws://127.0.0.1:5000/ws", "session_chunk_8", testPlayerId, mode);
+        helper.Configure(panel, session, router, hydrator, panel.Context, dispatcher);
+        helper.SetTimeoutForValidation(1f);
+        return true;
+    }
+
+    private static IEnumerator WaitForChunk15HelperSettled(LiveSmokeExecutionHelper helper, float timeoutSeconds)
+    {
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (helper != null && helper.IsSmokeRunning && Time.realtimeSinceStartup < deadline)
+        {
+            yield return null;
+        }
+    }
+
+    private static IEnumerator WaitForChunk15CommandCount(MonoJoeyGameplayCommandDispatcher dispatcher, int expectedCount, float timeoutSeconds)
+    {
+        float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+        while (dispatcher != null && dispatcher.CommandRequestCount < expectedCount && Time.realtimeSinceStartup < deadline)
+        {
+            yield return null;
+        }
+    }
+
+    private static int CountRequestType(IReadOnlyList<string> requestTypes, string requestType)
+    {
+        if (requestTypes == null)
+        {
+            return 0;
+        }
+
+        int count = 0;
+        for (int i = 0; i < requestTypes.Count; i++)
+        {
+            if (string.Equals(requestTypes[i], requestType, StringComparison.Ordinal))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     private static void SubscribeToChunk6HydratorHooks(SnapshotHydrator hydrator, UnityEngine.Object logContext)
     {
         if (hydrator == null)
@@ -1970,6 +2244,68 @@ public sealed class AgenticTestRunner : MonoBehaviour
       ]
     }}{auctionJson},
     ""movement"": {{ ""playerId"": ""player-agentic"", ""fromTileId"": ""start"", ""toTileId"": ""{localTileId}"", ""pathTileIds"": [""{localTileId}""], ""stepCount"": 1, ""movementKind"": ""snap"", ""passedStart"": false }},
+    ""moneyDeltas"": [],
+    ""propertyOwnershipChanges"": [],
+    ""playerEliminations"": []
+  }}
+}}";
+    }
+
+    private static string Chunk15SnapshotResultJson(
+        string sessionId,
+        string currentPlayerId,
+        bool rolled,
+        bool activeAuction,
+        string phase)
+    {
+        string auctionJson = activeAuction
+            ? @",
+    ""activeAuction"": {
+      ""propertyTileId"": ""auction_test"",
+      ""triggeringPlayerId"": ""player-agentic"",
+      ""status"": ""active"",
+      ""startingBid"": 100,
+      ""minimumBidIncrement"": 10,
+      ""initialPreBidSeconds"": 5,
+      ""bidResetSeconds"": 10,
+      ""highestBid"": 300,
+      ""highestBidderId"": ""player-2"",
+      ""countdownDurationSeconds"": 10,
+      ""timerEndsAtUtc"": ""2026-05-11T00:15:10Z"",
+      ""bids"": [
+        { ""bidderPlayerId"": ""player-2"", ""amount"": 300, ""placedAtUtc"": ""2026-05-11T00:15:01Z"" }
+      ]
+    }"
+            : @",
+    ""activeAuction"": null";
+
+        return $@"{{
+  ""type"": ""snapshot_result"",
+  ""payload"": {{
+    ""snapshotVersion"": 15,
+    ""sessionId"": ""{sessionId}"",
+    ""status"": ""in_game"",
+    ""gameStatus"": ""in_progress"",
+    ""serverNowUtc"": ""2026-05-11T00:15:00Z"",
+    ""matchId"": ""{sessionId}"",
+    ""phase"": ""{phase}"",
+    ""turn"": {{ ""currentPlayerId"": ""{currentPlayerId}"", ""turnIndex"": 15, ""hasRolledThisTurn"": {JsonBool(rolled)}, ""hasResolvedTileThisTurn"": false, ""hasExecutedTileThisTurn"": false }},
+    ""players"": [
+      {{ ""playerId"": ""player-agentic"", ""username"": ""Agentic Player"", ""tokenId"": ""token_agentic"", ""colorId"": ""gold"", ""money"": 1260, ""currentTileId"": ""start"", ""ownedPropertyIds"": [], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": {{ ""totalBorrowed"": 240, ""currentInterestRatePercent"": 25, ""nextTurnInterestDue"": 60, ""loanTier"": 2 }}, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }},
+      {{ ""playerId"": ""player-2"", ""username"": ""Blue Player"", ""tokenId"": ""token_blue"", ""colorId"": ""blue"", ""money"": 1580, ""currentTileId"": ""property_01"", ""ownedPropertyIds"": [], ""heldCardIds"": [], ""statusEffects"": [], ""loan"": {{ ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 }}, ""isBankrupt"": false, ""isEliminated"": false, ""isLockedUp"": false }}
+    ],
+    ""board"": {{
+      ""boardId"": ""chunk_15_board"",
+      ""version"": 15,
+      ""displayName"": ""Chunk 15 Board"",
+      ""tiles"": [
+        {{ ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null }},
+        {{ ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" }},
+        {{ ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-agentic"" }},
+        {{ ""tileId"": ""auction_test"", ""index"": 3, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""ownerPlayerId"": null }}
+      ]
+    }}{auctionJson},
+    ""movement"": null,
     ""moneyDeltas"": [],
     ""propertyOwnershipChanges"": [],
     ""playerEliminations"": []

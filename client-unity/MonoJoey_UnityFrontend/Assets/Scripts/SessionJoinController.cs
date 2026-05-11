@@ -38,6 +38,13 @@ public sealed class SessionJoinController : MonoBehaviour
     public string LastRenderedStatus { get; private set; } = "";
     public string LastRenderedPlayers { get; private set; } = "";
     public LiveSessionContext Context => liveSessionContext;
+    public MonoJoeySessionClient SessionClient => sessionClient;
+    public MonoJoeyBackendMessageRouter MessageRouter => messageRouter;
+    public SnapshotHydrator SnapshotHydrator => snapshotHydrator;
+    public MonoJoeySessionClientMode SelectedBackendMode => SelectedMode();
+    public string CurrentBackendUrl => Trimmed(webSocketUrlInput);
+    public string CurrentSessionId => Trimmed(sessionIdInput);
+    public string CurrentPlayerId => Trimmed(playerIdInput);
     public bool ConnectButtonInteractable => connectButton != null && connectButton.interactable;
     public bool DisconnectButtonInteractable => disconnectButton != null && disconnectButton.interactable;
     public bool ReconnectButtonInteractable => reconnectButton != null && reconnectButton.interactable;
