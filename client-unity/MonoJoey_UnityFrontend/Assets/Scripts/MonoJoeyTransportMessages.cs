@@ -1,5 +1,24 @@
 using System;
 
+public static class MonoJoeyTransportMessageTypes
+{
+    public const string RollDice = "roll_dice";
+    public const string ResolveTile = "resolve_tile";
+    public const string ExecuteTile = "execute_tile";
+    public const string EndTurn = "end_turn";
+    public const string PlaceBid = "place_bid";
+
+    public const string RollResult = "roll_result";
+    public const string ResolveTileResult = "resolve_tile_result";
+    public const string ExecuteTileResult = "execute_tile_result";
+    public const string EndTurnResult = "end_turn_result";
+    public const string BidResult = "bid_result";
+
+    public const string SnapshotResult = "snapshot_result";
+    public const string ReconnectResult = "reconnect_result";
+    public const string Error = "error";
+}
+
 public enum MonoJoeyTransportConnectionState
 {
     Idle,
@@ -71,21 +90,21 @@ public sealed class MonoJoeySessionPlayerPayload
 }
 
 [Serializable]
-public sealed class MonoJoeyExperimentalDebugSessionPlayerRequestEnvelope
+public sealed class MonoJoeyGameplaySessionPlayerRequestEnvelope
 {
     public string type;
     public MonoJoeySessionPlayerPayload payload;
 }
 
 [Serializable]
-public sealed class MonoJoeyExperimentalDebugPlaceBidRequestEnvelope
+public sealed class MonoJoeyGameplayPlaceBidRequestEnvelope
 {
     public string type;
-    public MonoJoeyExperimentalDebugPlaceBidPayload payload;
+    public MonoJoeyGameplayPlaceBidPayload payload;
 }
 
 [Serializable]
-public sealed class MonoJoeyExperimentalDebugPlaceBidPayload
+public sealed class MonoJoeyGameplayPlaceBidPayload
 {
     public string sessionId;
     public string playerId;

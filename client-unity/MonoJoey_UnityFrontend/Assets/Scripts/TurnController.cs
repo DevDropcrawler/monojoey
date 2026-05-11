@@ -21,6 +21,10 @@ public sealed class TurnController : MonoBehaviour
     [SerializeField] private bool useMockRollValues = true;
     [SerializeField] private int[] mockRollValues = { 1, 2 };
 
+    [Header("Live Gameplay Commands")]
+    [SerializeField] private bool useLiveGameplayCommandDispatcher;
+    [SerializeField] private MonoJoeyGameplayCommandDispatcher gameplayCommandDispatcher;
+
     private DiceAnimator diceAnimator;
     private HUDController.TurnHudSnapshot lastSnapshot;
     private HUDController.PlayerHudSnapshot lastHudPlayerSnapshot;
@@ -44,6 +48,7 @@ public sealed class TurnController : MonoBehaviour
     public IReadOnlyList<string> LastMovementPath => lastMovementPath;
     public Vector3 LastTokenPosition => lastTokenPosition;
     public HUDController.PlayerHudSnapshot LastHudPlayerSnapshot => lastHudPlayerSnapshot;
+    public bool UseLiveGameplayCommandDispatcher => useLiveGameplayCommandDispatcher;
     public int DiceImageCount => diceImages == null ? 0 : diceImages.Length;
     public bool RollButtonInteractable => rollButton != null && rollButton.interactable;
     public string DebugLogText => debugLog == null ? "" : debugLog.text;
@@ -91,6 +96,20 @@ public sealed class TurnController : MonoBehaviour
         AppendDebugLog($"Runtime mock refs assigned: hud={hudController != null}, token={tokenAnimator != null}, tiles={boardTiles.Length}, localPlayer={DisplayText(localPlayerId, "--")}.");
     }
 
+    public void ConfigureLiveGameplayCommandDispatcher(MonoJoeyGameplayCommandDispatcher dispatcher, string validationLocalPlayerId)
+    {
+        gameplayCommandDispatcher = dispatcher;
+        useLiveGameplayCommandDispatcher = dispatcher != null;
+
+        if (!string.IsNullOrWhiteSpace(validationLocalPlayerId))
+        {
+            localPlayerId = validationLocalPlayerId;
+        }
+
+        RefreshUi();
+        AppendDebugLog($"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}, localPlayer={DisplayText(localPlayerId, "--")}.");
+    }
+
     public void BindSnapshot(HUDController.TurnHudSnapshot snapshot)
     {
         lastSnapshot = snapshot;
@@ -132,11 +151,35 @@ public sealed class TurnController : MonoBehaviour
 
     public void RollDice()
     {
+        if (UseLiveCommandMode())
+        {
+            if (!CanRollLive(out string reason))
+            {
+                AppendDebugLog($"Live roll ignored: {reason}.");
+                RefreshUi();
+                return;
+            }
+
+            bool sent = gameplayCommandDispatcher.TryRollDice();
+            AppendDebugLog(sent
+                ? $"Live roll command sent: localRequestId={DisplayText(gameplayCommandDispatcher.LastCommandLocalRequestId, "--")}."
+                : $"Live roll command rejected: {DisplayText(gameplayCommandDispatcher.LastCommandError, "--")}.");
+            RefreshUi();
+            return;
+        }
+
         RollDiceRoutine();
     }
 
     public Coroutine RollDiceRoutine()
     {
+        if (UseLiveCommandMode())
+        {
+            AppendDebugLog("Local roll routine ignored because live command mode is active.");
+            RefreshUi();
+            return null;
+        }
+
         if (!CanRoll(out string reason))
         {
             AppendDebugLog($"Roll ignored: {reason}.");
@@ -247,6 +290,11 @@ public sealed class TurnController : MonoBehaviour
 
     private bool CanRoll(out string reason)
     {
+        if (UseLiveCommandMode())
+        {
+            return CanRollLive(out reason);
+        }
+
         if (!isTurnActive)
         {
             reason = "no local active turn";
@@ -293,6 +341,53 @@ public sealed class TurnController : MonoBehaviour
         return true;
     }
 
+    private bool CanRollLive(out string reason)
+    {
+        if (gameplayCommandDispatcher == null)
+        {
+            reason = "live command dispatcher is not configured";
+            return false;
+        }
+
+        if (!gameplayCommandDispatcher.IsLiveBackend)
+        {
+            reason = "session is not in LiveBackend mode";
+            return false;
+        }
+
+        if (!gameplayCommandDispatcher.IsBoundToIdentity)
+        {
+            reason = "session is not bound to a hydrated identity";
+            return false;
+        }
+
+        if (!hasSnapshot)
+        {
+            reason = "no authoritative turn snapshot";
+            return false;
+        }
+
+        if (!string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal))
+        {
+            reason = $"current player {DisplayText(lastSnapshot.CurrentPlayerId, "--")} is not local player {DisplayText(localPlayerId, "--")}";
+            return false;
+        }
+
+        if (lastSnapshot.HasRolledThisTurn)
+        {
+            reason = "authoritative snapshot says the local player already rolled";
+            return false;
+        }
+
+        if (!gameplayCommandDispatcher.CanSendCommand(MonoJoeyTransportMessageTypes.RollDice, out reason))
+        {
+            return false;
+        }
+
+        reason = "";
+        return true;
+    }
+
     private void RefreshUi()
     {
         if (currentPlayerText != null)
@@ -319,6 +414,11 @@ public sealed class TurnController : MonoBehaviour
 
     private bool CanRollForUi()
     {
+        if (UseLiveCommandMode())
+        {
+            return CanRollLive(out _);
+        }
+
         return isTurnActive
             && hasSnapshot
             && string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal)
@@ -427,13 +527,20 @@ public sealed class TurnController : MonoBehaviour
             return;
         }
 
-        string normalizedMessage = $"{message} Mock/read-only; no backend mutation.";
+        string normalizedMessage = UseLiveCommandMode()
+            ? $"{message} Backend authoritative; no local gameplay state mutation."
+            : $"{message} Mock/read-only; no backend mutation.";
         if (debugLog != null)
         {
             debugLog.text = string.IsNullOrWhiteSpace(debugLog.text) ? normalizedMessage : $"{debugLog.text}\n{normalizedMessage}";
         }
 
         Debug.Log($"[TurnController] {normalizedMessage}", this);
+    }
+
+    private bool UseLiveCommandMode()
+    {
+        return useLiveGameplayCommandDispatcher && gameplayCommandDispatcher != null;
     }
 
     private string CurrentPlayerId()

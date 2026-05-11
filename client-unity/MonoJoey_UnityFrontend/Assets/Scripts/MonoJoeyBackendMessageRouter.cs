@@ -30,6 +30,15 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
         "LoanInterestCharged"
     };
 
+    private static readonly HashSet<string> DirectGameplayCommandResults = new HashSet<string>(StringComparer.Ordinal)
+    {
+        MonoJoeyTransportMessageTypes.RollResult,
+        MonoJoeyTransportMessageTypes.ResolveTileResult,
+        MonoJoeyTransportMessageTypes.ExecuteTileResult,
+        MonoJoeyTransportMessageTypes.EndTurnResult,
+        MonoJoeyTransportMessageTypes.BidResult
+    };
+
     [SerializeField] private SnapshotHydrator snapshotHydrator;
     [SerializeField] private MonoJoeySessionClient sessionClient;
     [SerializeField] private bool requestSnapshotAfterSequencedBroadcast = true;
@@ -44,8 +53,10 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
     public int ErrorEnvelopeCount { get; private set; }
     public int UnknownMessageCount { get; private set; }
     public int SequencedBroadcastCount { get; private set; }
+    public int DirectCommandResultCount { get; private set; }
     public int StaleSequenceCount { get; private set; }
     public int OutOfOrderSequenceCount { get; private set; }
+    public string LastDirectCommandResultType { get; private set; } = "";
     public DateTime LastMessageReceivedUtc { get; private set; } = DateTime.MinValue;
     public DateTime LastSnapshotHydratedUtc { get; private set; } = DateTime.MinValue;
     public SnapshotHydrator Hydrator => snapshotHydrator;
@@ -79,20 +90,21 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
 
         LastMessageType = envelope == null ? "" : envelope.type ?? "";
         LastMessageReceivedUtc = DateTime.UtcNow;
-        if (LastMessageType == "snapshot_result")
+        if (LastMessageType == MonoJoeyTransportMessageTypes.SnapshotResult)
         {
             SnapshotResultCount++;
             bool hydrated = snapshotHydrator != null && snapshotHydrator.HydrateSnapshotResultJson(json);
             if (hydrated)
             {
                 LastSnapshotHydratedUtc = DateTime.UtcNow;
+                sessionClient?.ReportAuthoritativeHydration(MonoJoeyTransportMessageTypes.SnapshotResult);
             }
 
             Debug.Log($"[MonoJoeyBackendMessageRouter] snapshot_result routed to SnapshotHydrator hydrated={hydrated}. Read-only transport; no backend mutation.", this);
             return;
         }
 
-        if (LastMessageType == "reconnect_result")
+        if (LastMessageType == MonoJoeyTransportMessageTypes.ReconnectResult)
         {
             ReconnectResultCount++;
             MonoJoeyReconnectResultEnvelope reconnect = JsonUtility.FromJson<MonoJoeyReconnectResultEnvelope>(json);
@@ -113,14 +125,23 @@ public sealed class MonoJoeyBackendMessageRouter : MonoBehaviour
             return;
         }
 
-        if (LastMessageType == "error")
+        if (LastMessageType == MonoJoeyTransportMessageTypes.Error)
         {
             ErrorEnvelopeCount++;
             MonoJoeyErrorEnvelope error = JsonUtility.FromJson<MonoJoeyErrorEnvelope>(json);
             LastErrorCode = error == null || error.payload == null ? "" : error.payload.code ?? "";
             LastErrorMessage = error == null || error.payload == null ? "" : error.payload.message ?? "";
             Debug.LogWarning($"[MonoJoeyBackendMessageRouter] backend error envelope code={Display(LastErrorCode)}, message={Display(LastErrorMessage)}. Read-only transport; no local gameplay compensation.", this);
-            sessionClient?.ReportBackendError(LastErrorMessage);
+            sessionClient?.ReportBackendError(LastErrorCode, LastErrorMessage);
+            return;
+        }
+
+        if (DirectGameplayCommandResults.Contains(LastMessageType))
+        {
+            DirectCommandResultCount++;
+            LastDirectCommandResultType = LastMessageType;
+            Debug.Log($"[MonoJoeyBackendMessageRouter] Direct command result {Display(LastMessageType)} observed and forwarded to dispatcher. No gameplay UI mutation; waiting for snapshot hydration.", this);
+            sessionClient?.ReportDirectCommandResult(LastMessageType, json);
             return;
         }
 

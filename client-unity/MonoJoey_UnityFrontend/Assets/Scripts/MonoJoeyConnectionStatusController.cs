@@ -7,12 +7,14 @@ public sealed class MonoJoeyConnectionStatusController : MonoBehaviour
 {
     [SerializeField] private MonoJoeySessionClient sessionClient;
     [SerializeField] private MonoJoeyBackendMessageRouter messageRouter;
+    [SerializeField] private MonoJoeyGameplayCommandDispatcher gameplayCommandDispatcher;
     [SerializeField] private SnapshotHydrator snapshotHydrator;
     [SerializeField] private bool createRuntimeControls = true;
     [SerializeField] private Text modeText;
     [SerializeField] private Text stateText;
     [SerializeField] private Text sessionText;
     [SerializeField] private Text lastMessageText;
+    [SerializeField] private Text commandStatusText;
     [SerializeField] private Text lastSequenceText;
     [SerializeField] private Text lastSnapshotText;
     [SerializeField] private Text lastErrorText;
@@ -37,6 +39,7 @@ public sealed class MonoJoeyConnectionStatusController : MonoBehaviour
 
         sessionClient = client;
         messageRouter = router;
+        gameplayCommandDispatcher = client == null ? gameplayCommandDispatcher : client.GetComponent<MonoJoeyGameplayCommandDispatcher>();
         snapshotHydrator = router == null ? snapshotHydrator : router.Hydrator;
         if (sessionClient != null)
         {
@@ -110,16 +113,29 @@ public sealed class MonoJoeyConnectionStatusController : MonoBehaviour
         string fallback = sessionClient != null && sessionClient.IsUsingMockFallback ? " | MOCK FALLBACK ACTIVE" : "";
         string reconnects = sessionClient == null ? "--" : sessionClient.ReconnectAttemptCount.ToString();
         string readOnlyRequests = sessionClient == null ? "--" : sessionClient.ReadOnlyRequestCount.ToString();
-        string experimentalRequests = sessionClient == null ? "--" : sessionClient.ExperimentalMutationRequestCount.ToString();
+        string gameplayRequests = sessionClient == null ? "--" : sessionClient.GameplayCommandRequestCount.ToString();
+        string commandInFlight = gameplayCommandDispatcher != null && gameplayCommandDispatcher.IsCommandInFlight
+            ? $"{Display(gameplayCommandDispatcher.InFlightRequestType)} id={Display(gameplayCommandDispatcher.InFlightLocalRequestId)}"
+            : "none";
+        string commandSentAt = gameplayCommandDispatcher == null || gameplayCommandDispatcher.LastCommandSentUtc == DateTime.MinValue
+            ? "--"
+            : gameplayCommandDispatcher.LastCommandSentUtc.ToString("O");
+        string commandLastRequest = gameplayCommandDispatcher == null
+            ? "--"
+            : $"{Display(gameplayCommandDispatcher.LastCommandRequestType)} id={Display(gameplayCommandDispatcher.LastCommandLocalRequestId)}";
+        string commandResult = gameplayCommandDispatcher == null ? "--" : Display(gameplayCommandDispatcher.LastCommandResult);
+        string commandError = gameplayCommandDispatcher == null ? "--" : Display(gameplayCommandDispatcher.LastCommandError);
+        string commandCount = gameplayCommandDispatcher == null ? "--" : gameplayCommandDispatcher.CommandRequestCount.ToString();
 
         SetText(modeText, $"Mode: {mode}{fallback}");
         SetText(stateText, $"State: {state} | {bound}");
         SetText(sessionText, $"Session/player: {session} | URL: {url}");
         SetText(lastMessageText, $"Last request: {lastRequest} | Last message: {lastType} @ {lastMessageTime}");
-        SetText(lastSequenceText, $"Sequence: {sequence} | reconnects={reconnects} readOnly={readOnlyRequests} experimentalDebug={experimentalRequests}");
+        SetText(commandStatusText, $"Command: last={commandLastRequest} sentAt={commandSentAt} inFlight={commandInFlight} dispatcherCount={commandCount} result={commandResult} error={commandError}");
+        SetText(lastSequenceText, $"Sequence: {sequence} | reconnects={reconnects} readOnly={readOnlyRequests} commands={gameplayRequests}");
         SetText(lastSnapshotText, $"Last snapshot: {snapshot}");
         SetText(lastErrorText, $"Last error: code={Display(errorCode)} message={Display(error)}");
-        LastRenderedStatus = $"{mode}|{state}|{bound}|{session}|{url}|request={lastRequest}|message={lastType}|sequence={sequence}|snapshot={snapshot}|error={Display(errorCode)}/{Display(error)}|fallback={sessionClient != null && sessionClient.IsUsingMockFallback}";
+        LastRenderedStatus = $"{mode}|{state}|{bound}|{session}|{url}|request={lastRequest}|message={lastType}|command={commandLastRequest}/{commandInFlight}/{commandResult}/{commandError}|sequence={sequence}|snapshot={snapshot}|error={Display(errorCode)}/{Display(error)}|fallback={sessionClient != null && sessionClient.IsUsingMockFallback}";
     }
 
     private void ApplyRuntimeControlValues()
@@ -139,7 +155,7 @@ public sealed class MonoJoeyConnectionStatusController : MonoBehaviour
             messageRouter,
             sessionClient.RequestSnapshotAfterBroadcastEnabled,
             mockFallbackToggle != null && mockFallbackToggle.isOn,
-            sessionClient.EnableExperimentalMutationRequests);
+            sessionClient.EnableMockGameplayCommandTestMode);
     }
 
     private void HandleConnectClicked()

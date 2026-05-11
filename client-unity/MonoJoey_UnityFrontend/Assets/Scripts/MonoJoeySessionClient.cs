@@ -14,10 +14,11 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     [SerializeField] private float reconnectMaxBackoffSeconds = 8f;
     [SerializeField] private bool requestSnapshotAfterBroadcast = true;
     [SerializeField] private bool allowMockFallbackOnLiveFailure;
-    [SerializeField] private bool enableExperimentalMutationRequests;
+    [SerializeField] private bool enableMockGameplayCommandTestMode;
     [SerializeField] private float broadcastSnapshotDebounceSeconds = 0.5f;
     [SerializeField] private SnapshotHydrator snapshotHydrator;
     [SerializeField] private MonoJoeyBackendMessageRouter messageRouter;
+    [SerializeField] private MonoJoeyGameplayCommandDispatcher gameplayCommandDispatcher;
 
     private IMonoJoeyTransport transport;
     private MonoJoeySessionClientMode transportMode;
@@ -38,14 +39,15 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     public string PlayerId => playerId;
     public bool IsUsingMockFallback => usingMockFallback;
     public bool IsBoundToIdentity => boundToIdentity;
+    public bool IsTransportConnected => transport != null && transport.IsConnected;
     public bool RequestSnapshotAfterBroadcastEnabled => requestSnapshotAfterBroadcast;
     public bool AllowMockFallbackOnLiveFailure => allowMockFallbackOnLiveFailure;
-    public bool EnableExperimentalMutationRequests => enableExperimentalMutationRequests;
+    public bool EnableMockGameplayCommandTestMode => enableMockGameplayCommandTestMode;
     public string LastError { get; private set; } = "";
     public string LastSentRequestType { get; private set; } = "";
     public int ReadOnlyRequestCount { get; private set; }
     public int ReconnectAttemptCount { get; private set; }
-    public int ExperimentalMutationRequestCount { get; private set; }
+    public int GameplayCommandRequestCount { get; private set; }
     public DateTime LastRequestSentUtc { get; private set; } = DateTime.MinValue;
 
     public void Configure(
@@ -67,7 +69,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
             router,
             configuredRequestSnapshotAfterBroadcast,
             configuredAllowMockFallbackOnLiveFailure,
-            enableExperimentalMutationRequests);
+            enableMockGameplayCommandTestMode);
     }
 
     public void Configure(
@@ -79,7 +81,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         MonoJoeyBackendMessageRouter router,
         bool configuredRequestSnapshotAfterBroadcast,
         bool configuredAllowMockFallbackOnLiveFailure,
-        bool configuredEnableExperimentalMutationRequests)
+        bool configuredEnableMockGameplayCommandTestMode)
     {
         mode = configuredMode;
         webSocketUrl = configuredWebSocketUrl ?? "";
@@ -89,8 +91,9 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         messageRouter = router;
         requestSnapshotAfterBroadcast = configuredRequestSnapshotAfterBroadcast;
         allowMockFallbackOnLiveFailure = configuredAllowMockFallbackOnLiveFailure;
-        enableExperimentalMutationRequests = configuredEnableExperimentalMutationRequests;
+        enableMockGameplayCommandTestMode = configuredEnableMockGameplayCommandTestMode;
         EnsureTransportAndRouter();
+        ConfigureMockTransportCommandTestMode();
         StatusChanged?.Invoke();
     }
 
@@ -101,6 +104,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         transportMode = mode;
         hasTransportMode = true;
         SubscribeTransport();
+        ConfigureMockTransportCommandTestMode();
         EnsureRouter();
     }
 
@@ -119,6 +123,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         boundToIdentity = false;
         StopReconnect();
         StopBroadcastSnapshotDebounce();
+        gameplayCommandDispatcher?.HandleDisconnectedOrTransportError("disconnect");
         transport?.Disconnect();
         SetState(MonoJoeyTransportConnectionState.Disconnected);
     }
@@ -165,7 +170,14 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     {
         connectedOnce = true;
         boundToIdentity = true;
+        gameplayCommandDispatcher?.HandleAuthoritativeHydration(MonoJoeyTransportMessageTypes.ReconnectResult);
         SetState(MonoJoeyTransportConnectionState.BoundLive);
+    }
+
+    public void ReportAuthoritativeHydration(string messageType)
+    {
+        gameplayCommandDispatcher?.HandleAuthoritativeHydration(messageType);
+        StatusChanged?.Invoke();
     }
 
     public void ReportReconnectHydrationFailure(string message)
@@ -180,38 +192,94 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     public void ReportBackendError(string message)
     {
         LastError = message ?? "";
+        gameplayCommandDispatcher?.HandleBackendError("", LastError);
         StatusChanged?.Invoke();
     }
 
-    public void ExperimentalDebugRollDice()
+    public void ReportBackendError(string code, string message)
     {
-        SendExperimentalDebugSessionPlayerRequest("roll_dice");
+        LastError = message ?? "";
+        gameplayCommandDispatcher?.HandleBackendError(code, LastError);
+        StatusChanged?.Invoke();
     }
 
-    public void ExperimentalDebugEndTurn()
+    public void ReportDirectCommandResult(string resultType, string rawJson)
     {
-        SendExperimentalDebugSessionPlayerRequest("end_turn");
+        gameplayCommandDispatcher?.HandleDirectCommandResult(resultType, rawJson);
+        StatusChanged?.Invoke();
     }
 
-    public void ExperimentalDebugPlaceBid(int amount)
+    public void BindGameplayCommandDispatcher(MonoJoeyGameplayCommandDispatcher dispatcher)
     {
-        if (!CanSendExperimentalDebugRequest("place_bid"))
+        if (dispatcher == null && gameplayCommandDispatcher != null)
         {
+            gameplayCommandDispatcher = null;
             return;
         }
 
-        MonoJoeyExperimentalDebugPlaceBidRequestEnvelope envelope = new MonoJoeyExperimentalDebugPlaceBidRequestEnvelope
+        if (dispatcher != null)
         {
-            type = "place_bid",
-            payload = new MonoJoeyExperimentalDebugPlaceBidPayload
-            {
-                sessionId = sessionId,
-                playerId = playerId,
-                amount = amount
-            }
-        };
+            gameplayCommandDispatcher = dispatcher;
+        }
+    }
 
-        SendExperimentalDebugJson("place_bid", JsonUtility.ToJson(envelope));
+    public bool CanSendGameplayCommand(string requestType, out string reason)
+    {
+        if (!IsApprovedGameplayCommand(requestType))
+        {
+            reason = $"command type {Display(requestType)} is not approved";
+            return false;
+        }
+
+        if (mode == MonoJoeySessionClientMode.MockValidation && !enableMockGameplayCommandTestMode)
+        {
+            reason = "mock validation blocks gameplay commands unless dispatcher test mode is enabled";
+            return false;
+        }
+
+        if (mode != MonoJoeySessionClientMode.LiveBackend && !enableMockGameplayCommandTestMode)
+        {
+            reason = $"mode {mode} does not allow gameplay commands";
+            return false;
+        }
+
+        if (transport == null || !transport.IsConnected)
+        {
+            reason = "transport is disconnected";
+            return false;
+        }
+
+        if (!HasSessionAndPlayer())
+        {
+            reason = "sessionId/playerId is missing";
+            return false;
+        }
+
+        if (!boundToIdentity || State != MonoJoeyTransportConnectionState.BoundLive)
+        {
+            reason = "socket is not bound to a hydrated session/player identity";
+            return false;
+        }
+
+        reason = "";
+        return true;
+    }
+
+    public bool TrySendGameplayCommandJson(string requestType, string json, string localRequestId, out string reason)
+    {
+        if (!CanSendGameplayCommand(requestType, out reason))
+        {
+            Debug.LogWarning($"[MonoJoeySessionClient] Gameplay command {Display(requestType)} skipped: {reason}.", this);
+            return false;
+        }
+
+        LastSentRequestType = requestType;
+        LastRequestSentUtc = DateTime.UtcNow;
+        GameplayCommandRequestCount++;
+        Debug.Log($"[MonoJoeySessionClient] Sending gameplay command intent type={requestType}, localRequestId={Display(localRequestId)}. Backend remains authoritative.", this);
+        transport.SendJson(json);
+        StatusChanged?.Invoke();
+        return true;
     }
 
     private void Awake()
@@ -269,6 +337,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
             transportMode = mode;
             hasTransportMode = true;
             SubscribeTransport();
+            ConfigureMockTransportCommandTestMode();
         }
 
         EnsureRouter();
@@ -331,6 +400,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     private void HandleTransportDisconnected()
     {
         boundToIdentity = false;
+        gameplayCommandDispatcher?.HandleDisconnectedOrTransportError("transport disconnected");
         if (disconnectRequested)
         {
             SetState(MonoJoeyTransportConnectionState.Disconnected);
@@ -353,6 +423,7 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
     private void HandleTransportError(string message)
     {
         LastError = message ?? "";
+        gameplayCommandDispatcher?.HandleDisconnectedOrTransportError($"transport error: {LastError}");
         SetState(MonoJoeyTransportConnectionState.Error);
         Debug.LogWarning($"[MonoJoeySessionClient] Transport error: {Display(LastError)}. Read-only transport; no backend mutation.", this);
         if (mode == MonoJoeySessionClientMode.LiveBackend && allowMockFallbackOnLiveFailure && !usingMockFallback)
@@ -467,58 +538,6 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         StatusChanged?.Invoke();
     }
 
-    private void SendExperimentalDebugSessionPlayerRequest(string requestType)
-    {
-        if (!CanSendExperimentalDebugRequest(requestType))
-        {
-            return;
-        }
-
-        MonoJoeyExperimentalDebugSessionPlayerRequestEnvelope envelope = new MonoJoeyExperimentalDebugSessionPlayerRequestEnvelope
-        {
-            type = requestType,
-            payload = new MonoJoeySessionPlayerPayload
-            {
-                sessionId = sessionId,
-                playerId = playerId
-            }
-        };
-
-        SendExperimentalDebugJson(requestType, JsonUtility.ToJson(envelope));
-    }
-
-    private bool CanSendExperimentalDebugRequest(string requestType)
-    {
-        if (!enableExperimentalMutationRequests)
-        {
-            Debug.LogWarning($"[MonoJoeySessionClient.ExperimentalDebug] {requestType} skipped because enableExperimentalMutationRequests is false. No local gameplay state changed.", this);
-            return false;
-        }
-
-        if (!CanSendConnectedIdentityRequest(requestType))
-        {
-            return false;
-        }
-
-        if (!boundToIdentity || State != MonoJoeyTransportConnectionState.BoundLive)
-        {
-            Debug.LogWarning($"[MonoJoeySessionClient.ExperimentalDebug] {requestType} skipped because the live identity is not bound. No local gameplay state changed.", this);
-            return false;
-        }
-
-        return true;
-    }
-
-    private void SendExperimentalDebugJson(string requestType, string json)
-    {
-        LastSentRequestType = requestType;
-        LastRequestSentUtc = DateTime.UtcNow;
-        ExperimentalMutationRequestCount++;
-        Debug.LogWarning($"[MonoJoeySessionClient.ExperimentalDebug] Sending {requestType}. This debug transport call does not locally apply dice, money, ownership, auction, or turn outcomes.", this);
-        transport.SendJson(json);
-        StatusChanged?.Invoke();
-    }
-
     private void ActivateMockFallback()
     {
         usingMockFallback = true;
@@ -529,6 +548,24 @@ public sealed class MonoJoeySessionClient : MonoBehaviour
         SubscribeTransport();
         mode = MonoJoeySessionClientMode.MockValidation;
         Connect();
+    }
+
+    private void ConfigureMockTransportCommandTestMode()
+    {
+        MonoJoeyMockTransport mockTransport = transport as MonoJoeyMockTransport;
+        if (mockTransport != null)
+        {
+            mockTransport.SetGameplayCommandTestResponsesEnabled(enableMockGameplayCommandTestMode);
+        }
+    }
+
+    private static bool IsApprovedGameplayCommand(string requestType)
+    {
+        return string.Equals(requestType, MonoJoeyTransportMessageTypes.RollDice, StringComparison.Ordinal)
+            || string.Equals(requestType, MonoJoeyTransportMessageTypes.ResolveTile, StringComparison.Ordinal)
+            || string.Equals(requestType, MonoJoeyTransportMessageTypes.ExecuteTile, StringComparison.Ordinal)
+            || string.Equals(requestType, MonoJoeyTransportMessageTypes.EndTurn, StringComparison.Ordinal)
+            || string.Equals(requestType, MonoJoeyTransportMessageTypes.PlaceBid, StringComparison.Ordinal);
     }
 
     private bool HasSessionAndPlayer()

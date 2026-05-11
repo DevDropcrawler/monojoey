@@ -25,6 +25,8 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
     private readonly List<string> sentMessages = new List<string>();
     private readonly List<string> sentRequestTypes = new List<string>();
 
+    [SerializeField] private bool enableGameplayCommandTestResponses;
+
     public event Action Connected;
     public event Action Disconnected;
     public event Action<string> MessageReceived;
@@ -36,6 +38,12 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
     public IReadOnlyList<string> SentMessages => sentMessages;
     public IReadOnlyList<string> SentRequestTypes => sentRequestTypes;
     public int GameplayMutationRequestCount { get; private set; }
+    public bool EnableGameplayCommandTestResponses => enableGameplayCommandTestResponses;
+
+    public void SetGameplayCommandTestResponsesEnabled(bool enabled)
+    {
+        enableGameplayCommandTestResponses = enabled;
+    }
 
     public void Connect(string webSocketUrl)
     {
@@ -61,7 +69,15 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
         if (GameplayMutationTypes.Contains(requestType))
         {
             GameplayMutationRequestCount++;
-            Debug.LogError($"[MonoJoeyMockTransport] Gameplay mutation request was sent in read-only validation: {requestType}.", this);
+            if (!enableGameplayCommandTestResponses)
+            {
+                Debug.LogError($"[MonoJoeyMockTransport] Gameplay mutation request was sent in default read-only validation: {requestType}.", this);
+                EmitError("mock_gameplay_command_blocked", $"Mock transport rejected gameplay command {requestType}. Enable dispatcher test responses for isolated command validation.");
+                return;
+            }
+
+            EmitCannedCommandResult(requestType);
+            return;
         }
 
         if (requestType == "reconnect_session")
@@ -92,6 +108,18 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
     public void EmitCannedError()
     {
         EmitServerMessage(@"{""type"":""error"",""payload"":{""code"":""mock_backend_error"",""message"":""Deterministic mock backend error.""}}");
+    }
+
+    public void EmitCannedCommandResult(string requestType)
+    {
+        string resultType = ResultTypeForRequest(requestType);
+        if (string.IsNullOrWhiteSpace(resultType))
+        {
+            EmitError("unsupported_mock_command_result", $"No canned command result for request type {requestType}.");
+            return;
+        }
+
+        EmitServerMessage($@"{{""type"":""{resultType}"",""payload"":{{""accepted"":true,""requestType"":""{Escape(requestType)}""}}}}");
     }
 
     public void EmitIgnoredBroadcast(long sequence)
@@ -139,6 +167,25 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
         return string.IsNullOrEmpty(value)
             ? ""
             : value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    private static string ResultTypeForRequest(string requestType)
+    {
+        switch (requestType)
+        {
+            case MonoJoeyTransportMessageTypes.RollDice:
+                return MonoJoeyTransportMessageTypes.RollResult;
+            case MonoJoeyTransportMessageTypes.ResolveTile:
+                return MonoJoeyTransportMessageTypes.ResolveTileResult;
+            case MonoJoeyTransportMessageTypes.ExecuteTile:
+                return MonoJoeyTransportMessageTypes.ExecuteTileResult;
+            case MonoJoeyTransportMessageTypes.EndTurn:
+                return MonoJoeyTransportMessageTypes.EndTurnResult;
+            case MonoJoeyTransportMessageTypes.PlaceBid:
+                return MonoJoeyTransportMessageTypes.BidResult;
+            default:
+                return "";
+        }
     }
 
     private static string CannedReconnectResultJson()

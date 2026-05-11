@@ -88,6 +88,10 @@ public sealed class AuctionPanelController : MonoBehaviour
     [SerializeField] private Color urgentTimerColor = new Color(0.95f, 0.24f, 0.18f, 0.75f);
     [SerializeField] private float countdownPulseSeconds = 0.35f;
 
+    [Header("Live Gameplay Commands")]
+    [SerializeField] private bool useLiveGameplayCommandDispatcher;
+    [SerializeField] private MonoJoeyGameplayCommandDispatcher gameplayCommandDispatcher;
+
     public event Action<BidRequest> BidRequested;
 
     public string AuctionId => auctionId;
@@ -96,6 +100,7 @@ public sealed class AuctionPanelController : MonoBehaviour
     public string ActivePlayerId => activePlayerId;
     public float RemainingSeconds => remainingSeconds;
     public BidRequest? LastBidRequest { get; private set; }
+    public bool UseLiveGameplayCommandDispatcher => useLiveGameplayCommandDispatcher;
 
     private Coroutine highBidderPulseCoroutine;
 
@@ -107,6 +112,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         }
 
         RefreshSnapshotText();
+        RefreshBidButton();
         AnimateCountdownHighlight(remainingSeconds, 30f);
     }
 
@@ -132,8 +138,17 @@ public sealed class AuctionPanelController : MonoBehaviour
         remainingSeconds = Mathf.Max(0f, snapshotRemainingSeconds);
 
         RefreshSnapshotText();
+        RefreshBidButton();
         AnimateCountdownHighlight(remainingSeconds, 30f);
         PulseBidHighlight(highBidderPlayerId);
+    }
+
+    public void ConfigureLiveGameplayCommandDispatcher(MonoJoeyGameplayCommandDispatcher dispatcher)
+    {
+        gameplayCommandDispatcher = dispatcher;
+        useLiveGameplayCommandDispatcher = dispatcher != null;
+        RefreshBidButton();
+        AppendLog($"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}");
     }
 
     public void BindPlayerBidRows(IReadOnlyList<string> playerIds, IReadOnlyList<int> bids)
@@ -216,9 +231,27 @@ public sealed class AuctionPanelController : MonoBehaviour
             return;
         }
 
+        if (UseLiveCommandMode())
+        {
+            if (!gameplayCommandDispatcher.IsLiveBackend)
+            {
+                AppendLog("Live bid ignored: session is not in LiveBackend mode.");
+                RefreshBidButton();
+                return;
+            }
+
+            bool sent = gameplayCommandDispatcher.TryPlaceBid(amount);
+            AppendLog(sent
+                ? $"Live bid command sent: ${amount}"
+                : $"Live bid command rejected: {gameplayCommandDispatcher.LastCommandError}");
+            RefreshBidButton();
+            return;
+        }
+
         LastBidRequest = new BidRequest(auctionId, amount);
         AppendLog($"Local bid request: {auctionId} ${amount}");
         BidRequested?.Invoke(LastBidRequest.Value);
+        RefreshBidButton();
     }
 
     private void RefreshSnapshotText()
@@ -242,6 +275,32 @@ public sealed class AuctionPanelController : MonoBehaviour
         {
             highBidderText.text = $"High Bidder: {DisplayPlayerId(highBidderPlayerId)}";
         }
+
+        RefreshBidButton();
+    }
+
+    private void Update()
+    {
+        RefreshBidButton();
+    }
+
+    private void RefreshBidButton()
+    {
+        if (bidButton == null)
+        {
+            return;
+        }
+
+        if (!UseLiveCommandMode())
+        {
+            bidButton.interactable = true;
+            return;
+        }
+
+        bidButton.interactable = gameplayCommandDispatcher != null
+            && gameplayCommandDispatcher.IsLiveBackend
+            && gameplayCommandDispatcher.IsBoundToIdentity
+            && gameplayCommandDispatcher.CanSendCommand(MonoJoeyTransportMessageTypes.PlaceBid, out _);
     }
 
     private IEnumerator PulseBidHighlightRoutine(string playerId)
@@ -294,5 +353,10 @@ public sealed class AuctionPanelController : MonoBehaviour
     private static string DisplayPlayerId(string playerId)
     {
         return string.IsNullOrWhiteSpace(playerId) ? "--" : playerId;
+    }
+
+    private bool UseLiveCommandMode()
+    {
+        return useLiveGameplayCommandDispatcher && gameplayCommandDispatcher != null;
     }
 }
