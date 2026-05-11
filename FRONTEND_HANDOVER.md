@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-7 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-8 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. Frontend validation uses local mock/read-only snapshot data only. Chunk 7 adds an optional live WebSocket transport, but live mode sends only `reconnect_session` and `get_snapshot`; no gameplay mutation request DTOs or calls were added.
+The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 8 keeps live backend use opt-in at runtime: normal live mode sends `reconnect_session` and bound `get_snapshot`; disabled-by-default `ExperimentalDebug` wrappers can send `roll_dice`, `end_turn`, and `place_bid` transport intents only when explicitly enabled, and never locally apply gameplay outcomes.
 
 ## Workflow Rule
 
@@ -101,6 +101,23 @@ The backend V1 surface remains frozen. Frontend validation uses local mock/read-
 - Extended `SnapshotHydrator.cs` with last hydration source/time observability only.
 - No backend protocol files, scenes, `ProjectSettings`, authority model, gameplay prediction, or gameplay mutation requests were changed.
 
+### Chunk 8: Live Backend Integration Validation
+
+- Extended `MonoJoeySessionClient.cs` with bound/unbound identity tracking, reconnect counts, last request timestamps, mode-safe transport switching, and mock fallback visibility.
+- Tightened live request behavior:
+  - connecting without `sessionId`/`playerId` leaves the socket connected and unbound, with no request sent,
+  - connecting with both ids sends `reconnect_session` first,
+  - `reconnect_result.payload.snapshot` must hydrate successfully before the client enters `BoundLive`,
+  - manual `get_snapshot` is allowed only after the socket is connected and bound to a hydrated identity,
+  - backend `error` envelopes are surfaced as errors with no local gameplay compensation.
+- Extended `SnapshotHydrator.cs` observability with last hydrated `snapshotVersion`, `sessionId`, `serverNowUtc`, selected player, tile, phase, and turn index. Authoritative hydration stops token movement before refreshing HUD, turn UI, auction, board, and token state.
+- Extended `MonoJoeyBackendMessageRouter.cs` with last message time, advisory sequence reporting, hydration-gated binding, and stale/out-of-order sequenced broadcast handling that still avoids incremental gameplay application.
+- Extended `MonoJoeyConnectionStatusController.cs` and `ConnectionStatusPanel.prefab` with runtime-only live controls for mode, URL, session id, player id, connect, disconnect, reconnect, and get snapshot. The status panel now renders mode, bound state, fallback warning, last request, last message, sequences, reconnect/request counters, snapshot observability, and backend error code/message.
+- Added disabled-by-default `MonoJoeySessionClient.ExperimentalDebug*` wrappers for `roll_dice`, `end_turn`, and `place_bid`. These wrappers are not wired into gameplay UI or default validation; they only send intent payloads when `enableExperimentalMutationRequests` is explicitly enabled.
+- Extended `AgenticTestRunner.cs` with Chunk 8 mock checks for default mock mode, missing identity connection, reconnect hydration observability, manual snapshot hydration, stale/out-of-order broadcast handling, disconnect/reconnect transitions, and zero default mutation requests.
+- Added an optional live backend smoke path in `AgenticTestRunner.cs`, disabled by default and requiring runtime URL/session/player values.
+- No backend files, scenes, `ProjectSettings`, gameplay prediction, local money/ownership mutation, turn-button mutation wiring, or backend protocol changes were added.
+
 ## Folder Structure
 
 Primary frontend assets:
@@ -145,6 +162,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - token movement along a mock path,
   - auction countdown/high-bidder visuals,
   - read-only backend transport routing and mock recovery,
+  - live backend binding/reconnect validation in mock mode,
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
@@ -196,6 +214,23 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `dotnet build Assembly-CSharp.csproj -v minimal` could not run because the local machine is missing the .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - A direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only existing serialized-field assignment warnings.
   - Unity batch validation was attempted with `Unity.exe -batchmode -quit -projectPath ...`; the log reached licensing/project-path setup and then exited before project load with return code 1. Existing Unity editor processes were active, so Play Mode `AgenticTestRunner` log confirmation was not available in this session.
+
+### Chunk 8 Runtime Notes
+
+- Expected Chunk 8 mock logs in `SampleScene` include:
+  - `Chunk 8 missing session/player connect` with connected/unbound state and `sentRequests=0`.
+  - `Chunk 8 mock transport connected/reconnect hydrated` with `BoundLive`, `reconnectHydrated=1`, and advisory sequence.
+  - `Chunk 8 reconnect observability` with snapshot version, session, server time, player, tile, phase, and turn.
+  - `Chunk 8 manual snapshot_result hydrated after reconnect`.
+  - `Chunk 8 stale/out-of-order sequenced broadcasts ignored/read-only refresh`.
+  - `Chunk 8 experimental mutation default guard` with zero experimental and mock mutation requests.
+  - `Chunk 8 disconnect transition` followed by `Chunk 8 reconnect transition`.
+- Optional live smoke is disabled by default. When runtime URL/session/player are provided and `runChunk8LiveBackendSmoke` is enabled, expected logs are connect/reconnecting, `reconnect_result` hydrated to `BoundLive`, optional `get_snapshot`, `snapshot_result` hydrated, disconnect to `Disconnected`, and reconnect back to `BoundLive`.
+- Authority boundary: backend snapshots and direct backend responses are recovery truth. Unity does not predict dice, money, ownership, auctions, or turn outcomes; stale/out-of-order broadcasts are never applied incrementally.
+- Validation results for this handoff:
+  - `dotnet build Assembly-CSharp.csproj -v minimal` still cannot run because the local machine is missing the .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
+  - Unity batch/play validation was not started because three existing `Unity` editor processes were already active for the local machine/project, so a clean project load was not available in this session.
 
 ## Optional Visual Polish
 
