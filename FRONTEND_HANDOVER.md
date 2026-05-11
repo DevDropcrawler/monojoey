@@ -62,6 +62,24 @@ The backend V1 surface remains frozen. All frontend validation uses local mock/r
   - `PlayerToken.prefab` now includes a wired `TokenAnimator`.
   - `TilePrefab.prefab` includes default `boardIndex: -1`.
 
+### Chunk 5: Read-Only Snapshot Hydration
+
+- Added `MonoJoeySnapshotModels.cs` with Unity `JsonUtility` DTOs for the authoritative backend snapshot shape, `snapshot_result`, `reconnect_result`, active auctions, board tiles, players, property states, and helper payload hints.
+- Added `SnapshotHydrator.cs` as a Unity-only adapter from backend-shaped snapshot JSON/DTOs into existing Chunk 1-4 display controllers.
+- Hydration behavior is read-only:
+  - selects the configured local player when present, otherwise a non-eliminated player, otherwise the first player,
+  - binds `HUDController.PlayerHudSnapshot` and `HUDController.TurnHudSnapshot`,
+  - calls `TurnController.BindHudSnapshot(...)` without starting turns, rolling dice, ending turns, or sending requests,
+  - binds or clears `AuctionPanelController` from `activeAuction`,
+  - binds board tile owner/index state from authoritative `board.tiles`,
+  - stops token animation and snaps `PlayerTokenController` to the authoritative `currentTileId`.
+- Updated `AuctionPanelController.BindPlayerBidRows(...)` to clear stale rows when a later snapshot has fewer bids or no active auction.
+- Extended `AgenticTestRunner.cs` with Chunk 5 validation snapshots:
+  - first backend-shaped JSON includes two players, turn flags, board ownership, one property state, active auction bids, and helper payload hints,
+  - second backend-shaped JSON sets `activeAuction: null`, omits helper payloads, changes ownership, and moves the local player token,
+  - new validation logs include `Read-only snapshot hydration; no backend mutation.`
+- No WebSocket client, request DTO, backend mutation, gameplay authority, scene edit, prefab edit, or `ProjectSettings` edit was added.
+
 ## Folder Structure
 
 Primary frontend assets:
@@ -80,7 +98,9 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     BoardTileController.cs
     DiceAnimator.cs
     HUDController.cs
+    MonoJoeySnapshotModels.cs
     PlayerTokenController.cs
+    SnapshotHydrator.cs
     TokenAnimator.cs
     TurnController.cs
 ```
@@ -109,6 +129,15 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `Chunk 4 turn debug log` containing start, roll, dice complete, movement complete, HUD refresh, and end-turn local-only entries.
 - `AgenticTestRunner` now chooses `InputSystemUIInputModule` by reflection when the Input System package is active, avoiding legacy input exceptions without changing `ProjectSettings`.
 - Backend freeze still applies: no WebSocket client, request DTO, protocol mutation, gameplay authority, scene edit, or `ProjectSettings` edit was added.
+
+### Chunk 5 Runtime Notes
+
+- Expected Chunk 5 logs in `SampleScene` include:
+  - `Chunk 5 hydrator configured` with HUD, turn, auction, token, animator, and board tile counts.
+  - `Chunk 5 first snapshot hydrated=True` with HUD money/loan/tile, turn phase/flags, active auction high bidder, tile ownership/index, and token snap details.
+  - `Chunk 5 second snapshot hydrated=True` with cleared auction id/high bid/high bidder, cleared helper payload counts, changed tile ownership, and token snapped to the replacement authoritative tile.
+- The Chunk 5 path only hydrates backend-shaped mock JSON. It does not call `RollDice`, submit bids, send backend mutation requests, or open a WebSocket connection.
+- Local compiler validation used Unity's bundled C# compiler against `Assembly-CSharp.csproj` plus the new snapshot scripts and passed with only existing serialized-field assignment warnings. Unity batch-mode play validation could not run in this session because the editor exited during licensing before project load.
 
 ## Optional Visual Polish
 
