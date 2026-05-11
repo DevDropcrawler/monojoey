@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-11 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-12 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes.
+The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states.
 
 ## Workflow Rule
 
@@ -277,6 +277,22 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `git diff --check` passed for the Chunk 11 script/prefab changes with only existing line-ending warnings.
   - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Direct Unity/Mono compiler validation could not be completed because this machine's standalone compiler reference set conflicted before project code compilation.
+  - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
+
+### Chunk 12 Runtime Notes
+
+- `MonoJoeyGameplayCommandDispatcher` now exposes command feedback state and a `CommandStateChanged` event: last direct result type/summary/time, backend error code/message, blocked command/reason, in-flight command, and waiting-for-authoritative-snapshot state.
+- Direct command results clear matching in-flight commands and set `IsWaitingForAuthoritativeSnapshot`; only `snapshot_result`, `reconnect_result`, backend error, disconnect/transport error, timeout, or a new command clears that waiting state.
+- `TurnController` now renders a compact command feedback text block on `TurnUIPrefab` for last command, in-flight command, direct result or backend error, authoritative-snapshot wait, current disabled reason, and active-auction status context.
+- Turn button disabled reasons are player-facing and remain intent-only: not connected, not bound, not local turn, missing prior turn step, already completed step, active auction for `end_turn`, or command in flight.
+- `AuctionPanelController` reuses its log text as bid feedback, exposes `LastBidFeedbackText`, and surfaces invalid amount, no active auction, not connected/bound/live, command in flight, and backend rejection/error messages. It still does not change auction high bid, money, ownership, or auction state from command success.
+- `MonoJoeyConnectionStatusController` command status now includes waiting-for-snapshot, latest blocked command/reason, direct result type, and backend command error details.
+- `MonoJoeyMockTransport` has a validation-only hook to hold canned command results so in-flight UI states can be observed deterministically.
+- `AgenticTestRunner` adds a Chunk 12 mock-live feedback pass after the Chunk 10 command flow. It logs normal `MockValidation` blocking, no-connection/unbound/not-local/turn-flag/active-auction/in-flight disabled reasons, bid feedback states, direct-result non-mutation before snapshot, snapshot-only UI hydration, and backend error visibility.
+- Validation results for this handoff:
+  - `git diff --check` passed with line-ending warnings only.
+  - Direct Roslyn compile using the Unity 6000.4.6f1 generated project references passed for all `Assets/Scripts/*.cs`, with serialized-field assignment warnings only.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
 
 ## Optional Visual Polish

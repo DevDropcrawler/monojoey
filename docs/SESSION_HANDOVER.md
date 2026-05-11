@@ -5,17 +5,30 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 11 - Lobby / Session Join UX
-- Completion status: Unity now has a runtime `SessionJoinPanel` for mock/live session connection setup, reconnect, disconnect, and get-snapshot recovery without gameplay authority or scene saves.
-- Branch: `main` tracking `origin/main`; code committed in `b2eae5f`, docs committed in the latest handover commit.
-- Previous commit: `fc288e6`
-- Last commit before this chunk: `fc288e6`
+- Chunk: 12 - Gameplay Command Feedback UX
+- Completion status: Unity now shows player-facing command feedback for gameplay intents, in-flight sends, direct results, backend errors, disabled reasons, bid feedback, and waiting-for-authoritative-snapshot state without local gameplay authority.
+- Branch: `main` tracking `origin/main`; implementation committed in `80f1fac`, docs committed in the latest handover commit.
+- Previous commit: `7d62c52`
+- Last commit before this chunk: `7d62c52`
 - Last commit after this chunk: latest handover commit
 - Date/time: 2026-05-11
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 12 Addendum
+
+- Unity frontend Chunk 12 added command feedback state to `MonoJoeyGameplayCommandDispatcher`: result type/summary/time, backend error code/message, waiting-for-authoritative-snapshot, blocked command/reason, and a `CommandStateChanged` event.
+- Direct command results now clear matching in-flight state and set waiting-for-authoritative-snapshot; waiting clears only on `snapshot_result`, `reconnect_result`, backend error, disconnect/transport error, timeout, or a new command.
+- `TurnController` now renders compact command feedback in `TurnUIPrefab`: last command, in-flight command, direct result or backend error, authoritative snapshot wait, disabled reason, and active-auction context.
+- Turn button disabled reasons are player-facing and remain intent-only: not connected, not bound, not local turn, missing prior turn step, already completed step, active auction for `end_turn`, or command in flight.
+- `AuctionPanelController` now reuses its existing log text for bid feedback, exposes `LastBidFeedbackText`, and surfaces invalid amount, no active auction, not connected/bound/live, command in flight, and backend rejection/error messages.
+- Command success still does not update HUD money, token tile, auction high bid, ownership, auction state, or turn flags; UI state changes only after explicit authoritative snapshot hydration.
+- `MonoJoeyConnectionStatusController` command status now includes waiting-for-snapshot, latest blocked command/reason, direct result type, and backend command error details.
+- `MonoJoeyMockTransport` gained a validation-only hold hook for command responses so in-flight button and bid feedback can be observed.
+- `AgenticTestRunner` now runs a Chunk 12 feedback pass after Chunk 10, covering normal `MockValidation` blocking, no-connection/unbound/not-local/turn-flag/active-auction/in-flight disabled reasons, bid feedback states, direct-result non-mutation, explicit snapshot hydration, and backend error visibility.
+- Validation: `git diff --check` passed with line-ending warnings only. Direct Roslyn compile using Unity 6000.4.6f1 generated references passed with serialized-field warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Unity batch/play validation was not started because three existing Unity editor processes were active.
 
 ## Frontend Chunk 11 Addendum
 
@@ -90,17 +103,15 @@ Not included by explicit user scope:
 
 ## Files Changed In This Chunk
 
-- `server-dotnet/MonoJoey.Server/GameEngine/GameState.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/LockupManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/PlayerTurnStateManager.cs`
-- `server-dotnet/MonoJoey.Server/GameEngine/TurnManager.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessageHandler.cs`
-- `server-dotnet/MonoJoey.Server/Realtime/LobbyMessages.cs`
-- `server-dotnet/MonoJoey.Server.Tests/Realtime/LobbyMessageHandlerTests.cs`
-- `docs/GAME_RULES_SPEC.md`
-- `docs/MULTIPLAYER_PROTOCOL.md`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Prefabs/TurnUIPrefab.prefab`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/AgenticTestRunner.cs`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/AuctionPanelController.cs`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyConnectionStatusController.cs`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyGameplayCommandDispatcher.cs`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/MonoJoeyMockTransport.cs`
+- `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/TurnController.cs`
+- `FRONTEND_HANDOVER.md`
 - `docs/SESSION_HANDOVER.md`
-- `docs/UNITY_INTEGRATION_CONTRACT.md`
 
 ## Previous Chunk Files
 
@@ -194,7 +205,9 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
-- Direct Roslyn compile of `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/*.cs` against Unity 6000.4.6f1/Mono runtime references.
+- `git diff --check`
+  - Result: succeeded with line-ending warnings only.
+- Direct Roslyn compile of `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/*.cs` using Unity 6000.4.6f1 generated project references.
   - Result: succeeded.
   - Output summary: compile passed with serialized-field assignment warnings only.
 - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal`
