@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-6 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-7 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. All frontend validation uses local mock/read-only snapshot data only; UI actions log local intent and visual state, but do not mutate or call real backend/server data.
+The backend V1 surface remains frozen. Frontend validation uses local mock/read-only snapshot data only. Chunk 7 adds an optional live WebSocket transport, but live mode sends only `reconnect_session` and `get_snapshot`; no gameplay mutation request DTOs or calls were added.
 
 ## Workflow Rule
 
@@ -89,6 +89,18 @@ The backend V1 surface remains frozen. All frontend validation uses local mock/r
 - Added a Chunk 6 mock live session update after the existing Chunk 5 two-snapshot validation. The live update changes HUD money/loan, turn phase/flags, token authoritative tile, board ownership, and active auction high bidder/high bid rows.
 - No prefab structure, scene file, backend code, or `ProjectSettings` change was required.
 
+### Chunk 7: Read-Only Backend Transport Layer
+
+- Added `MonoJoeyTransportMessages.cs` with read-only transport enums, server/error envelope DTOs, and `reconnect_session`/`get_snapshot` request DTOs only.
+- Added `MonoJoeyWebSocketTransport.cs`, a thin `ClientWebSocket` wrapper for `/ws` that connects, sends complete JSON text messages, receives complete text messages, and dispatches events back on Unity's main thread.
+- Added `MonoJoeyMockTransport.cs`, a deterministic runtime mock transport for Agentic validation. It responds to read-only reconnect/snapshot requests, emits canned errors and broadcasts, and records any forbidden gameplay mutation request type.
+- Added `MonoJoeyBackendMessageRouter.cs` to route `snapshot_result` and `reconnect_result` through `SnapshotHydrator`, record advisory event sequence state, log backend `error` envelopes, ignore unknown messages, and ignore sequenced gameplay broadcasts without applying incremental gameplay state.
+- Added `MonoJoeySessionClient.cs` as the runtime coordinator for `MockValidation` and `LiveBackend` modes. Public request methods are read-only: `Connect()`, `Disconnect()`, `RequestSnapshot()`, and `ReconnectSession()`.
+- Added `MonoJoeyConnectionStatusController.cs` and `ConnectionStatusPanel.prefab` for presentation-only transport status fields.
+- Extended `AgenticTestRunner.cs` with Chunk 7 mock transport validation after Chunk 6 hydration validation.
+- Extended `SnapshotHydrator.cs` with last hydration source/time observability only.
+- No backend protocol files, scenes, `ProjectSettings`, authority model, gameplay prediction, or gameplay mutation requests were changed.
+
 ## Folder Structure
 
 Primary frontend assets:
@@ -97,6 +109,7 @@ Primary frontend assets:
 client-unity/MonoJoey_UnityFrontend/Assets/
   Prefabs/
     AuctionPanel.prefab
+    ConnectionStatusPanel.prefab
     HUDPrefab.prefab
     PlayerToken.prefab
     TilePrefab.prefab
@@ -107,7 +120,13 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     BoardTileController.cs
     DiceAnimator.cs
     HUDController.cs
+    MonoJoeyBackendMessageRouter.cs
+    MonoJoeyConnectionStatusController.cs
+    MonoJoeyMockTransport.cs
+    MonoJoeySessionClient.cs
     MonoJoeySnapshotModels.cs
+    MonoJoeyTransportMessages.cs
+    MonoJoeyWebSocketTransport.cs
     PlayerTokenController.cs
     SnapshotHydrator.cs
     TokenAnimator.cs
@@ -125,6 +144,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - HUD player/turn snapshot display,
   - token movement along a mock path,
   - auction countdown/high-bidder visuals,
+  - read-only backend transport routing and mock recovery,
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
@@ -159,6 +179,23 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `Chunk 6 mock session update hydrated=True` with before/after HUD money/loan, turn phase, token tile/index/position, auction high bidder/high bid, and auction tile ownership.
 - The mock live update uses `RefreshFromLiveSessionSnapshotJson(...)` against backend-shaped local JSON. It remains read-only and does not call backend networking, `RollDice`, auction submit, scene saves, or `ProjectSettings` edits.
 - Local compiler validation used the .NET SDK compiler with Unity runtime references and passed with only existing serialized-field assignment warnings. Unity batch-mode validation was attempted, but existing Unity editor processes prevented a fresh batch log from being produced in this session.
+
+### Chunk 7 Runtime Notes
+
+- Expected Chunk 7 logs in `SampleScene` include:
+  - `Chunk 7 mock transport connected`.
+  - `reconnect_result routed to SnapshotHydrator` and `Chunk 7 mock transport connected` with `reconnectHydrated=1`.
+  - `snapshot_result routed to SnapshotHydrator` and `Chunk 7 snapshot_result hydrated through SnapshotHydrator`.
+  - `backend error envelope` with `mock_backend_error`.
+  - `Sequenced broadcast ignored` and a debounced read-only `get_snapshot` when bound.
+  - `Chunk 7 connection status updated`.
+  - `Chunk 7 no gameplay mutation request sent`.
+- Live backend mode uses `MonoJoeyWebSocketTransport` only. If `sessionId` and `playerId` are set, connect sends `reconnect_session`; otherwise it remains connected/unbound and sends no request. Auto-reconnect hydrates from `reconnect_result.payload.snapshot` and does not replay missed events.
+- Mock fallback in live mode is disabled unless `allowMockFallbackOnLiveFailure` is explicitly enabled; when enabled it logs that the UI is no longer live backend state.
+- Validation results for this handoff:
+  - `dotnet build Assembly-CSharp.csproj -v minimal` could not run because the local machine is missing the .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - A direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only existing serialized-field assignment warnings.
+  - Unity batch validation was attempted with `Unity.exe -batchmode -quit -projectPath ...`; the log reached licensing/project-path setup and then exited before project load with return code 1. Existing Unity editor processes were active, so Play Mode `AgenticTestRunner` log confirmation was not available in this session.
 
 ## Optional Visual Polish
 
