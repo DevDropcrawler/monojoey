@@ -6,6 +6,10 @@ Frontend Chunks 1-4 are implemented in the Unity project at `client-unity/MonoJo
 
 The backend V1 surface remains frozen. All frontend validation uses local mock/read-only snapshot data only; UI actions log local intent and visual state, but do not mutate or call real backend/server data.
 
+## Workflow Rule
+
+- After each frontend chunk is implemented, validated, committed, and handover updated, push to origin/main unless explicitly told not to.
+
 ## Completed Chunks
 
 ### Chunk 1: Auction and Player Token Foundation
