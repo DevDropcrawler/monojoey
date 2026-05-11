@@ -5,17 +5,29 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 14 - Usable Live Session Entry UX
-- Completion status: Unity now has a frontend-only live session entry/status layer around reconnect and snapshot hydration, with paste-friendly existing-session fields, live URL validation, runtime-only form memory, bound/unbound status, and authoritative snapshot/player display.
-- Branch: `main` tracking `origin/main`; implementation committed in `a77f15d`, docs committed in the latest handover commit.
-- Previous commit: `d4106c2`
-- Last commit before this chunk: `d4106c2`
-- Last commit after this chunk: latest handover commit
+- Chunk: 15 - Real Live Smoke Execution Helper
+- Completion status: Unity now has a frontend-only live smoke helper attached to `SessionJoinPanel.prefab`, reusing live session entry values to run one explicitly clicked `roll_dice` smoke with lock/cooldown gates, bounded connect/reconnect/snapshot orchestration, pre-command safety blocking, post-roll authoritative snapshot validation, and a clipboard-ready report.
+- Branch: `main` tracking `origin/main`; implementation is pending commit in this workspace.
+- Previous commit: `a77f15d`
+- Last commit before this chunk: `a77f15d`
+- Last commit after this chunk: pending
 - Date/time: 2026-05-12
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 15 Addendum
+
+- Added `LiveSmokeExecutionHelper.cs` and attached it to `SessionJoinPanel.prefab`. It creates runtime controls for readiness, `Run Live Smoke Once`, optional `Cancel/Cleanup`, `Copy Report`, progress, and a short plain-text report.
+- `SessionJoinController` remains entry/status-focused and now exposes read-only accessors for `SessionClient`, `MessageRouter`, `SnapshotHydrator`, `Context`, and current form identity/mode values.
+- The helper observes only `MonoJoeySessionClient`, `MonoJoeyBackendMessageRouter`, `SnapshotHydrator`, `LiveSessionContext`, and `MonoJoeyGameplayCommandDispatcher`. It does not reference `TurnController`, `AuctionPanelController`, `HUDController`, or `PlayerTokenController`, and does not mutate gameplay presentation state.
+- Run behavior is one click, one bounded smoke: connect once if disconnected, reconnect once if connected but unbound, use/request one authoritative snapshot once bound, send at most one `roll_dice`, wait for direct `roll_result`, then wait for authoritative `snapshot_result` and validate post-roll state.
+- Safety gates before `roll_dice` require live backend mode, no mock fallback, valid `/ws` URL, session/player identity, connected and `BoundLive`, matching successful hydration, non-completed game, local player present and active, local current turn, no active auction, turn not already rolled, dispatcher configured and idle, and no backend/transport error.
+- Blocked states stop before command with explicit labels including `blocked:not_local_turn`, `blocked:active_auction`, `blocked:turn_already_rolled`, and `blocked:phase`. Timeout, disconnect, backend error, missing snapshot, direct mismatch, and snapshot mismatch all release the run lock through cleanup.
+- The report includes UTC, result/failure, URL/session/player, transport state, snapshot version/session/phase/game status, turn index/current player/flags, auction summary, command/direct result, direct/snapshot/reconnect/gameplay counters, and last backend error. It intentionally omits raw full snapshot JSON.
+- `AgenticTestRunner` now runs Chunk 15 mock validation for normal `MockValidation` rejection, duplicate start rejection while running, immediate cooldown rejection, timeout cleanup lock release, validation-bound mock live connect/reconnect hydration, wrong-turn and active-auction pre-command blocks, exactly one `roll_dice`, no resolve/execute/end-turn/bid, and non-empty report fields.
+- Validation: `git diff --check` passed with line-ending warnings only. Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed for `Assets/Scripts/*.cs` with serialized-field warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Unity MCP/runtime validation was unavailable, so Play Mode object checks were not run. Live backend execution was not run because no real backend session/player values were provided.
 
 ## Frontend Chunk 14 Addendum
 
