@@ -5,17 +5,28 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 10 - Playable Turn UI Command Flow
-- Completion status: Unity turn controls now send live/mock-test command intents for roll, resolve tile, execute tile, and end turn from authoritative hydration gates; auction bid live gating was tightened while preserving snapshot authority.
-- Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `cd9e2ee`
-- Last commit before this chunk: `cd9e2ee`
-- Last commit after this chunk: not committed yet
+- Chunk: 11 - Lobby / Session Join UX
+- Completion status: Unity now has a runtime `SessionJoinPanel` for mock/live session connection setup, reconnect, disconnect, and get-snapshot recovery without gameplay authority or scene saves.
+- Branch: `main` tracking `origin/main`; code committed in `b2eae5f`, docs committed in the latest handover commit.
+- Previous commit: `fc288e6`
+- Last commit before this chunk: `fc288e6`
+- Last commit after this chunk: latest handover commit
 - Date/time: 2026-05-11
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 11 Addendum
+
+- Unity frontend Chunk 11 added `SessionJoinPanel.prefab` and `SessionJoinController.cs` for manual mock/live session testing.
+- The panel collects backend URL, session ID, player ID, and mode (`MockValidation` / `LiveBackend`) and exposes `Connect`, `Disconnect`, `Reconnect`, and `Get Snapshot`.
+- Button gating blocks empty inputs, requires a connected transport for reconnect, requires a bound hydrated identity for snapshot, and displays connected/unbound/bound/error status.
+- The panel does not reference the gameplay dispatcher and sends no gameplay command or mutation request; it only calls `MonoJoeySessionClient` connection/recovery methods.
+- `AgenticTestRunner` now instantiates the panel at runtime and validates empty-input blocking, valid mock connect/hydration, manual snapshot, reconnect, disconnect state updates, and zero gameplay mutation requests.
+- Optional Chunk 11 live smoke is disabled by default and requires URL/session/player values before connecting to a real backend.
+- Scenes still should not be saved; the panel is runtime-instantiated for validation and no `ProjectSettings` edits were made.
+- Validation: `git diff --check` passed with line-ending warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Direct Unity/Mono compiler validation could not complete because the local standalone compiler reference set conflicted before project code compilation. Unity batch/play validation was not started because three existing Unity editor processes were active.
 
 ## Frontend Chunk 10 Addendum
 

@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-8 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-11 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 8 keeps live backend use opt-in at runtime: normal live mode sends `reconnect_session` and bound `get_snapshot`; disabled-by-default `ExperimentalDebug` wrappers can send `roll_dice`, `end_turn`, and `place_bid` transport intents only when explicitly enabled, and never locally apply gameplay outcomes.
+The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes.
 
 ## Workflow Rule
 
@@ -129,6 +129,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     ConnectionStatusPanel.prefab
     HUDPrefab.prefab
     PlayerToken.prefab
+    SessionJoinPanel.prefab
     TilePrefab.prefab
     TurnUIPrefab.prefab
   Scripts/
@@ -146,6 +147,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     MonoJoeyTransportMessages.cs
     MonoJoeyWebSocketTransport.cs
     PlayerTokenController.cs
+    SessionJoinController.cs
     SnapshotHydrator.cs
     TokenAnimator.cs
     TurnController.cs
@@ -164,6 +166,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - auction countdown/high-bidder visuals,
   - read-only backend transport routing and mock recovery,
   - live backend binding/reconnect validation in mock mode,
+  - session join panel field validation, button gating, reconnect, disconnect, and snapshot recovery,
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
@@ -260,6 +263,21 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Direct Roslyn compile against Unity/Mono runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
   - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` is still blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Unity batch/play validation was not started because three existing `Unity` editor processes were already active, blocking a clean project load.
+
+### Chunk 11 Runtime Notes
+
+- Added `SessionJoinPanel.prefab` and `SessionJoinController.cs` as a focused runtime-only connection panel for manual live/mock session testing.
+- The panel exposes backend URL, session ID, player ID, mode selection (`MockValidation` / `LiveBackend`), and `Connect`, `Disconnect`, `Reconnect`, and `Get Snapshot` buttons.
+- Button gating is based on validated fields plus `MonoJoeySessionClient` state: empty inputs block connect, reconnect requires a connected transport and identity, and get snapshot requires a bound hydrated identity.
+- The panel does not reference `MonoJoeyGameplayCommandDispatcher` and never sends gameplay commands. It only applies form values to `MonoJoeySessionClient` and calls connection/recovery methods.
+- `AgenticTestRunner` now instantiates `SessionJoinPanel` at runtime and validates empty-input blocking, valid mock connect/hydration, manual snapshot, reconnect, disconnect state updates, and zero gameplay mutation requests.
+- Optional Chunk 11 live smoke is disabled by default and requires URL/session/player values before connecting to a real backend.
+- Scenes still should not be saved; the panel is instantiated by runtime validation and can be manually placed later only when scene ownership is explicitly in scope.
+- Validation results for this handoff:
+  - `git diff --check` passed for the Chunk 11 script/prefab changes with only existing line-ending warnings.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Direct Unity/Mono compiler validation could not be completed because this machine's standalone compiler reference set conflicted before project code compilation.
+  - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
 
 ## Optional Visual Polish
 
