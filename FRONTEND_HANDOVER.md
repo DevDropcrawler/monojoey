@@ -2,9 +2,9 @@
 
 ## Summary
 
-Frontend Chunks 1-13 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-14 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
-The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states. Chunk 13 adds a disabled-by-default live gameplay smoke harness that uses the existing WebSocket transport, backend router, snapshot hydrator, and gameplay dispatcher for one bounded backend-authoritative pass.
+The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states. Chunk 13 adds a disabled-by-default live gameplay smoke harness that uses the existing WebSocket transport, backend router, snapshot hydrator, and gameplay dispatcher for one bounded backend-authoritative pass. Chunk 14 adds a frontend-only live session entry/status layer around reconnect and snapshot hydration so humans can paste existing backend/session/player values and inspect connected, bound, phase/status, turn, and player-list state.
 
 ## Workflow Rule
 
@@ -141,6 +141,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     MonoJoeyBackendMessageRouter.cs
     MonoJoeyConnectionStatusController.cs
     MonoJoeyGameplayCommandDispatcher.cs
+    LiveSessionContext.cs
     MonoJoeyMockTransport.cs
     MonoJoeySessionClient.cs
     MonoJoeySnapshotModels.cs
@@ -167,6 +168,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - read-only backend transport routing and mock recovery,
   - live backend binding/reconnect validation in mock mode,
   - session join panel field validation, button gating, reconnect, disconnect, and snapshot recovery,
+  - live session entry status, URL validation, runtime-only form memory, and snapshot player markers,
   - optional live gameplay smoke validation through the real backend transport/dispatcher,
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
@@ -311,6 +313,21 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Direct Roslyn compile using the Unity 6000.4.6f1 generated project references passed for `Assets/Scripts/*.cs`; the local Unity source generators emitted analyzer-load warnings, but no project code errors.
   - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Live backend execution was not run because no real backend session/player values were provided in this coding session.
+
+### Chunk 14 Runtime Notes
+
+- Added `LiveSessionContext.cs` as a runtime-only read model for the session join panel. It mirrors backend URL, session ID, player ID, selected mode, transport connected state, bound/unbound state, latest hydrated snapshot identity, phase/status/game status, current turn player, selected/local player, and display-only player rows.
+- `SessionJoinController` now renders clearer mode labels (`Mock validation` and `Live backend (/ws)`), defaults empty live URLs to `ws://127.0.0.1:5000/ws`, remembers the last entered URL/session/player/mode only in static runtime memory for the current play session, and creates single-line paste-friendly inputs with small copy/paste buttons.
+- Live validation now requires `ws://` or `wss://` and a `/ws` path. Empty session/player errors explicitly state that an existing in-game session/player is required and that the panel does not create sessions or players.
+- The panel now displays connected/bound/unbound state, current URL/session/player, last request/message, snapshot phase/status/game status/current turn/local player, and snapshot player rows. Player rows mark `[local]` and `[turn]` from authoritative snapshot fields only, including cases where they differ.
+- Safety boundary remains unchanged: the join/status UI does not reference `MonoJoeyGameplayCommandDispatcher`, does not create sessions or lobbies, and only calls `Connect`, `Disconnect`, `ReconnectSession`, and `RequestSnapshot`.
+- `AgenticTestRunner` adds a Chunk 14 mock validation pass for empty-input blocking, invalid live scheme/path blocking, live default URL population, mock connect context, snapshot player rendering, local/current-turn markers, and zero gameplay mutation/command requests.
+- Validation results for this handoff:
+  - `git diff --check` passed with line-ending warnings only.
+  - Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed after adding `LiveSessionContext.cs` explicitly to the generated response-file invocation; Unity source generators emitted analyzer-load warnings only.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Unity batch/play validation was not started because three existing `Unity` editor processes were active, blocking a clean project load.
+  - Code commit: `a77f15d`.
 
 ## Optional Visual Polish
 

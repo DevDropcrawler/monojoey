@@ -5,17 +5,27 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 13 - Live Gameplay Smoke-Test Harness
-- Completion status: Unity now has a disabled-by-default live gameplay smoke harness that validates one bounded backend-authoritative pass through the existing live transport, router, snapshot hydrator, UI gating, and gameplay dispatcher.
-- Branch: `main` tracking `origin/main`; implementation committed in `2a04ca2`, docs committed in the latest handover commit.
-- Previous commit: `80f1fac`
-- Last commit before this chunk: `80f1fac`
+- Chunk: 14 - Usable Live Session Entry UX
+- Completion status: Unity now has a frontend-only live session entry/status layer around reconnect and snapshot hydration, with paste-friendly existing-session fields, live URL validation, runtime-only form memory, bound/unbound status, and authoritative snapshot/player display.
+- Branch: `main` tracking `origin/main`; implementation committed in `a77f15d`, docs committed in the latest handover commit.
+- Previous commit: `d4106c2`
+- Last commit before this chunk: `d4106c2`
 - Last commit after this chunk: latest handover commit
-- Date/time: 2026-05-11
+- Date/time: 2026-05-12
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 14 Addendum
+
+- Added `LiveSessionContext.cs`, a runtime-only read model for backend URL, session ID, player ID, mode, connected state, bound/unbound state, latest hydrated snapshot identity, snapshot status/game status/phase, current turn player, selected/local player, and display-only player rows.
+- `SessionJoinController` now uses clearer mode labels (`Mock validation` and `Live backend (/ws)`), defaults empty live URLs to `ws://127.0.0.1:5000/ws`, keeps last entered URL/session/player/mode only in static runtime memory, and creates single-line copy/paste-friendly inputs.
+- Live URL validation now requires `ws://` or `wss://` and path `/ws`. Empty session/player validation states that an existing in-game session/player is required and that the panel does not create sessions or players.
+- The runtime panel displays connection/bound state, current identity, last request/message, snapshot phase/status/game status/current turn/local player, and players from the latest authoritative snapshot. `[local]` and `[turn]` markers are derived only from snapshot/configured identity fields.
+- Safety boundary is unchanged: the join/status UI does not reference `MonoJoeyGameplayCommandDispatcher`, does not create sessions/lobbies, and calls only `Connect`, `Disconnect`, `ReconnectSession`, and `RequestSnapshot`.
+- `AgenticTestRunner` now runs a Chunk 14 validation pass for empty-input blocking, invalid live scheme/path blocking, default live URL population, mock connect context, snapshot player rendering, differing local/current-turn markers, and zero gameplay mutation/command requests.
+- Validation: `git diff --check` passed with line-ending warnings only. Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed after adding `LiveSessionContext.cs` explicitly to the response-file invocation; Unity source-generator analyzer-load warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Unity batch/play validation was not started because three existing Unity editor processes were active.
 
 ## Frontend Chunk 13 Addendum
 
