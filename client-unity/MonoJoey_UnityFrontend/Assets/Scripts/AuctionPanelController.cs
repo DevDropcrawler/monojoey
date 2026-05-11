@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -41,6 +42,14 @@ public sealed class AuctionPanelController : MonoBehaviour
                 highlightImage.color = highlighted ? highlightedColor : normalColor;
             }
         }
+
+        public void SetPulseAmount(float amount)
+        {
+            if (highlightImage != null)
+            {
+                highlightImage.color = Color.Lerp(normalColor, highlightedColor, Mathf.Clamp01(amount));
+            }
+        }
     }
 
     public readonly struct BidRequest
@@ -72,6 +81,13 @@ public sealed class AuctionPanelController : MonoBehaviour
     [SerializeField] private Text highBidderText;
     [SerializeField] private Text logText;
 
+    [Header("UI Animation")]
+    [SerializeField] private Image timerHighlightImage;
+    [SerializeField] private Image highBidderPulseImage;
+    [SerializeField] private Color calmTimerColor = new Color(0.20f, 0.55f, 0.85f, 0.35f);
+    [SerializeField] private Color urgentTimerColor = new Color(0.95f, 0.24f, 0.18f, 0.75f);
+    [SerializeField] private float countdownPulseSeconds = 0.35f;
+
     public event Action<BidRequest> BidRequested;
 
     public string AuctionId => auctionId;
@@ -81,6 +97,8 @@ public sealed class AuctionPanelController : MonoBehaviour
     public float RemainingSeconds => remainingSeconds;
     public BidRequest? LastBidRequest { get; private set; }
 
+    private Coroutine highBidderPulseCoroutine;
+
     private void Awake()
     {
         if (bidButton != null)
@@ -89,6 +107,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         }
 
         RefreshSnapshotText();
+        AnimateCountdownHighlight(remainingSeconds, 30f);
     }
 
     private void OnDestroy()
@@ -113,6 +132,8 @@ public sealed class AuctionPanelController : MonoBehaviour
         remainingSeconds = Mathf.Max(0f, snapshotRemainingSeconds);
 
         RefreshSnapshotText();
+        AnimateCountdownHighlight(remainingSeconds, 30f);
+        PulseBidHighlight(highBidderPlayerId);
     }
 
     public void BindPlayerBidRows(IReadOnlyList<string> playerIds, IReadOnlyList<int> bids)
@@ -137,6 +158,33 @@ public sealed class AuctionPanelController : MonoBehaviour
                 return;
             }
         }
+    }
+
+    public void AnimateCountdownHighlight(float remainingSeconds, float totalSeconds)
+    {
+        if (timerHighlightImage == null)
+        {
+            return;
+        }
+
+        float normalizedRemaining = totalSeconds <= 0f ? 0f : Mathf.Clamp01(remainingSeconds / totalSeconds);
+        float urgency = 1f - normalizedRemaining;
+        timerHighlightImage.color = Color.Lerp(calmTimerColor, urgentTimerColor, urgency);
+    }
+
+    public void PulseBidHighlight(string playerId)
+    {
+        if (string.IsNullOrWhiteSpace(playerId) && highBidderPulseImage == null)
+        {
+            return;
+        }
+
+        if (highBidderPulseCoroutine != null)
+        {
+            StopCoroutine(highBidderPulseCoroutine);
+        }
+
+        highBidderPulseCoroutine = StartCoroutine(PulseBidHighlightRoutine(playerId));
     }
 
     public void AppendLog(string message)
@@ -189,6 +237,53 @@ public sealed class AuctionPanelController : MonoBehaviour
         {
             highBidderText.text = $"High Bidder: {DisplayPlayerId(highBidderPlayerId)}";
         }
+    }
+
+    private IEnumerator PulseBidHighlightRoutine(string playerId)
+    {
+        PlayerBidRow pulsedRow = FindPlayerRow(playerId);
+        Color originalPulseColor = highBidderPulseImage == null ? Color.clear : highBidderPulseImage.color;
+        Color pulseColor = new Color(0.95f, 0.78f, 0.24f, 0.55f);
+        float duration = Mathf.Max(0.05f, countdownPulseSeconds);
+
+        for (float elapsed = 0f; elapsed < duration; elapsed += Time.deltaTime)
+        {
+            float t = Mathf.Clamp01(elapsed / duration);
+            float pulse = Mathf.Sin(t * Mathf.PI);
+
+            if (highBidderPulseImage != null)
+            {
+                highBidderPulseImage.color = Color.Lerp(originalPulseColor, pulseColor, pulse);
+            }
+
+            pulsedRow?.SetPulseAmount(pulse);
+            yield return null;
+        }
+
+        if (highBidderPulseImage != null)
+        {
+            highBidderPulseImage.color = originalPulseColor;
+        }
+
+        if (pulsedRow != null)
+        {
+            pulsedRow.SetHighlighted(pulsedRow.PlayerId == activePlayerId || pulsedRow.PlayerId == highBidderPlayerId);
+        }
+
+        highBidderPulseCoroutine = null;
+    }
+
+    private PlayerBidRow FindPlayerRow(string playerId)
+    {
+        foreach (PlayerBidRow row in playerRows)
+        {
+            if (row.PlayerId == playerId)
+            {
+                return row;
+            }
+        }
+
+        return null;
     }
 
     private static string DisplayPlayerId(string playerId)
