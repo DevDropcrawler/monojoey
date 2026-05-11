@@ -14,6 +14,7 @@ public sealed class TurnController : MonoBehaviour
     [SerializeField] private Button executeButton;
     [SerializeField] private Button endTurnButton;
     [SerializeField] private Image[] diceImages;
+    [SerializeField] private Text commandFeedbackText;
     [SerializeField] private Text debugLog;
 
     [Header("Mock Turn Orchestration")]
@@ -68,6 +69,7 @@ public sealed class TurnController : MonoBehaviour
     public string LastExecuteBlockedReason => lastExecuteBlockedReason;
     public string LastEndTurnBlockedReason => lastEndTurnBlockedReason;
     public string DebugLogText => debugLog == null ? "" : debugLog.text;
+    public string CommandFeedbackText => commandFeedbackText == null ? "" : commandFeedbackText.text;
 
     private void Awake()
     {
@@ -97,11 +99,14 @@ public sealed class TurnController : MonoBehaviour
             endTurnButton.onClick.AddListener(EndTurn);
         }
 
+        SubscribeDispatcherFeedback();
         RefreshUi();
     }
 
     private void OnDestroy()
     {
+        UnsubscribeDispatcherFeedback();
+
         if (rollButton != null)
         {
             rollButton.onClick.RemoveListener(RollDice);
@@ -144,8 +149,10 @@ public sealed class TurnController : MonoBehaviour
 
     public void ConfigureLiveGameplayCommandDispatcher(MonoJoeyGameplayCommandDispatcher dispatcher, string validationLocalPlayerId)
     {
+        UnsubscribeDispatcherFeedback();
         gameplayCommandDispatcher = dispatcher;
         useLiveGameplayCommandDispatcher = dispatcher != null;
+        SubscribeDispatcherFeedback();
 
         if (!string.IsNullOrWhiteSpace(validationLocalPlayerId))
         {
@@ -466,7 +473,12 @@ public sealed class TurnController : MonoBehaviour
 
         if (lastSnapshot.HasRolledThisTurn)
         {
-            reason = "authoritative snapshot says the local player already rolled";
+            reason = "already rolled";
+            return false;
+        }
+
+        if (!CanSendLiveTurnCommand(MonoJoeyTransportMessageTypes.RollDice, out reason))
+        {
             return false;
         }
 
@@ -483,13 +495,18 @@ public sealed class TurnController : MonoBehaviour
 
         if (!lastSnapshot.HasRolledThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not rolled";
+            reason = "roll first";
             return false;
         }
 
         if (lastSnapshot.HasResolvedTileThisTurn)
         {
-            reason = "authoritative snapshot says the local player already resolved the tile";
+            reason = "tile already resolved";
+            return false;
+        }
+
+        if (!CanSendLiveTurnCommand(MonoJoeyTransportMessageTypes.ResolveTile, out reason))
+        {
             return false;
         }
 
@@ -506,19 +523,24 @@ public sealed class TurnController : MonoBehaviour
 
         if (!lastSnapshot.HasRolledThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not rolled";
+            reason = "roll first";
             return false;
         }
 
         if (!lastSnapshot.HasResolvedTileThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not resolved the tile";
+            reason = "resolve tile first";
             return false;
         }
 
         if (lastSnapshot.HasExecutedTileThisTurn)
         {
-            reason = "authoritative snapshot says the local player already executed the tile";
+            reason = "tile already executed";
+            return false;
+        }
+
+        if (!CanSendLiveTurnCommand(MonoJoeyTransportMessageTypes.ExecuteTile, out reason))
+        {
             return false;
         }
 
@@ -535,25 +557,30 @@ public sealed class TurnController : MonoBehaviour
 
         if (!lastSnapshot.HasRolledThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not rolled";
+            reason = "roll first";
             return false;
         }
 
         if (!lastSnapshot.HasResolvedTileThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not resolved the tile";
+            reason = "resolve tile first";
             return false;
         }
 
         if (!lastSnapshot.HasExecutedTileThisTurn)
         {
-            reason = "authoritative snapshot says the local player has not executed the tile";
+            reason = "execute tile first";
             return false;
         }
 
         if (hasActiveAuctionFromHydration)
         {
-            reason = "authoritative snapshot still has an active auction";
+            reason = "active auction must finish first";
+            return false;
+        }
+
+        if (!CanSendLiveTurnCommand(MonoJoeyTransportMessageTypes.EndTurn, out reason))
+        {
             return false;
         }
 
@@ -563,6 +590,7 @@ public sealed class TurnController : MonoBehaviour
 
     private bool CanUseLiveTurnCommand(string requestType, out string reason)
     {
+        _ = requestType;
         if (gameplayCommandDispatcher == null)
         {
             reason = "live command dispatcher is not configured";
@@ -571,13 +599,19 @@ public sealed class TurnController : MonoBehaviour
 
         if (!gameplayCommandDispatcher.IsGameplayCommandModeAvailable)
         {
-            reason = "session is not in LiveBackend mode or dispatcher test mode";
+            reason = "not connected to a live gameplay session";
+            return false;
+        }
+
+        if (!gameplayCommandDispatcher.IsTransportConnected)
+        {
+            reason = "not connected";
             return false;
         }
 
         if (!gameplayCommandDispatcher.IsBoundToIdentity)
         {
-            reason = "session is not bound to a hydrated identity";
+            reason = "not bound to session/player";
             return false;
         }
 
@@ -589,7 +623,25 @@ public sealed class TurnController : MonoBehaviour
 
         if (!string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal))
         {
-            reason = $"current player {DisplayText(lastSnapshot.CurrentPlayerId, "--")} is not local player {DisplayText(localPlayerId, "--")}";
+            reason = $"not local turn: current player {DisplayText(lastSnapshot.CurrentPlayerId, "--")}";
+            return false;
+        }
+
+        reason = "";
+        return true;
+    }
+
+    private bool CanSendLiveTurnCommand(string requestType, out string reason)
+    {
+        if (gameplayCommandDispatcher == null)
+        {
+            reason = "live command dispatcher is not configured";
+            return false;
+        }
+
+        if (gameplayCommandDispatcher.IsCommandInFlight)
+        {
+            reason = $"command in flight: {DisplayText(gameplayCommandDispatcher.InFlightRequestType, "--")}";
             return false;
         }
 
@@ -639,6 +691,8 @@ public sealed class TurnController : MonoBehaviour
         {
             endTurnButton.interactable = CanEndTurnForUi();
         }
+
+        RefreshCommandFeedbackText();
     }
 
     private bool CanRollForUi()
@@ -813,6 +867,129 @@ public sealed class TurnController : MonoBehaviour
     private bool UseLiveCommandMode()
     {
         return useLiveGameplayCommandDispatcher && gameplayCommandDispatcher != null;
+    }
+
+    private void SubscribeDispatcherFeedback()
+    {
+        if (gameplayCommandDispatcher != null)
+        {
+            gameplayCommandDispatcher.CommandStateChanged += HandleCommandStateChanged;
+        }
+    }
+
+    private void UnsubscribeDispatcherFeedback()
+    {
+        if (gameplayCommandDispatcher != null)
+        {
+            gameplayCommandDispatcher.CommandStateChanged -= HandleCommandStateChanged;
+        }
+    }
+
+    private void HandleCommandStateChanged()
+    {
+        RefreshUi();
+    }
+
+    private void RefreshCommandFeedbackText()
+    {
+        if (commandFeedbackText == null)
+        {
+            return;
+        }
+
+        if (!UseLiveCommandMode())
+        {
+            commandFeedbackText.text = "Command: mock/read-only";
+            return;
+        }
+
+        List<string> lines = new List<string>();
+        string lastCommand = DisplayText(gameplayCommandDispatcher.LastCommandRequestType, "--");
+        string lastRequestId = DisplayText(gameplayCommandDispatcher.LastCommandLocalRequestId, "--");
+        lines.Add($"Last: {lastCommand} id={lastRequestId}");
+
+        if (gameplayCommandDispatcher.IsCommandInFlight)
+        {
+            lines.Add($"In flight: {DisplayText(gameplayCommandDispatcher.InFlightRequestType, "--")} id={DisplayText(gameplayCommandDispatcher.InFlightLocalRequestId, "--")}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandResultSummary))
+        {
+            lines.Add($"Result: {gameplayCommandDispatcher.LastCommandResultSummary}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandError))
+        {
+            lines.Add($"Error: {gameplayCommandDispatcher.LastCommandError}");
+        }
+
+        if (gameplayCommandDispatcher.IsWaitingForAuthoritativeSnapshot)
+        {
+            lines.Add("Waiting: authoritative snapshot");
+        }
+
+        string disabledReason = CurrentDisabledReason();
+        if (!string.IsNullOrWhiteSpace(disabledReason))
+        {
+            lines.Add($"Disabled: {disabledReason}");
+        }
+
+        if (hasActiveAuctionFromHydration)
+        {
+            lines.Add("Status: active auction");
+        }
+
+        commandFeedbackText.text = string.Join("\n", lines);
+    }
+
+    private string CurrentDisabledReason()
+    {
+        if (!UseLiveCommandMode())
+        {
+            return "";
+        }
+
+        if (!hasSnapshot || !lastSnapshot.HasRolledThisTurn)
+        {
+            return string.IsNullOrWhiteSpace(lastRollBlockedReason) ? "" : $"Roll - {lastRollBlockedReason}";
+        }
+
+        if (!lastSnapshot.HasResolvedTileThisTurn)
+        {
+            return string.IsNullOrWhiteSpace(lastResolveBlockedReason) ? "" : $"Resolve - {lastResolveBlockedReason}";
+        }
+
+        if (!lastSnapshot.HasExecutedTileThisTurn)
+        {
+            return string.IsNullOrWhiteSpace(lastExecuteBlockedReason) ? "" : $"Execute - {lastExecuteBlockedReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(lastEndTurnBlockedReason))
+        {
+            return $"End turn - {lastEndTurnBlockedReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(lastRollBlockedReason))
+        {
+            return $"Roll - {lastRollBlockedReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(lastResolveBlockedReason))
+        {
+            return $"Resolve - {lastResolveBlockedReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(lastExecuteBlockedReason))
+        {
+            return $"Execute - {lastExecuteBlockedReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(lastEndTurnBlockedReason))
+        {
+            return $"End turn - {lastEndTurnBlockedReason}";
+        }
+
+        return "";
     }
 
     private string CurrentPlayerId()

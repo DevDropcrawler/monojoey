@@ -26,6 +26,7 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
     private readonly List<string> sentRequestTypes = new List<string>();
 
     [SerializeField] private bool enableGameplayCommandTestResponses;
+    [SerializeField] private bool holdGameplayCommandTestResponses;
 
     public event Action Connected;
     public event Action Disconnected;
@@ -39,10 +40,16 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
     public IReadOnlyList<string> SentRequestTypes => sentRequestTypes;
     public int GameplayMutationRequestCount { get; private set; }
     public bool EnableGameplayCommandTestResponses => enableGameplayCommandTestResponses;
+    public bool HoldGameplayCommandTestResponses => holdGameplayCommandTestResponses;
 
     public void SetGameplayCommandTestResponsesEnabled(bool enabled)
     {
         enableGameplayCommandTestResponses = enabled;
+    }
+
+    public void SetGameplayCommandTestResponsesHeld(bool held)
+    {
+        holdGameplayCommandTestResponses = held;
     }
 
     public void Connect(string webSocketUrl)
@@ -73,6 +80,12 @@ public sealed class MonoJoeyMockTransport : MonoBehaviour, IMonoJoeyTransport
             {
                 Debug.LogError($"[MonoJoeyMockTransport] Gameplay mutation request was sent in default read-only validation: {requestType}.", this);
                 EmitError("mock_gameplay_command_blocked", $"Mock transport rejected gameplay command {requestType}. Enable dispatcher test responses for isolated command validation.");
+                return;
+            }
+
+            if (holdGameplayCommandTestResponses)
+            {
+                Debug.Log($"[MonoJoeyMockTransport] Holding canned command response for {requestType}.", this);
                 return;
             }
 

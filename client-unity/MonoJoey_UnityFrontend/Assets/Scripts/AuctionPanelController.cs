@@ -104,8 +104,10 @@ public sealed class AuctionPanelController : MonoBehaviour
     public bool BidButtonInteractable => bidButton != null && bidButton.interactable;
     public bool HasActiveAuctionSnapshot => !string.IsNullOrWhiteSpace(auctionId);
     public string LastBidBlockedReason { get; private set; } = "";
+    public string LastBidFeedbackText { get; private set; } = "";
 
     private Coroutine highBidderPulseCoroutine;
+    private string lastLoggedBidFeedback = "";
 
     private void Awake()
     {
@@ -121,6 +123,8 @@ public sealed class AuctionPanelController : MonoBehaviour
 
     private void OnDestroy()
     {
+        UnsubscribeDispatcherFeedback();
+
         if (bidButton != null)
         {
             bidButton.onClick.RemoveListener(SubmitLocalBidRequest);
@@ -148,10 +152,12 @@ public sealed class AuctionPanelController : MonoBehaviour
 
     public void ConfigureLiveGameplayCommandDispatcher(MonoJoeyGameplayCommandDispatcher dispatcher)
     {
+        UnsubscribeDispatcherFeedback();
         gameplayCommandDispatcher = dispatcher;
         useLiveGameplayCommandDispatcher = dispatcher != null;
+        SubscribeDispatcherFeedback();
         RefreshBidButton();
-        AppendLog($"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}");
+        SetBidFeedback($"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}");
     }
 
     public void BindPlayerBidRows(IReadOnlyList<string> playerIds, IReadOnlyList<int> bids)
@@ -235,14 +241,14 @@ public sealed class AuctionPanelController : MonoBehaviour
         if (bidInput == null)
         {
             LastBidBlockedReason = "bid input is not wired";
-            AppendLog($"Bid request ignored: {LastBidBlockedReason}.");
+            SetBidFeedback($"Bid blocked: {LastBidBlockedReason}.");
             return;
         }
 
         if (!int.TryParse(bidInput.text, out int amount) || amount <= 0)
         {
             LastBidBlockedReason = $"invalid bid amount {DisplayPlayerId(bidInput.text)}";
-            AppendLog($"Bid request ignored: {LastBidBlockedReason}.");
+            SetBidFeedback($"Bid blocked: {LastBidBlockedReason}.");
             RefreshBidButton();
             return;
         }
@@ -252,23 +258,23 @@ public sealed class AuctionPanelController : MonoBehaviour
             if (!CanSubmitBidLive(amount, out string reason))
             {
                 LastBidBlockedReason = reason;
-                AppendLog($"Live bid ignored: {reason}.");
+                SetBidFeedback($"Bid blocked: {reason}.");
                 RefreshBidButton();
                 return;
             }
 
             bool sent = gameplayCommandDispatcher.TryPlaceBid(amount);
             LastBidBlockedReason = sent ? "" : gameplayCommandDispatcher.LastCommandError;
-            AppendLog(sent
-                ? $"Live bid command sent: ${amount}, localRequestId={DisplayPlayerId(gameplayCommandDispatcher.LastCommandLocalRequestId)}."
-                : $"Live bid command rejected: {gameplayCommandDispatcher.LastCommandError}");
+            SetBidFeedback(sent
+                ? $"Bid sent: ${amount}, id={DisplayPlayerId(gameplayCommandDispatcher.LastCommandLocalRequestId)}."
+                : $"Bid rejected: {gameplayCommandDispatcher.LastCommandError}");
             RefreshBidButton();
             return;
         }
 
         LastBidRequest = new BidRequest(auctionId, amount);
         LastBidBlockedReason = "";
-        AppendLog($"Local bid request: {auctionId} ${amount}");
+        SetBidFeedback($"Local bid request: {auctionId} ${amount}");
         BidRequested?.Invoke(LastBidRequest.Value);
         RefreshBidButton();
     }
@@ -314,6 +320,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         {
             bidButton.interactable = true;
             LastBidBlockedReason = "";
+            LastBidFeedbackText = "";
             return;
         }
 
@@ -321,7 +328,20 @@ public sealed class AuctionPanelController : MonoBehaviour
         bool hasValidAmount = bidInput != null && int.TryParse(bidInput.text, out amount) && amount > 0;
         string reason = "";
         bidButton.interactable = hasValidAmount && CanSubmitBidLive(amount, out reason);
-        LastBidBlockedReason = bidButton.interactable ? "" : (hasValidAmount ? reason : "invalid bid amount");
+        LastBidBlockedReason = bidButton.interactable ? "" : (hasValidAmount ? reason : InvalidAmountReason());
+
+        if (gameplayCommandDispatcher != null
+            && string.Equals(gameplayCommandDispatcher.LastCommandRequestType, MonoJoeyTransportMessageTypes.PlaceBid, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandError))
+        {
+            SetBidFeedback($"Bid backend error: {gameplayCommandDispatcher.LastCommandError}");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(LastBidBlockedReason))
+        {
+            LastBidFeedbackText = $"Bid disabled: {LastBidBlockedReason}";
+        }
     }
 
     private bool CanSubmitBidLive(int amount, out string reason)
@@ -334,13 +354,19 @@ public sealed class AuctionPanelController : MonoBehaviour
 
         if (!gameplayCommandDispatcher.IsGameplayCommandModeAvailable)
         {
-            reason = "session is not in LiveBackend mode or dispatcher test mode";
+            reason = "not live or mock command mode";
+            return false;
+        }
+
+        if (!gameplayCommandDispatcher.IsTransportConnected)
+        {
+            reason = "not connected";
             return false;
         }
 
         if (!gameplayCommandDispatcher.IsBoundToIdentity)
         {
-            reason = "session is not bound to a hydrated identity";
+            reason = "not bound to session/player";
             return false;
         }
 
@@ -409,6 +435,48 @@ public sealed class AuctionPanelController : MonoBehaviour
     private static string DisplayPlayerId(string playerId)
     {
         return string.IsNullOrWhiteSpace(playerId) ? "--" : playerId;
+    }
+
+    private string InvalidAmountReason()
+    {
+        string value = bidInput == null ? "" : bidInput.text;
+        return $"invalid bid amount {DisplayPlayerId(value)}";
+    }
+
+    private void SetBidFeedback(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        LastBidFeedbackText = message;
+        if (!string.Equals(lastLoggedBidFeedback, message, StringComparison.Ordinal))
+        {
+            AppendLog(message);
+            lastLoggedBidFeedback = message;
+        }
+    }
+
+    private void SubscribeDispatcherFeedback()
+    {
+        if (gameplayCommandDispatcher != null)
+        {
+            gameplayCommandDispatcher.CommandStateChanged += HandleCommandStateChanged;
+        }
+    }
+
+    private void UnsubscribeDispatcherFeedback()
+    {
+        if (gameplayCommandDispatcher != null)
+        {
+            gameplayCommandDispatcher.CommandStateChanged -= HandleCommandStateChanged;
+        }
+    }
+
+    private void HandleCommandStateChanged()
+    {
+        RefreshBidButton();
     }
 
     private bool UseLiveCommandMode()

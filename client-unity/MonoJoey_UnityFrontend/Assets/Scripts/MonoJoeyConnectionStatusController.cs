@@ -124,18 +124,26 @@ public sealed class MonoJoeyConnectionStatusController : MonoBehaviour
             ? "--"
             : $"{Display(gameplayCommandDispatcher.LastCommandRequestType)} id={Display(gameplayCommandDispatcher.LastCommandLocalRequestId)}";
         string commandResult = gameplayCommandDispatcher == null ? "--" : Display(gameplayCommandDispatcher.LastCommandResult);
+        string commandResultType = gameplayCommandDispatcher == null ? "--" : Display(gameplayCommandDispatcher.LastCommandResultType);
         string commandError = gameplayCommandDispatcher == null ? "--" : Display(gameplayCommandDispatcher.LastCommandError);
+        string commandBackendError = gameplayCommandDispatcher == null
+            ? "--"
+            : $"code={Display(gameplayCommandDispatcher.LastBackendErrorCode)} message={Display(gameplayCommandDispatcher.LastBackendErrorMessage)}";
+        string commandBlocked = gameplayCommandDispatcher == null
+            ? "--"
+            : $"{Display(gameplayCommandDispatcher.LastBlockedCommandType)} reason={Display(gameplayCommandDispatcher.LastBlockedReason)}";
+        string commandWaiting = gameplayCommandDispatcher != null && gameplayCommandDispatcher.IsWaitingForAuthoritativeSnapshot ? "yes" : "no";
         string commandCount = gameplayCommandDispatcher == null ? "--" : gameplayCommandDispatcher.CommandRequestCount.ToString();
 
         SetText(modeText, $"Mode: {mode}{fallback}");
         SetText(stateText, $"State: {state} | {bound}");
         SetText(sessionText, $"Session/player: {session} | URL: {url}");
         SetText(lastMessageText, $"Last request: {lastRequest} | Last message: {lastType} @ {lastMessageTime}");
-        SetText(commandStatusText, $"Command: last={commandLastRequest} sentAt={commandSentAt} inFlight={commandInFlight} dispatcherCount={commandCount} result={commandResult} error={commandError}");
+        SetText(commandStatusText, $"Command: last={commandLastRequest} sentAt={commandSentAt} inFlight={commandInFlight} waitingSnapshot={commandWaiting} dispatcherCount={commandCount} resultType={commandResultType} result={commandResult} blocked={commandBlocked} error={commandError} backendError={commandBackendError}");
         SetText(lastSequenceText, $"Sequence: {sequence} | reconnects={reconnects} readOnly={readOnlyRequests} commands={gameplayRequests}");
         SetText(lastSnapshotText, $"Last snapshot: {snapshot}");
         SetText(lastErrorText, $"Last error: code={Display(errorCode)} message={Display(error)}");
-        LastRenderedStatus = $"{mode}|{state}|{bound}|{session}|{url}|request={lastRequest}|message={lastType}|command={commandLastRequest}/{commandInFlight}/{commandResult}/{commandError}|sequence={sequence}|snapshot={snapshot}|error={Display(errorCode)}/{Display(error)}|fallback={sessionClient != null && sessionClient.IsUsingMockFallback}";
+        LastRenderedStatus = $"{mode}|{state}|{bound}|{session}|{url}|request={lastRequest}|message={lastType}|command={commandLastRequest}/{commandInFlight}/waiting={commandWaiting}/blocked={commandBlocked}/result={commandResultType}/{commandResult}/error={commandError}/backend={commandBackendError}|sequence={sequence}|snapshot={snapshot}|error={Display(errorCode)}/{Display(error)}|fallback={sessionClient != null && sessionClient.IsUsingMockFallback}";
     }
 
     private void ApplyRuntimeControlValues()

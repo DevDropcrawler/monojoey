@@ -314,6 +314,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk9ReadOnlyTransportValidation(hydrator);
         yield return RunChunk9GameplayCommandDispatcherValidation(hydrator, hud, turnController, auction, token);
         yield return RunChunk10PlayableTurnUiCommandFlow(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
+        yield return RunChunk12GameplayCommandFeedbackValidation(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
@@ -558,6 +559,129 @@ public sealed class AgenticTestRunner : MonoBehaviour
         LogChunk10UiState("next-turn snapshot_result", commandObject, hud, turnController, auction, token, tokenAnimator, hydrator, dispatcher, mockTransport, boardPath);
         Debug.Log($"[AgenticTestRunner] Chunk 10 final local-turn buttons disabled: roll={turnController.RollButtonInteractable}, resolve={turnController.ResolveButtonInteractable}, execute={turnController.ExecuteButtonInteractable}, end={turnController.EndTurnButtonInteractable}, rollBlocked={DisplayLogValue(turnController.LastRollBlockedReason)}.", commandObject);
 
+        yield return null;
+    }
+
+    private IEnumerator RunChunk12GameplayCommandFeedbackValidation(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        BoardTileController[] boardPath)
+    {
+        GameObject feedbackObject = new GameObject(
+            "MonoJoeyPlayableCommandFeedback_Chunk12Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = feedbackObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = feedbackObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = feedbackObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyGameplayCommandDispatcher dispatcher = feedbackObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+        MonoJoeyConnectionStatusController status = feedbackObject.GetComponent<MonoJoeyConnectionStatusController>();
+
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "session_chunk_12",
+            testPlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            true);
+        dispatcher.Configure(session);
+        status.Configure(session, router);
+        turnController.ConfigureLiveGameplayCommandDispatcher(dispatcher, testPlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(dispatcher);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", testPlayerId, 30, false, false, false, 1500, "start", false, 0, ""));
+        LogChunk12Feedback("no-connection blocked turn buttons", feedbackObject, status, turnController, auction, dispatcher);
+
+        GameObject unboundObject = new GameObject(
+            "MonoJoeyPlayableCommandFeedback_Chunk12UnboundRuntime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+        MonoJoeyBackendMessageRouter unboundRouter = unboundObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient unboundSession = unboundObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyGameplayCommandDispatcher unboundDispatcher = unboundObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+        MonoJoeyConnectionStatusController unboundStatus = unboundObject.GetComponent<MonoJoeyConnectionStatusController>();
+        unboundSession.Configure(MonoJoeySessionClientMode.MockValidation, "", "", "", hydrator, unboundRouter, true, false, true);
+        unboundDispatcher.Configure(unboundSession);
+        unboundStatus.Configure(unboundSession, unboundRouter);
+        turnController.ConfigureLiveGameplayCommandDispatcher(unboundDispatcher, testPlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(unboundDispatcher);
+        unboundSession.Connect();
+        unboundRouter.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", testPlayerId, 31, false, false, false, 1500, "start", false, 0, ""));
+        LogChunk12Feedback("unbound blocked turn buttons", unboundObject, unboundStatus, turnController, auction, unboundDispatcher);
+
+        turnController.ConfigureLiveGameplayCommandDispatcher(dispatcher, testPlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(dispatcher);
+        session.Connect();
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", "player-2", 32, false, false, false, 1500, "start", false, 0, ""));
+        LogChunk12Feedback("not-local-turn blocked buttons", feedbackObject, status, turnController, auction, dispatcher);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_tile_resolution", testPlayerId, 33, true, false, false, 1490, "property_01", false, 0, ""));
+        LogChunk12Feedback("turn-flag blocked buttons after roll", feedbackObject, status, turnController, auction, dispatcher);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("auction_bidding", testPlayerId, 34, true, true, false, 1490, "auction_test", true, 240, "player-2"));
+        auction.SetBidInputTextForValidation("260");
+        LogChunk12Feedback("active-auction execute-status end-turn-block", feedbackObject, status, turnController, auction, dispatcher);
+
+        mockTransport.SetGameplayCommandTestResponsesHeld(true);
+        turnController.ExecuteTile();
+        LogChunk12Feedback("execute in-flight disabled reasons", feedbackObject, status, turnController, auction, dispatcher);
+
+        string beforeExecuteDirectState = Chunk10StateSignature(hud, turnController, auction, token);
+        mockTransport.SetGameplayCommandTestResponsesHeld(false);
+        mockTransport.EmitCannedCommandResult(MonoJoeyTransportMessageTypes.ExecuteTile);
+        string afterExecuteDirectState = Chunk10StateSignature(hud, turnController, auction, token);
+        status.Refresh();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 direct result feedback: resultType={DisplayLogValue(dispatcher.LastCommandResultType)}, waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}, feedback={DisplayLogValue(turnController.CommandFeedbackText)}, status={status.LastRenderedStatus}, uiBefore={beforeExecuteDirectState}, uiAfter={afterExecuteDirectState}. Direct command success did not mutate UI before snapshot.", feedbackObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_end_turn", testPlayerId, 35, true, true, true, 1460, "auction_test", false, 0, testPlayerId));
+        LogChunk12Feedback("snapshot clears waiting and updates UI", feedbackObject, status, turnController, auction, dispatcher);
+
+        auction.SetBidInputTextForValidation("0");
+        auction.SubmitLocalBidRequest();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 invalid bid feedback: feedback={DisplayLogValue(auction.LastBidFeedbackText)}, blocked={DisplayLogValue(auction.LastBidBlockedReason)}.", feedbackObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_end_turn", testPlayerId, 36, true, true, true, 1460, "auction_test", false, 0, testPlayerId));
+        auction.SetBidInputTextForValidation("260");
+        auction.SubmitLocalBidRequest();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 no-active-auction bid feedback: feedback={DisplayLogValue(auction.LastBidFeedbackText)}, blocked={DisplayLogValue(auction.LastBidBlockedReason)}.", feedbackObject);
+
+        session.Disconnect();
+        auction.SubmitLocalBidRequest();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 not-live-bound bid feedback after disconnect: feedback={DisplayLogValue(auction.LastBidFeedbackText)}, blocked={DisplayLogValue(auction.LastBidBlockedReason)}, status={session.State}.", feedbackObject);
+
+        session.Connect();
+        router.RouteRawMessage(Chunk10SnapshotResultJson("auction_bidding", testPlayerId, 37, true, true, false, 1460, "auction_test", true, 300, "player-2"));
+        auction.SetBidInputTextForValidation("330");
+        mockTransport.SetGameplayCommandTestResponsesHeld(true);
+        auction.SubmitLocalBidRequest();
+        auction.SubmitLocalBidRequest();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 in-flight bid feedback: inFlight={dispatcher.IsCommandInFlight}, feedback={DisplayLogValue(auction.LastBidFeedbackText)}, blocked={DisplayLogValue(auction.LastBidBlockedReason)}.", feedbackObject);
+
+        mockTransport.EmitCannedError();
+        status.Refresh();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 backend error feedback: waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}, inFlight={dispatcher.IsCommandInFlight}, turnFeedback={DisplayLogValue(turnController.CommandFeedbackText)}, bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}, status={status.LastRenderedStatus}.", feedbackObject);
+
+        mockTransport.SetGameplayCommandTestResponsesHeld(false);
         yield return null;
     }
 
@@ -877,6 +1001,18 @@ public sealed class AgenticTestRunner : MonoBehaviour
     {
         BoardTileController currentTile = FindBoardTile(boardPath, hud == null ? "" : hud.LastPlayerSnapshot.CurrentTileId);
         Debug.Log($"[AgenticTestRunner] Chunk 10 {label}: hydrationSource={DisplayLogValue(hydrator.LastHydrationSourceMessageType)}, hudMoney={hud.LastPlayerSnapshot.Money}, hudTile={DisplayLogValue(hud.LastPlayerSnapshot.CurrentTileId)}, turn={turnController.LastSnapshot.TurnIndex}/{DisplayLogValue(turnController.LastSnapshot.Phase)}, flags=rolled:{turnController.LastSnapshot.HasRolledThisTurn},resolved:{turnController.LastSnapshot.HasResolvedTileThisTurn},executed:{turnController.LastSnapshot.HasExecutedTileThisTurn}, activeAuction={turnController.HasActiveAuctionFromHydration}, auctionId={DisplayLogValue(auction.AuctionId)}, highBid={auction.CurrentHighBid}, bidButton={auction.BidButtonInteractable}, buttons=roll:{turnController.RollButtonInteractable},resolve:{turnController.ResolveButtonInteractable},execute:{turnController.ExecuteButtonInteractable},end:{turnController.EndTurnButtonInteractable}, blocked=roll:{DisplayLogValue(turnController.LastRollBlockedReason)},resolve:{DisplayLogValue(turnController.LastResolveBlockedReason)},execute:{DisplayLogValue(turnController.LastExecuteBlockedReason)},end:{DisplayLogValue(turnController.LastEndTurnBlockedReason)},bid:{DisplayLogValue(auction.LastBidBlockedReason)}, tokenPlayer={DisplayLogValue(token.PlayerId)}, tokenTileIndex={token.CurrentTileIndex}, tokenPosition={token.transform.position}, tokenAnimatorFinal={DisplayLogValue(tokenAnimator.LastCompletedTileId)}, boardTileOwner={DisplayLogValue(currentTile == null ? "" : currentTile.OwnerPlayerId)}, boardTileHighlighted={(currentTile != null && currentTile.IsHighlighted)}, dispatcherInFlight={dispatcher.IsCommandInFlight}, dispatcherInFlightLog={DisplayLogValue(dispatcher.LastInFlightStateLog)}, requestCount={dispatcher.CommandRequestCount}, mockMutationRequests={mockTransport.GameplayMutationRequestCount}. Backend authoritative; no local gameplay state mutation.", context);
+    }
+
+    private static void LogChunk12Feedback(
+        string label,
+        UnityEngine.Object context,
+        MonoJoeyConnectionStatusController status,
+        TurnController turnController,
+        AuctionPanelController auction,
+        MonoJoeyGameplayCommandDispatcher dispatcher)
+    {
+        status?.Refresh();
+        Debug.Log($"[AgenticTestRunner] Chunk 12 {label}: buttons=roll:{turnController.RollButtonInteractable},resolve:{turnController.ResolveButtonInteractable},execute:{turnController.ExecuteButtonInteractable},end:{turnController.EndTurnButtonInteractable}, blocked=roll:{DisplayLogValue(turnController.LastRollBlockedReason)},resolve:{DisplayLogValue(turnController.LastResolveBlockedReason)},execute:{DisplayLogValue(turnController.LastExecuteBlockedReason)},end:{DisplayLogValue(turnController.LastEndTurnBlockedReason)}, turnFeedback={DisplayLogValue(turnController.CommandFeedbackText)}, bidButton={auction.BidButtonInteractable}, bidBlocked={DisplayLogValue(auction.LastBidBlockedReason)}, bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}, inFlight={dispatcher.IsCommandInFlight}, waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}, result={DisplayLogValue(dispatcher.LastCommandResultType)}, backendError={DisplayLogValue(dispatcher.LastCommandError)}, status={DisplayLogValue(status == null ? "" : status.LastRenderedStatus)}. Backend authoritative; no local gameplay state mutation.", context);
     }
 
     private static string Chunk10StateSignature(
