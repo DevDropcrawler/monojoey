@@ -2,7 +2,7 @@
 
 ## Summary
 
-Frontend Chunks 1-4 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-6 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
 The backend V1 surface remains frozen. All frontend validation uses local mock/read-only snapshot data only; UI actions log local intent and visual state, but do not mutate or call real backend/server data.
 
@@ -80,6 +80,15 @@ The backend V1 surface remains frozen. All frontend validation uses local mock/r
   - new validation logs include `Read-only snapshot hydration; no backend mutation.`
 - No WebSocket client, request DTO, backend mutation, gameplay authority, scene edit, prefab edit, or `ProjectSettings` edit was added.
 
+### Chunk 6: Live Session and Snapshot Hooks
+
+- Extended `SnapshotHydrator.cs` with optional read-only C# events for snapshot start, HUD updates, turn UI updates, auction updates, board tile updates, token snaps, completion, and failure.
+- Added `SnapshotHydrator.HydrationHookEvent` with UTC timestamp, hook name, session/player/tile/phase/turn context, success state, and a short message for future live session refresh diagnostics.
+- Added `RefreshFromLiveSessionSnapshot(...)` and `RefreshFromLiveSessionSnapshotJson(...)` as semantic wrappers over the existing Chunk 5 hydration path. These do not open sockets, call backend APIs, submit bids, roll dice, or mutate gameplay authority.
+- Extended `AgenticTestRunner.cs` to subscribe to all hydrator hooks at runtime and log timestamped hook events.
+- Added a Chunk 6 mock live session update after the existing Chunk 5 two-snapshot validation. The live update changes HUD money/loan, turn phase/flags, token authoritative tile, board ownership, and active auction high bidder/high bid rows.
+- No prefab structure, scene file, backend code, or `ProjectSettings` change was required.
+
 ## Folder Structure
 
 Primary frontend assets:
@@ -116,6 +125,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - HUD player/turn snapshot display,
   - token movement along a mock path,
   - auction countdown/high-bidder visuals,
+  - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
   - one to two local mock turn flows.
@@ -140,6 +150,15 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `Chunk 5 second snapshot hydrated=True` with cleared auction id/high bid/high bidder, cleared helper payload counts, changed tile ownership, and token snapped to the replacement authoritative tile.
 - The Chunk 5 path only hydrates backend-shaped mock JSON. It does not call `RollDice`, submit bids, send backend mutation requests, or open a WebSocket connection.
 - Local compiler validation used Unity's bundled C# compiler against `Assembly-CSharp.csproj` plus the new snapshot scripts and passed with only existing serialized-field assignment warnings. Unity batch-mode play validation could not run in this session because the editor exited during licensing before project load.
+
+### Chunk 6 Runtime Notes
+
+- Expected Chunk 6 logs in `SampleScene` include:
+  - `Chunk 6 live session hook subscribed`.
+  - timestamped `Chunk 6 hydrator hook` entries for hydration start, HUD, turn, auction, board tile, token, and completion.
+  - `Chunk 6 mock session update hydrated=True` with before/after HUD money/loan, turn phase, token tile/index/position, auction high bidder/high bid, and auction tile ownership.
+- The mock live update uses `RefreshFromLiveSessionSnapshotJson(...)` against backend-shaped local JSON. It remains read-only and does not call backend networking, `RollDice`, auction submit, scene saves, or `ProjectSettings` edits.
+- Local compiler validation used the .NET SDK compiler with Unity runtime references and passed with only existing serialized-field assignment warnings. Unity batch-mode validation was attempted, but existing Unity editor processes prevented a fresh batch log from being produced in this session.
 
 ## Optional Visual Polish
 
