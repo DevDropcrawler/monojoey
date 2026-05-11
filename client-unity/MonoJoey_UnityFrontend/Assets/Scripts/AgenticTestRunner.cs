@@ -19,6 +19,10 @@ public sealed class AgenticTestRunner : MonoBehaviour
     [Header("HUD Validation")]
     [SerializeField] private GameObject hudPrefab;
 
+    [Header("Turn UI Validation")]
+    [SerializeField] private GameObject turnUiPrefab;
+    [SerializeField] private bool instantiateTurnUi = true;
+
     [Header("Auction Panel Validation")]
     [SerializeField] private GameObject auctionPanelPrefab;
     [SerializeField] private bool instantiateAuctionPanel = true;
@@ -50,6 +54,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         EnsureEventSystem();
         Dictionary<string, BoardTileController> tilesById = ValidateBoardTiles();
         ValidateHud();
+        ValidateTurnUi();
         ValidatePlayerToken(tilesById);
         ValidateAuctionPanel();
     }
@@ -137,6 +142,81 @@ public sealed class AgenticTestRunner : MonoBehaviour
 
         hud.BindSnapshot(player, turn);
         Debug.Log($"[AgenticTestRunner] HUD bound: player={player.PlayerId}, money={player.Money}, loan={player.LoanTotalBorrowed}, turn={turn.TurnIndex}/{turn.Phase}.", hudObject);
+    }
+
+    private void ValidateTurnUi()
+    {
+        if (!instantiateTurnUi)
+        {
+            return;
+        }
+
+        GameObject prefab = turnUiPrefab != null ? turnUiPrefab : LoadPrefabInEditor("Assets/Prefabs/TurnUIPrefab.prefab");
+        if (prefab == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] TurnUIPrefab is not assigned.");
+            return;
+        }
+
+        GameObject turnObject = Instantiate(prefab);
+        TurnController turnController = turnObject.GetComponentInChildren<TurnController>();
+        if (turnController == null)
+        {
+            Debug.LogError("[AgenticTestRunner] TurnUIPrefab is missing TurnController.", turnObject);
+            return;
+        }
+
+        DiceAnimator diceAnimator = turnObject.GetComponentInChildren<DiceAnimator>();
+        Debug.Log($"[AgenticTestRunner] Turn UI inspector fields: turnController={turnController != null}, diceImages={turnController.DiceImageCount}, rollButtonInteractable={turnController.RollButtonInteractable}, diceAnimator={diceAnimator != null}, diceFaces={(diceAnimator == null ? 0 : diceAnimator.DiceFaceCount)}, rollDuration={(diceAnimator == null ? 0f : diceAnimator.RollDuration)}.", turnObject);
+        Debug.Log("[AgenticTestRunner] Turn UI uses mock readonly TurnHudSnapshot data only; no backend calls are made.", turnObject);
+
+        StartCoroutine(RunTurnUiMockFlow(turnController, diceAnimator, turnObject));
+    }
+
+    private static IEnumerator RunTurnUiMockFlow(TurnController turnController, DiceAnimator diceAnimator, GameObject turnObject)
+    {
+        HUDController.TurnHudSnapshot firstTurn = new HUDController.TurnHudSnapshot(
+            "player-agentic",
+            6,
+            "AwaitingRoll",
+            false,
+            false,
+            false);
+
+        turnController.BindSnapshot(firstTurn);
+        turnController.StartTurn();
+        Debug.Log($"[AgenticTestRunner] Turn UI mock turn start: player={firstTurn.CurrentPlayerId}, turn={firstTurn.TurnIndex}, phase={firstTurn.Phase}, rollButtonInteractable={turnController.RollButtonInteractable}.", turnObject);
+        turnController.RollDice();
+        Debug.Log($"[AgenticTestRunner] Turn UI mock roll triggered: values={string.Join(" + ", turnController.LastRollValues)}, diceAnimating={(diceAnimator != null && diceAnimator.IsAnimating)}.", turnObject);
+
+        while (diceAnimator != null && diceAnimator.IsAnimating)
+        {
+            yield return null;
+        }
+
+        Debug.Log($"[AgenticTestRunner] Turn UI dice animation end: values={string.Join(" + ", turnController.LastRollValues)}, diceAnimating={(diceAnimator != null && diceAnimator.IsAnimating)}.", turnObject);
+        turnController.EndTurn();
+
+        HUDController.TurnHudSnapshot secondTurn = new HUDController.TurnHudSnapshot(
+            "player-2",
+            7,
+            "AwaitingRoll",
+            false,
+            false,
+            false);
+
+        turnController.BindSnapshot(secondTurn);
+        turnController.StartTurn();
+        Debug.Log($"[AgenticTestRunner] Turn UI second mock turn start: player={secondTurn.CurrentPlayerId}, turn={secondTurn.TurnIndex}, phase={secondTurn.Phase}, rollButtonInteractable={turnController.RollButtonInteractable}.", turnObject);
+        turnController.RollDice();
+
+        while (diceAnimator != null && diceAnimator.IsAnimating)
+        {
+            yield return null;
+        }
+
+        Debug.Log($"[AgenticTestRunner] Turn UI second mock roll complete: values={string.Join(" + ", turnController.LastRollValues)}, rollButtonInteractable={turnController.RollButtonInteractable}.", turnObject);
+        turnController.EndTurn();
     }
 
     private void ValidatePlayerToken(IReadOnlyDictionary<string, BoardTileController> tilesById)
