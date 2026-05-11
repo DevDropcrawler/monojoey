@@ -4,18 +4,29 @@ This file must be updated at the end of every coding chunk.
 
 ## Current Status
 
-- Phase: 5
-- Chunk: Jail/Joey Hole Runtime Parity
-- Completion status: Classic lockup and doubles runtime behavior is implemented server-side: doubles extra turns, triple-doubles lockup, jailed roll attempts, doubles release, max-attempt fine release, insufficient-fine handling, and no-extra-turn-after-jail-release.
+- Phase: Frontend
+- Chunk: 10 - Playable Turn UI Command Flow
+- Completion status: Unity turn controls now send live/mock-test command intents for roll, resolve tile, execute tile, and end turn from authoritative hydration gates; auction bid live gating was tightened while preserving snapshot authority.
 - Branch: `main` tracking `origin/main`; local has this chunk implemented and validated but not committed.
-- Previous commit: `748a2b3`
-- Last commit before this chunk: `748a2b3`
+- Previous commit: `cd9e2ee`
+- Last commit before this chunk: `cd9e2ee`
 - Last commit after this chunk: not committed yet
-- Date/time: 2026-05-10
+- Date/time: 2026-05-11
 
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 10 Addendum
+
+- Unity frontend Chunk 10 wired the first playable turn-command UI flow: `roll_dice`, `resolve_tile`, `execute_tile`, and `end_turn` are sent from `TurnController` live dispatcher mode as intents only.
+- `TurnUIPrefab` now serializes `Resolve`, `Execute`, and `End Turn` buttons. Existing mock roll/start/end validation remains intact when live dispatcher mode is off.
+- Turn buttons are enabled only when the dispatcher is available, identity is bound, no command is in flight, the local player is the authoritative current player, and hydrated turn flags match the required command step.
+- `end_turn` also requires no active auction in the latest authoritative hydration. `SnapshotHydrator` exposes only that active-auction presence bit to turn UI gating.
+- `AuctionPanelController` remains snapshot-driven and now logs disabled/blocked live bid reasons for mode, bound identity, in-flight command, invalid amount, and missing active auction. Bids remain allowed during active auctions without requiring local turn ownership.
+- `MonoJoeyGameplayCommandDispatcher` now exposes typed `Can*` checks plus last blocked command/reason and in-flight transition observability. Direct command results still clear in-flight state only; gameplay UI changes only after `snapshot_result` or `reconnect_result` hydration.
+- `AgenticTestRunner` adds a Chunk 10 mock-live command flow in explicit dispatcher test mode: initial snapshot, roll click/direct result non-mutation, post-roll hydration, resolve, active-auction hydration and bid, execute, no-auction post-execute hydration, end turn, and next-turn hydration disabling local buttons.
+- Validation: direct Roslyn compile against Unity/Mono runtime references passed for all `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/*.cs` with serialized-field warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Unity batch/play validation was not started because three existing Unity editor processes were active and a clean project load was unavailable.
 
 ## Frontend Chunk 9 Addendum
 
@@ -172,8 +183,17 @@ Not included by explicit user scope:
 
 ## Validation Commands Run
 
-- `dotnet test server-dotnet\MonoJoey.sln -v minimal`
+- Direct Roslyn compile of `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/*.cs` against Unity 6000.4.6f1/Mono runtime references.
   - Result: succeeded.
+  - Output summary: compile passed with serialized-field assignment warnings only.
+- `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal`
+  - Result: failed before compile.
+  - Blocker: missing .NET Framework 4.7.1 reference assemblies/targeting pack (`MSB3644`).
+- Unity batch/play validation.
+  - Result: not started.
+  - Blocker: three existing `Unity` editor processes were already active, so a clean batch project load was unavailable.
+- `dotnet test server-dotnet\MonoJoey.sln -v minimal`
+  - Result: previously succeeded for the prior server chunk; not rerun for this frontend-only chunk.
   - Output summary: 892 passed, 0 failed, 0 skipped.
 
 ## Known Issues

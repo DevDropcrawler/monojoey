@@ -247,6 +247,20 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
   - Unity batch validation was attempted, but existing Unity editor processes were active and no clean batch log was produced.
 
+### Chunk 10 Runtime Notes
+
+- `TurnUIPrefab` now serializes real `Resolve`, `Execute`, and `End Turn` buttons alongside the existing `Roll` button.
+- `TurnController` live command mode now gates `roll_dice`, `resolve_tile`, `execute_tile`, and `end_turn` from hydrated authoritative turn flags, bound identity, dispatcher in-flight state, local current-player identity, and active-auction presence.
+- `resolve_tile` is enabled only after the authoritative snapshot says the local player rolled and has not resolved. `execute_tile` is enabled only after resolve and before execute. `end_turn` is enabled only after roll/resolve/execute and when the authoritative snapshot has no active auction.
+- `SnapshotHydrator` passes only active-auction presence into turn action gating. Unity still does not infer or mutate game authority.
+- `AuctionPanelController` keeps bid state snapshot-driven, disables live bids when unbound/in-flight/no-active-auction/invalid amount, and allows active-auction bids without requiring local turn ownership.
+- `MonoJoeyGameplayCommandDispatcher` now exposes typed `Can*` checks, last blocked command/reason, command-attempt logs, direct-result logs, and in-flight transition logs.
+- `AgenticTestRunner` adds a Chunk 10 mock-live command flow in explicit dispatcher test mode: hydrate initial snapshot, click roll, verify direct result does not mutate UI, hydrate post-roll, send resolve, hydrate active auction, send bid, send execute, hydrate no-auction post-execute, send end turn, and hydrate next-player turn with local buttons disabled.
+- Validation results for this handoff:
+  - Direct Roslyn compile against Unity/Mono runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` is still blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Unity batch/play validation was not started because three existing `Unity` editor processes were already active, blocking a clean project load.
+
 ## Optional Visual Polish
 
 - Replace fallback dice number labels with dedicated dice face sprites or icon assets.
