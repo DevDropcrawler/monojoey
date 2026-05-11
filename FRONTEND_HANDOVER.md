@@ -2,7 +2,7 @@
 
 ## Summary
 
-Frontend Chunks 1-4 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by `AgenticTestRunner` in `SampleScene.unity`.
+Frontend Chunks 1-4 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
 The backend V1 surface remains frozen. All frontend validation uses local mock/read-only snapshot data only; UI actions log local intent and visual state, but do not mutate or call real backend/server data.
 
@@ -108,7 +108,9 @@ client-unity/MonoJoey_UnityFrontend/Assets/
 ## Runtime Validation
 
 - Open/play `Assets/Scenes/SampleScene.unity`.
-- `AgenticTestRunner` auto-creates itself for `SampleScene` through `RuntimeInitializeOnLoadMethod`.
+- `AgenticTestRunner` auto-creates a runtime-only `AgenticTestRunner_RuntimeBootstrap` object for `SampleScene` through `RuntimeInitializeOnLoadMethod`.
+- Do not save or commit `SampleScene.unity` just to add `AgenticTestRunner`; the runner is intentionally created from `Assets/Scripts` during Editor Playmode.
+- Runtime auto-bootstrap can be disabled by changing `AutoBootstrapEnabled` in `AgenticTestRunner.cs`.
 - The runner instantiates the prefabs, binds local mock snapshots, logs serialized-field wiring, and validates:
   - board tile ownership/highlight state,
   - HUD player/turn snapshot display,

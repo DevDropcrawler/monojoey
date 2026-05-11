@@ -6,6 +6,12 @@ using UnityEngine.SceneManagement;
 
 public sealed class AgenticTestRunner : MonoBehaviour
 {
+#if UNITY_EDITOR
+    private const bool AutoBootstrapEnabled = true;
+    private const string ValidationSceneName = "SampleScene";
+    private const string RuntimeRunnerName = "AgenticTestRunner_RuntimeBootstrap";
+#endif
+
     [Header("Player Token Validation")]
     [SerializeField] private GameObject playerTokenPrefab;
     [SerializeField] private Vector3 testTilePosition = new Vector3(2f, 0.5f, 2f);
@@ -27,27 +33,33 @@ public sealed class AgenticTestRunner : MonoBehaviour
     [SerializeField] private GameObject auctionPanelPrefab;
     [SerializeField] private bool instantiateAuctionPanel = true;
 
+#if UNITY_EDITOR
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void BootstrapForSampleScene()
     {
-        if (SceneManager.GetActiveScene().name != "SampleScene")
+        if (!AutoBootstrapEnabled || SceneManager.GetActiveScene().name != ValidationSceneName)
         {
             return;
         }
 
-        if (FindAnyObjectByType<AgenticTestRunner>() != null)
+        if (FindAnyObjectByType<AgenticTestRunner>(FindObjectsInactive.Include) != null)
         {
             return;
         }
 
-        GameObject runner = new GameObject("AgenticTestRunner", typeof(AgenticTestRunner));
+        GameObject runner = new GameObject(RuntimeRunnerName, typeof(AgenticTestRunner))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
         if (Application.isPlaying)
         {
             DontDestroyOnLoad(runner);
         }
 
-        Debug.Log("[AgenticTestRunner] Runtime validation runner created for SampleScene.", runner);
+        Debug.Log("[AgenticTestRunner] Runtime validation runner auto-bootstrapped for SampleScene. Scene files do not need saved runner objects.", runner);
     }
+#endif
 
     private void Start()
     {
