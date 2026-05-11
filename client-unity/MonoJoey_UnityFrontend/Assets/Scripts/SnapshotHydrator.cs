@@ -4,6 +4,40 @@ using UnityEngine;
 
 public sealed class SnapshotHydrator : MonoBehaviour
 {
+    public readonly struct HydrationHookEvent
+    {
+        public HydrationHookEvent(
+            string hookName,
+            string sessionId,
+            string playerId,
+            string tileId,
+            string phase,
+            int turnIndex,
+            bool succeeded,
+            string message)
+        {
+            UtcTimestamp = DateTime.UtcNow;
+            HookName = hookName;
+            SessionId = sessionId;
+            PlayerId = playerId;
+            TileId = tileId;
+            Phase = phase;
+            TurnIndex = turnIndex;
+            Succeeded = succeeded;
+            Message = message;
+        }
+
+        public DateTime UtcTimestamp { get; }
+        public string HookName { get; }
+        public string SessionId { get; }
+        public string PlayerId { get; }
+        public string TileId { get; }
+        public string Phase { get; }
+        public int TurnIndex { get; }
+        public bool Succeeded { get; }
+        public string Message { get; }
+    }
+
     [SerializeField] private HUDController hudController;
     [SerializeField] private TurnController turnController;
     [SerializeField] private AuctionPanelController auctionPanelController;
@@ -21,6 +55,15 @@ public sealed class SnapshotHydrator : MonoBehaviour
     public MonoJoeyMoneyDeltaPayload[] LastMoneyDeltas { get; private set; } = Array.Empty<MonoJoeyMoneyDeltaPayload>();
     public MonoJoeyPropertyOwnershipChangePayload[] LastPropertyOwnershipChanges { get; private set; } = Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
     public MonoJoeyPlayerEliminationPayload[] LastPlayerEliminations { get; private set; } = Array.Empty<MonoJoeyPlayerEliminationPayload>();
+
+    public event Action<HydrationHookEvent> HydrationStarted;
+    public event Action<HydrationHookEvent> HudUpdated;
+    public event Action<HydrationHookEvent> TurnUpdated;
+    public event Action<HydrationHookEvent> AuctionUpdated;
+    public event Action<HydrationHookEvent> BoardTileUpdated;
+    public event Action<HydrationHookEvent> TokenUpdated;
+    public event Action<HydrationHookEvent> HydrationCompleted;
+    public event Action<HydrationHookEvent> HydrationFailed;
 
     public void Configure(
         HUDController hud,
@@ -72,6 +115,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
         }
 
         LastSnapshot = snapshot;
+        Emit(HydrationStarted, "hydration-started", "", "", true, "Snapshot hydration started.");
         LastMovement = snapshot.movement;
         LastMoneyDeltas = snapshot.moneyDeltas ?? Array.Empty<MonoJoeyMoneyDeltaPayload>();
         LastPropertyOwnershipChanges = snapshot.propertyOwnershipChanges ?? Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
@@ -84,6 +128,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
             BindAuction(snapshot.activeAuction);
             BindBoard(snapshot);
             LastHydrationSucceeded = false;
+            Emit(HydrationCompleted, "hydration-completed", "", "", false, "Snapshot had no players; board and auction hydrated only.");
             LogWarning("Snapshot had no players; board and auction were hydrated, HUD/token were skipped.");
             return false;
         }
@@ -94,11 +139,13 @@ public sealed class SnapshotHydrator : MonoBehaviour
         if (hudController != null)
         {
             hudController.BindSnapshot(playerHud, turnHud);
+            Emit(HudUpdated, "hud-updated", playerHud.PlayerId, playerHud.CurrentTileId, true, $"HUD updated: money={playerHud.Money}, loan={playerHud.LoanTotalBorrowed}.");
         }
 
         if (turnController != null)
         {
             turnController.BindHudSnapshot(playerHud, turnHud);
+            Emit(TurnUpdated, "turn-updated", turnHud.CurrentPlayerId, playerHud.CurrentTileId, true, $"Turn UI updated: turn={turnHud.TurnIndex}, phase={Display(turnHud.Phase)}.");
         }
 
         BindAuction(snapshot.activeAuction);
@@ -107,8 +154,19 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
         LastHydratedPlayerId = player.playerId ?? "";
         LastHydrationSucceeded = true;
+        Emit(HydrationCompleted, "hydration-completed", LastHydratedPlayerId, LastHydratedTileId, true, "Snapshot hydration completed.");
         Log($"Chunk 5 snapshot hydrated: session={Display(snapshot.sessionId)}, player={Display(LastHydratedPlayerId)}, tile={Display(LastHydratedTileId)}, turn={turnHud.TurnIndex}/{Display(turnHud.Phase)}, activeAuction={snapshot.activeAuction != null}, moneyDeltas={LastMoneyDeltas.Length}, ownershipChanges={LastPropertyOwnershipChanges.Length}, eliminations={LastPlayerEliminations.Length}.");
         return true;
+    }
+
+    public bool RefreshFromLiveSessionSnapshot(MonoJoeySnapshot snapshot)
+    {
+        return HydrateSnapshot(snapshot);
+    }
+
+    public bool RefreshFromLiveSessionSnapshotJson(string json)
+    {
+        return HydrateSnapshotJson(json);
     }
 
     public bool HydrateSnapshotResultJson(string json)
@@ -159,6 +217,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
             auctionPanelController.BindAuctionSnapshot("", 0, "", "", 0f);
             auctionPanelController.BindPlayerBidRows(Array.Empty<string>(), Array.Empty<int>());
             auctionPanelController.AppendLog("Active auction cleared from authoritative snapshot. Read-only snapshot hydration; no backend mutation.");
+            Emit(AuctionUpdated, "auction-updated", "", "", true, "Active auction cleared.");
             return;
         }
 
@@ -185,6 +244,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
         auctionPanelController.BindPlayerBidRows(playerIds, amounts);
         auctionPanelController.AppendLog($"Active auction hydrated for {Display(auction.propertyTileId)}. Read-only snapshot hydration; no backend mutation.");
+        Emit(AuctionUpdated, "auction-updated", auction.highestBidderId, auction.propertyTileId, true, $"Auction updated: highBid={auction.highestBid}, highBidder={Display(auction.highestBidderId)}.");
     }
 
     private void BindBoard(MonoJoeySnapshot snapshot)
@@ -204,6 +264,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
             {
                 runtimeTile.SetOwnership("", Color.clear);
                 runtimeTile.SetHighlighted(false);
+                Emit(BoardTileUpdated, "board-tile-updated", "", runtimeTile.TileId, false, "Runtime board tile missing from snapshot; ownership/highlight cleared.");
                 LogWarning($"Runtime board tile {Display(runtimeTile.TileId)} was missing from snapshot; cleared read-only ownership/highlight.");
                 continue;
             }
@@ -225,6 +286,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
             runtimeTile.BindTile(snapshotTile.tileId, snapshotTile.ownerPlayerId, ownerColor);
             runtimeTile.SetBoardIndex(snapshotTile.index);
             runtimeTile.SetHighlighted(false);
+            Emit(BoardTileUpdated, "board-tile-updated", snapshotTile.ownerPlayerId, snapshotTile.tileId, true, $"Board tile updated: owner={Display(snapshotTile.ownerPlayerId)}, index={snapshotTile.index}.");
         }
     }
 
@@ -251,10 +313,12 @@ public sealed class SnapshotHydrator : MonoBehaviour
             playerTokenController.SetCurrentTileIndex(boardIndex);
             playerTokenController.MoveToTilePosition(tile.GetTokenAnchorPosition(0.35f));
             LastHydratedTileId = player.currentTileId;
+            Emit(TokenUpdated, "token-updated", player.playerId, player.currentTileId, true, $"Token snapped: boardIndex={boardIndex}.");
             return;
         }
 
         LastHydratedTileId = "";
+        Emit(TokenUpdated, "token-updated", player.playerId, player.currentTileId, false, "Token snap failed because authoritative tile was missing.");
         LogWarning($"Could not snap token for player {Display(player.playerId)} because tile {Display(player.currentTileId)} was missing.");
     }
 
@@ -430,8 +494,34 @@ public sealed class SnapshotHydrator : MonoBehaviour
     private bool Fail(string message)
     {
         ClearFreshSnapshotState();
+        Emit(HydrationFailed, "hydration-failed", "", "", false, message);
         LogWarning(message);
         return false;
+    }
+
+    private void Emit(
+        Action<HydrationHookEvent> handler,
+        string hookName,
+        string playerId,
+        string tileId,
+        bool succeeded,
+        string message)
+    {
+        if (handler == null)
+        {
+            return;
+        }
+
+        MonoJoeyTurnSnapshot turn = LastSnapshot == null ? null : LastSnapshot.turn;
+        handler.Invoke(new HydrationHookEvent(
+            hookName,
+            LastSnapshot == null ? "" : LastSnapshot.sessionId,
+            playerId ?? "",
+            tileId ?? "",
+            LastSnapshot == null ? "" : LastSnapshot.phase,
+            turn == null ? -1 : turn.turnIndex,
+            succeeded,
+            message ?? ""));
     }
 
     private void Log(string message)

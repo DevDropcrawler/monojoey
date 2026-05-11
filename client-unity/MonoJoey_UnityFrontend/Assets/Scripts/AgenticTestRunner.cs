@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -276,6 +277,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         GameObject hydratorObject = new GameObject("SnapshotHydrator_Chunk5Runtime", typeof(SnapshotHydrator));
         SnapshotHydrator hydrator = hydratorObject.GetComponent<SnapshotHydrator>();
         hydrator.Configure(hud, turnController, auction, token, tokenAnimator, boardPath, testPlayerId);
+        SubscribeToChunk6HydratorHooks(hydrator, hydratorObject);
 
         bool firstHydrated = hydrator.HydrateSnapshotJson(Chunk5SnapshotJson(activeAuction: true));
         BoardTileController propertyOne = FindBoardTile(boardPath, "property_01");
@@ -284,6 +286,48 @@ public sealed class AgenticTestRunner : MonoBehaviour
         bool secondHydrated = hydrator.HydrateSnapshotJson(Chunk5SnapshotJson(activeAuction: false));
         BoardTileController propertyTwo = FindBoardTile(boardPath, "property_02");
         Debug.Log($"[AgenticTestRunner] Chunk 5 second snapshot hydrated={secondHydrated}: auctionId={auction.AuctionId}, auctionHighBidder={auction.HighBidderPlayerId}, auctionHighBid={auction.CurrentHighBid}, helpers movement={(hydrator.LastMovement == null ? "cleared" : "present")}, moneyDeltas={hydrator.LastMoneyDeltas.Length}, ownershipChanges={hydrator.LastPropertyOwnershipChanges.Length}, eliminations={hydrator.LastPlayerEliminations.Length}, tileOwner={propertyTwo?.OwnerPlayerId}, tileIndex={(propertyTwo == null ? -1 : propertyTwo.BoardIndex)}, tokenPlayer={token.PlayerId}, tokenTileId={hydrator.LastHydratedTileId}, tokenTileIndex={token.CurrentTileIndex}, tokenPosition={token.transform.position}. Read-only snapshot hydration; no backend mutation.", hydratorObject);
+
+        string beforeLiveMoneyLoan = $"{hud.LastPlayerSnapshot.Money}/{hud.LastPlayerSnapshot.LoanTotalBorrowed}";
+        string beforeLivePhase = turnController.LastSnapshot.Phase;
+        string beforeLiveAuction = $"{auction.HighBidderPlayerId}/{auction.CurrentHighBid}";
+        string beforeLiveToken = $"{hydrator.LastHydratedTileId}/{token.CurrentTileIndex}/{token.transform.position}";
+        bool liveHydrated = hydrator.RefreshFromLiveSessionSnapshotJson(Chunk6LiveSessionUpdateSnapshotJson());
+        BoardTileController auctionTile = FindBoardTile(boardPath, "auction_test");
+        Debug.Log($"[AgenticTestRunner] {UtcNowStamp()} Chunk 6 mock session update hydrated={liveHydrated}: hudMoneyLoan {beforeLiveMoneyLoan}->{hud.LastPlayerSnapshot.Money}/{hud.LastPlayerSnapshot.LoanTotalBorrowed}, turnPhase {beforeLivePhase}->{turnController.LastSnapshot.Phase}, hasRolled={turnController.LastSnapshot.HasRolledThisTurn}, hasResolved={turnController.LastSnapshot.HasResolvedTileThisTurn}, token {beforeLiveToken}->{hydrator.LastHydratedTileId}/{token.CurrentTileIndex}/{token.transform.position}, auction {beforeLiveAuction}->{auction.HighBidderPlayerId}/{auction.CurrentHighBid}, auctionTileOwner={auctionTile?.OwnerPlayerId}, auctionTileHighlighted={(auctionTile != null && auctionTile.IsHighlighted)}. Read-only mock live session update; no backend mutation.", hydratorObject);
+    }
+
+    private static void SubscribeToChunk6HydratorHooks(SnapshotHydrator hydrator, UnityEngine.Object logContext)
+    {
+        if (hydrator == null)
+        {
+            return;
+        }
+
+        hydrator.HydrationStarted += LogChunk6HydratorHook;
+        hydrator.HudUpdated += LogChunk6HydratorHook;
+        hydrator.TurnUpdated += LogChunk6HydratorHook;
+        hydrator.AuctionUpdated += LogChunk6HydratorHook;
+        hydrator.BoardTileUpdated += LogChunk6HydratorHook;
+        hydrator.TokenUpdated += LogChunk6HydratorHook;
+        hydrator.HydrationCompleted += LogChunk6HydratorHook;
+        hydrator.HydrationFailed += LogChunk6HydratorHook;
+
+        Debug.Log($"[AgenticTestRunner] {UtcNowStamp()} Chunk 6 live session hook subscribed. Read-only mock hooks; no backend mutation.", logContext);
+    }
+
+    private static void LogChunk6HydratorHook(SnapshotHydrator.HydrationHookEvent hookEvent)
+    {
+        Debug.Log($"[AgenticTestRunner] {hookEvent.UtcTimestamp:O} Chunk 6 hydrator hook: hook={hookEvent.HookName}, success={hookEvent.Succeeded}, session={DisplayLogValue(hookEvent.SessionId)}, player={DisplayLogValue(hookEvent.PlayerId)}, tile={DisplayLogValue(hookEvent.TileId)}, phase={DisplayLogValue(hookEvent.Phase)}, turn={hookEvent.TurnIndex}, message={hookEvent.Message}. Read-only mock hook; no backend mutation.");
+    }
+
+    private static string UtcNowStamp()
+    {
+        return DateTime.UtcNow.ToString("O");
+    }
+
+    private static string DisplayLogValue(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "--" : value;
     }
 
     private static BoardTileController FindBoardTile(IReadOnlyList<BoardTileController> boardPath, string tileId)
@@ -508,6 +552,106 @@ public sealed class AgenticTestRunner : MonoBehaviour
   },
   ""propertyStates"": [],
   ""activeAuction"": null
+}";
+    }
+
+    private static string Chunk6LiveSessionUpdateSnapshotJson()
+    {
+        return @"{
+  ""snapshotVersion"": 1,
+  ""sessionId"": ""session_chunk_6_live_mock"",
+  ""status"": ""in_game"",
+  ""gameStatus"": ""in_progress"",
+  ""serverNowUtc"": ""2026-05-11T00:01:00Z"",
+  ""matchId"": ""session_chunk_6_live_mock"",
+  ""phase"": ""auction_bidding"",
+  ""turn"": {
+    ""currentPlayerId"": ""player-agentic"",
+    ""turnIndex"": 11,
+    ""hasRolledThisTurn"": true,
+    ""hasResolvedTileThisTurn"": true,
+    ""hasExecutedTileThisTurn"": true
+  },
+  ""players"": [
+    {
+      ""playerId"": ""player-agentic"",
+      ""username"": ""Agentic Player"",
+      ""tokenId"": ""token_agentic"",
+      ""colorId"": ""gold"",
+      ""money"": 1210,
+      ""currentTileId"": ""auction_test"",
+      ""loan"": {
+        ""totalBorrowed"": 240,
+        ""currentInterestRatePercent"": 25,
+        ""nextTurnInterestDue"": 60,
+        ""loanTier"": 2
+      },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-2"",
+      ""username"": ""Blue Player"",
+      ""tokenId"": ""token_blue"",
+      ""colorId"": ""blue"",
+      ""money"": 1580,
+      ""currentTileId"": ""property_01"",
+      ""loan"": {
+        ""totalBorrowed"": 0,
+        ""currentInterestRatePercent"": 0,
+        ""nextTurnInterestDue"": 0,
+        ""loanTier"": 0
+      },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    }
+  ],
+  ""board"": {
+    ""boardId"": ""chunk_6_board"",
+    ""version"": 2,
+    ""displayName"": ""Chunk 6 Live Mock Board"",
+    ""tiles"": [
+      { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null },
+      { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" },
+      { ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-agentic"" },
+      { ""tileId"": ""auction_test"", ""index"": 3, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-agentic"" }
+    ]
+  },
+  ""activeAuction"": {
+    ""propertyTileId"": ""auction_test"",
+    ""triggeringPlayerId"": ""player-agentic"",
+    ""status"": ""active"",
+    ""startingBid"": 100,
+    ""minimumBidIncrement"": 10,
+    ""initialPreBidSeconds"": 5,
+    ""bidResetSeconds"": 10,
+    ""highestBid"": 310,
+    ""highestBidderId"": ""player-agentic"",
+    ""countdownDurationSeconds"": 7,
+    ""timerEndsAtUtc"": ""2026-05-11T00:01:07Z"",
+    ""bids"": [
+      { ""bidderPlayerId"": ""player-2"", ""amount"": 290, ""placedAtUtc"": ""2026-05-11T00:01:01Z"" },
+      { ""bidderPlayerId"": ""player-agentic"", ""amount"": 310, ""placedAtUtc"": ""2026-05-11T00:01:02Z"" }
+    ]
+  },
+  ""movement"": {
+    ""playerId"": ""player-agentic"",
+    ""fromTileId"": ""property_02"",
+    ""toTileId"": ""auction_test"",
+    ""pathTileIds"": [""auction_test""],
+    ""stepCount"": 1,
+    ""movementKind"": ""snap"",
+    ""passedStart"": false
+  },
+  ""moneyDeltas"": [
+    { ""playerId"": ""player-agentic"", ""delta"": -80, ""balance"": 1210, ""reason"": ""mock_live_update"", ""counterpartyPlayerId"": ""player-2"", ""tileId"": ""auction_test"", ""cardId"": null }
+  ],
+  ""propertyOwnershipChanges"": [
+    { ""tileId"": ""auction_test"", ""previousOwnerPlayerId"": null, ""newOwnerPlayerId"": ""player-agentic"", ""reason"": ""mock_live_update"" }
+  ],
+  ""playerEliminations"": []
 }";
     }
 
