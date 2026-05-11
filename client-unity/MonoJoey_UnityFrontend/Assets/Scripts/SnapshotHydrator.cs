@@ -51,6 +51,8 @@ public sealed class SnapshotHydrator : MonoBehaviour
     public string LastHydratedPlayerId { get; private set; } = "";
     public string LastHydratedTileId { get; private set; } = "";
     public bool LastHydrationSucceeded { get; private set; }
+    public string LastHydrationSourceMessageType { get; private set; } = "";
+    public DateTime LastHydrationUtc { get; private set; } = DateTime.MinValue;
     public MonoJoeyMovementPayload LastMovement { get; private set; }
     public MonoJoeyMoneyDeltaPayload[] LastMoneyDeltas { get; private set; } = Array.Empty<MonoJoeyMoneyDeltaPayload>();
     public MonoJoeyPropertyOwnershipChangePayload[] LastPropertyOwnershipChanges { get; private set; } = Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
@@ -91,6 +93,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
     public bool HydrateSnapshotJson(string json)
     {
+        LastHydrationSourceMessageType = "snapshot_json";
         if (string.IsNullOrWhiteSpace(json))
         {
             return Fail("Snapshot JSON was empty.");
@@ -154,6 +157,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
         LastHydratedPlayerId = player.playerId ?? "";
         LastHydrationSucceeded = true;
+        LastHydrationUtc = DateTime.UtcNow;
         Emit(HydrationCompleted, "hydration-completed", LastHydratedPlayerId, LastHydratedTileId, true, "Snapshot hydration completed.");
         Log($"Chunk 5 snapshot hydrated: session={Display(snapshot.sessionId)}, player={Display(LastHydratedPlayerId)}, tile={Display(LastHydratedTileId)}, turn={turnHud.TurnIndex}/{Display(turnHud.Phase)}, activeAuction={snapshot.activeAuction != null}, moneyDeltas={LastMoneyDeltas.Length}, ownershipChanges={LastPropertyOwnershipChanges.Length}, eliminations={LastPlayerEliminations.Length}.");
         return true;
@@ -171,6 +175,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
     public bool HydrateSnapshotResultJson(string json)
     {
+        LastHydrationSourceMessageType = "snapshot_result";
         if (string.IsNullOrWhiteSpace(json))
         {
             return Fail("Snapshot result JSON was empty.");
@@ -189,6 +194,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
     public bool HydrateReconnectResultJson(string json)
     {
+        LastHydrationSourceMessageType = "reconnect_result";
         if (string.IsNullOrWhiteSpace(json))
         {
             return Fail("Reconnect result JSON was empty.");
@@ -489,6 +495,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
         LastMoneyDeltas = Array.Empty<MonoJoeyMoneyDeltaPayload>();
         LastPropertyOwnershipChanges = Array.Empty<MonoJoeyPropertyOwnershipChangePayload>();
         LastPlayerEliminations = Array.Empty<MonoJoeyPlayerEliminationPayload>();
+        LastHydrationUtc = DateTime.MinValue;
     }
 
     private bool Fail(string message)

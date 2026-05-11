@@ -198,7 +198,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         ValidateHudSummary(hudObject, hud);
         ValidateTurnUiSummary(turnObject, turnController, diceAnimator);
 
-        RunReadOnlySnapshotHydrationValidation(hud, turnController, token, tokenAnimator, boardPath);
+        yield return RunReadOnlySnapshotHydrationValidation(hud, turnController, token, tokenAnimator, boardPath);
     }
 
     private static GameObject InstantiateRequiredPrefab(GameObject assignedPrefab, string editorAssetPath, string label)
@@ -253,7 +253,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.Log($"[AgenticTestRunner] Turn UI inspector fields: turnController={turnController != null}, diceImages={turnController.DiceImageCount}, rollButtonInteractable={turnController.RollButtonInteractable}, diceAnimator={diceAnimator != null}, diceFaces={(diceAnimator == null ? 0 : diceAnimator.DiceFaceCount)}, rollDuration={(diceAnimator == null ? 0f : diceAnimator.RollDuration)}. Mock/read-only; no backend mutation.", turnObject);
     }
 
-    private void RunReadOnlySnapshotHydrationValidation(
+    private IEnumerator RunReadOnlySnapshotHydrationValidation(
         HUDController hud,
         TurnController turnController,
         PlayerTokenController token,
@@ -264,14 +264,14 @@ public sealed class AgenticTestRunner : MonoBehaviour
         if (auctionObject == null)
         {
             Debug.LogWarning("[AgenticTestRunner] Chunk 5 snapshot hydration skipped because AuctionPanel prefab was unavailable. Read-only snapshot hydration; no backend mutation.", this);
-            return;
+            yield break;
         }
 
         AuctionPanelController auction = auctionObject.GetComponentInChildren<AuctionPanelController>();
         if (auction == null)
         {
             Debug.LogError("[AgenticTestRunner] Chunk 5 snapshot hydration skipped because AuctionPanelController was missing. Read-only snapshot hydration; no backend mutation.", auctionObject);
-            return;
+            yield break;
         }
 
         GameObject hydratorObject = new GameObject("SnapshotHydrator_Chunk5Runtime", typeof(SnapshotHydrator));
@@ -294,6 +294,57 @@ public sealed class AgenticTestRunner : MonoBehaviour
         bool liveHydrated = hydrator.RefreshFromLiveSessionSnapshotJson(Chunk6LiveSessionUpdateSnapshotJson());
         BoardTileController auctionTile = FindBoardTile(boardPath, "auction_test");
         Debug.Log($"[AgenticTestRunner] {UtcNowStamp()} Chunk 6 mock session update hydrated={liveHydrated}: hudMoneyLoan {beforeLiveMoneyLoan}->{hud.LastPlayerSnapshot.Money}/{hud.LastPlayerSnapshot.LoanTotalBorrowed}, turnPhase {beforeLivePhase}->{turnController.LastSnapshot.Phase}, hasRolled={turnController.LastSnapshot.HasRolledThisTurn}, hasResolved={turnController.LastSnapshot.HasResolvedTileThisTurn}, token {beforeLiveToken}->{hydrator.LastHydratedTileId}/{token.CurrentTileIndex}/{token.transform.position}, auction {beforeLiveAuction}->{auction.HighBidderPlayerId}/{auction.CurrentHighBid}, auctionTileOwner={auctionTile?.OwnerPlayerId}, auctionTileHighlighted={(auctionTile != null && auctionTile.IsHighlighted)}. Read-only mock live session update; no backend mutation.", hydratorObject);
+
+        yield return RunChunk7ReadOnlyTransportValidation(hydrator);
+    }
+
+    private IEnumerator RunChunk7ReadOnlyTransportValidation(SnapshotHydrator hydrator)
+    {
+        GameObject chunk7Object = new GameObject(
+            "MonoJoeyBackendTransport_Chunk7Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = chunk7Object.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = chunk7Object.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = chunk7Object.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyConnectionStatusController status = chunk7Object.GetComponent<MonoJoeyConnectionStatusController>();
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "session_chunk_7",
+            testPlayerId,
+            hydrator,
+            router,
+            true,
+            false);
+        status.Configure(session, router);
+
+        session.Connect();
+        Debug.Log($"[AgenticTestRunner] Chunk 7 mock transport connected: state={session.State}, lastRequest={session.LastSentRequestType}, reconnectHydrated={router.ReconnectResultCount}, hydratorSource={hydrator.LastHydrationSourceMessageType}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+
+        session.RequestSnapshot();
+        Debug.Log($"[AgenticTestRunner] Chunk 7 snapshot_result hydrated through SnapshotHydrator: snapshotHydrated={router.SnapshotResultCount}, hydratorSource={hydrator.LastHydrationSourceMessageType}, player={hydrator.LastHydratedPlayerId}, tile={hydrator.LastHydratedTileId}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+
+        mockTransport.EmitCannedError();
+        Debug.Log($"[AgenticTestRunner] Chunk 7 backend error envelope logged: errors={router.ErrorEnvelopeCount}, code={DisplayLogValue(router.LastErrorCode)}, message={DisplayLogValue(router.LastErrorMessage)}. Read-only backend transport; no local gameplay compensation.", chunk7Object);
+
+        mockTransport.EmitIgnoredBroadcast(8);
+        mockTransport.EmitIgnoredBroadcast(7);
+        mockTransport.EmitUnknownMessage();
+        yield return new WaitForSeconds(0.75f);
+
+        status.Refresh();
+        Debug.Log($"[AgenticTestRunner] Chunk 7 sequenced broadcast ignored/read-only refresh: broadcasts={router.SequencedBroadcastCount}, stale={router.StaleSequenceCount}, outOfOrder={router.OutOfOrderSequenceCount}, snapshotRequests={session.ReadOnlyRequestCount}, lastSequence={router.LastSequence}. No incremental gameplay application.", chunk7Object);
+        Debug.Log($"[AgenticTestRunner] Chunk 7 connection status updated: {status.LastRenderedStatus}. Read-only backend transport; no gameplay mutation request.", chunk7Object);
+        Debug.Log(mockTransport.GameplayMutationRequestCount == 0
+            ? $"[AgenticTestRunner] Chunk 7 no gameplay mutation request sent. Sent read-only types={string.Join(", ", mockTransport.SentRequestTypes)}."
+            : $"[AgenticTestRunner] Chunk 7 validation failed: gameplay mutation requests sent={mockTransport.GameplayMutationRequestCount}.", chunk7Object);
     }
 
     private static void SubscribeToChunk6HydratorHooks(SnapshotHydrator hydrator, UnityEngine.Object logContext)
