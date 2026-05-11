@@ -105,6 +105,10 @@ public sealed class AuctionPanelController : MonoBehaviour
     public bool HasActiveAuctionSnapshot => !string.IsNullOrWhiteSpace(auctionId);
     public string LastBidBlockedReason { get; private set; } = "";
     public string LastBidFeedbackText { get; private set; } = "";
+    public string CurrentBidDisplayText => currentBidText == null ? "" : currentBidText.text;
+    public string ActivePlayerDisplayText => activePlayerText == null ? "" : activePlayerText.text;
+    public string HighBidderDisplayText => highBidderText == null ? "" : highBidderText.text;
+    public string TimerDisplayText => timerText == null ? "" : timerText.text;
 
     private Coroutine highBidderPulseCoroutine;
     private string lastLoggedBidFeedback = "";
@@ -116,6 +120,7 @@ public sealed class AuctionPanelController : MonoBehaviour
             bidButton.onClick.AddListener(SubmitLocalBidRequest);
         }
 
+        RefreshButtonLabel();
         RefreshSnapshotText();
         RefreshBidButton();
         AnimateCountdownHighlight(remainingSeconds, 30f);
@@ -143,6 +148,10 @@ public sealed class AuctionPanelController : MonoBehaviour
         highBidderPlayerId = snapshotHighBidderPlayerId;
         activePlayerId = snapshotActivePlayerId;
         remainingSeconds = Mathf.Max(0f, snapshotRemainingSeconds);
+        if (LastBidFeedbackText.StartsWith("Bid sent:", StringComparison.Ordinal))
+        {
+            LastBidFeedbackText = "";
+        }
 
         RefreshSnapshotText();
         RefreshBidButton();
@@ -157,7 +166,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         useLiveGameplayCommandDispatcher = dispatcher != null;
         SubscribeDispatcherFeedback();
         RefreshBidButton();
-        SetBidFeedback($"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}");
+        SetBidFeedback("Ready to place a bid", $"Live command dispatcher configured: enabled={useLiveGameplayCommandDispatcher}");
     }
 
     public void BindPlayerBidRows(IReadOnlyList<string> playerIds, IReadOnlyList<int> bids)
@@ -241,14 +250,14 @@ public sealed class AuctionPanelController : MonoBehaviour
         if (bidInput == null)
         {
             LastBidBlockedReason = "bid input is not wired";
-            SetBidFeedback($"Bid blocked: {LastBidBlockedReason}.");
+            SetBidFeedback("Bid unavailable - Enter a valid bid", $"Bid blocked: {LastBidBlockedReason}.");
             return;
         }
 
         if (!int.TryParse(bidInput.text, out int amount) || amount <= 0)
         {
             LastBidBlockedReason = $"invalid bid amount {DisplayPlayerId(bidInput.text)}";
-            SetBidFeedback($"Bid blocked: {LastBidBlockedReason}.");
+            SetBidFeedback("Bid unavailable - Enter a valid bid", $"Bid blocked: {LastBidBlockedReason}.");
             RefreshBidButton();
             return;
         }
@@ -258,7 +267,7 @@ public sealed class AuctionPanelController : MonoBehaviour
             if (!CanSubmitBidLive(amount, out string reason))
             {
                 LastBidBlockedReason = reason;
-                SetBidFeedback($"Bid blocked: {reason}.");
+                SetBidFeedback($"Bid unavailable - {PlayerFacingBidReason(reason)}", $"Bid blocked: {reason}.");
                 RefreshBidButton();
                 return;
             }
@@ -266,15 +275,18 @@ public sealed class AuctionPanelController : MonoBehaviour
             bool sent = gameplayCommandDispatcher.TryPlaceBid(amount);
             LastBidBlockedReason = sent ? "" : gameplayCommandDispatcher.LastCommandError;
             SetBidFeedback(sent
-                ? $"Bid sent: ${amount}, id={DisplayPlayerId(gameplayCommandDispatcher.LastCommandLocalRequestId)}."
-                : $"Bid rejected: {gameplayCommandDispatcher.LastCommandError}");
+                ? $"Bid sent: ${amount}. Waiting for server update."
+                : $"Bid unavailable - {PlayerFacingBidReason(gameplayCommandDispatcher.LastCommandError)}",
+                sent
+                    ? $"Bid sent: ${amount}, id={DisplayPlayerId(gameplayCommandDispatcher.LastCommandLocalRequestId)}."
+                    : $"Bid rejected: {gameplayCommandDispatcher.LastCommandError}");
             RefreshBidButton();
             return;
         }
 
         LastBidRequest = new BidRequest(auctionId, amount);
         LastBidBlockedReason = "";
-        SetBidFeedback($"Local bid request: {auctionId} ${amount}");
+        SetBidFeedback($"Bid ready: ${amount}", $"Local bid request: {auctionId} ${amount}");
         BidRequested?.Invoke(LastBidRequest.Value);
         RefreshBidButton();
     }
@@ -283,22 +295,22 @@ public sealed class AuctionPanelController : MonoBehaviour
     {
         if (timerText != null)
         {
-            timerText.text = $"{Mathf.CeilToInt(remainingSeconds)}s";
+            timerText.text = $"{Mathf.CeilToInt(remainingSeconds)}s left";
         }
 
         if (currentBidText != null)
         {
-            currentBidText.text = $"Current Bid: ${currentHighBid}";
+            currentBidText.text = $"Auction: {DisplayPlayerId(auctionId)} - current bid ${currentHighBid}";
         }
 
         if (activePlayerText != null)
         {
-            activePlayerText.text = $"Active: {DisplayPlayerId(activePlayerId)}";
+            activePlayerText.text = BuildBidPromptText();
         }
 
         if (highBidderText != null)
         {
-            highBidderText.text = $"High Bidder: {DisplayPlayerId(highBidderPlayerId)}";
+            highBidderText.text = $"High bidder: {DisplayPlayerId(highBidderPlayerId)}";
         }
 
         RefreshBidButton();
@@ -311,6 +323,8 @@ public sealed class AuctionPanelController : MonoBehaviour
 
     private void RefreshBidButton()
     {
+        RefreshButtonLabel();
+
         if (bidButton == null)
         {
             return;
@@ -320,7 +334,8 @@ public sealed class AuctionPanelController : MonoBehaviour
         {
             bidButton.interactable = true;
             LastBidBlockedReason = "";
-            LastBidFeedbackText = "";
+            LastBidFeedbackText = BuildBidPromptText();
+            RefreshSnapshotTextOnlyPrompt();
             return;
         }
 
@@ -334,14 +349,30 @@ public sealed class AuctionPanelController : MonoBehaviour
             && string.Equals(gameplayCommandDispatcher.LastCommandRequestType, MonoJoeyTransportMessageTypes.PlaceBid, StringComparison.Ordinal)
             && !string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandError))
         {
-            SetBidFeedback($"Bid backend error: {gameplayCommandDispatcher.LastCommandError}");
+            SetBidFeedback($"Bid unavailable - {PlayerFacingBidReason(gameplayCommandDispatcher.LastCommandError)}", $"Bid backend error: {gameplayCommandDispatcher.LastCommandError}");
+            RefreshSnapshotTextOnlyPrompt();
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(LastBidBlockedReason))
         {
-            LastBidFeedbackText = $"Bid disabled: {LastBidBlockedReason}";
+            LastBidFeedbackText = $"Bid unavailable - {PlayerFacingBidReason(LastBidBlockedReason)}";
         }
+        else if (gameplayCommandDispatcher != null && gameplayCommandDispatcher.IsCommandInFlight)
+        {
+            LastBidFeedbackText = "Bid unavailable - Waiting for server";
+        }
+        else if (!string.IsNullOrWhiteSpace(LastBidFeedbackText)
+            && LastBidFeedbackText.StartsWith("Bid sent:", StringComparison.Ordinal))
+        {
+            // Keep the sent feedback visible until the authoritative snapshot refreshes it.
+        }
+        else
+        {
+            LastBidFeedbackText = BuildBidPromptText();
+        }
+
+        RefreshSnapshotTextOnlyPrompt();
     }
 
     private bool CanSubmitBidLive(int amount, out string reason)
@@ -443,7 +474,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         return $"invalid bid amount {DisplayPlayerId(value)}";
     }
 
-    private void SetBidFeedback(string message)
+    private void SetBidFeedback(string message, string diagnosticMessage = null)
     {
         if (string.IsNullOrWhiteSpace(message))
         {
@@ -451,11 +482,90 @@ public sealed class AuctionPanelController : MonoBehaviour
         }
 
         LastBidFeedbackText = message;
-        if (!string.Equals(lastLoggedBidFeedback, message, StringComparison.Ordinal))
+        RefreshSnapshotTextOnlyPrompt();
+
+        string logMessage = string.IsNullOrWhiteSpace(diagnosticMessage) ? message : diagnosticMessage;
+        if (!string.Equals(lastLoggedBidFeedback, logMessage, StringComparison.Ordinal))
         {
-            AppendLog(message);
-            lastLoggedBidFeedback = message;
+            AppendLog(logMessage);
+            lastLoggedBidFeedback = logMessage;
         }
+    }
+
+    private void RefreshButtonLabel()
+    {
+        if (bidButton == null)
+        {
+            return;
+        }
+
+        Text text = bidButton.GetComponentInChildren<Text>(true);
+        if (text != null)
+        {
+            text.text = "Place bid";
+        }
+    }
+
+    private void RefreshSnapshotTextOnlyPrompt()
+    {
+        if (activePlayerText != null)
+        {
+            activePlayerText.text = string.IsNullOrWhiteSpace(LastBidFeedbackText)
+                ? BuildBidPromptText()
+                : LastBidFeedbackText;
+        }
+    }
+
+    private string BuildBidPromptText()
+    {
+        if (!HasActiveAuctionSnapshot)
+        {
+            return "No active auction";
+        }
+
+        int minimumBid = Mathf.Max(1, currentHighBid + 1);
+        return $"Bid at least ${minimumBid}";
+    }
+
+    private static string PlayerFacingBidReason(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return "Waiting for server";
+        }
+
+        string lower = reason.ToLowerInvariant();
+        if (lower.Contains("not connected")
+            || lower.Contains("not live")
+            || lower.Contains("dispatcher is not configured")
+            || lower.Contains("not bound")
+            || lower.Contains("session"))
+        {
+            return "Not connected";
+        }
+
+        if (lower.Contains("already in flight") || lower.Contains("command in flight"))
+        {
+            return "Waiting for server";
+        }
+
+        if (lower.Contains("no active auction"))
+        {
+            return "No active auction";
+        }
+
+        if (lower.Contains("invalid bid") || lower.Contains("amount must be positive"))
+        {
+            return "Enter a valid bid";
+        }
+
+        int messageIndex = reason.IndexOf("message=", StringComparison.OrdinalIgnoreCase);
+        if (messageIndex >= 0)
+        {
+            return reason.Substring(messageIndex + "message=".Length);
+        }
+
+        return reason.Trim();
     }
 
     private void SubscribeDispatcherFeedback()

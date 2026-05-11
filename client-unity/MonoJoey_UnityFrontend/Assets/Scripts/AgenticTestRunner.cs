@@ -324,6 +324,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk9GameplayCommandDispatcherValidation(hydrator, hud, turnController, auction, token);
         yield return RunChunk10PlayableTurnUiCommandFlow(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk12GameplayCommandFeedbackValidation(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
+        yield return RunChunk16PlayableUserFlowPolishValidation(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
         yield return RunChunk14LiveSessionEntryValidation(hydrator);
         yield return RunChunk15LiveSmokeExecutionHelperValidation(hydrator);
@@ -692,6 +693,132 @@ public sealed class AgenticTestRunner : MonoBehaviour
         mockTransport.EmitCannedError();
         status.Refresh();
         Debug.Log($"[AgenticTestRunner] Chunk 12 backend error feedback: waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}, inFlight={dispatcher.IsCommandInFlight}, turnFeedback={DisplayLogValue(turnController.CommandFeedbackText)}, bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}, status={status.LastRenderedStatus}.", feedbackObject);
+
+        mockTransport.SetGameplayCommandTestResponsesHeld(false);
+        yield return null;
+    }
+
+    private IEnumerator RunChunk16PlayableUserFlowPolishValidation(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        BoardTileController[] boardPath)
+    {
+        GameObject flowObject = new GameObject(
+            "MonoJoeyPlayableUserFlow_Chunk16Runtime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient),
+            typeof(MonoJoeyGameplayCommandDispatcher),
+            typeof(MonoJoeyConnectionStatusController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = flowObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = flowObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = flowObject.GetComponent<MonoJoeySessionClient>();
+        MonoJoeyGameplayCommandDispatcher dispatcher = flowObject.GetComponent<MonoJoeyGameplayCommandDispatcher>();
+        MonoJoeyConnectionStatusController status = flowObject.GetComponent<MonoJoeyConnectionStatusController>();
+
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "session_chunk_16",
+            testPlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            true);
+        dispatcher.Configure(session);
+        status.Configure(session, router);
+        turnController.ConfigureLiveGameplayCommandDispatcher(dispatcher, testPlayerId);
+        auction.ConfigureLiveGameplayCommandDispatcher(dispatcher);
+        session.Connect();
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", testPlayerId, 40, false, false, false, 1500, "start", false, 0, ""));
+        LogChunk16FlowState("your-turn roll prompt", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "primary turn prompt is player-facing",
+            ContainsAll(turnController.CurrentPlayerDisplayText, "Your turn")
+                && ContainsAll(turnController.TurnStatusDisplayText, "Roll dice")
+                && !ContainsProtocolDetail(turnController.CommandFeedbackText),
+            $"header={DisplayLogValue(turnController.CurrentPlayerDisplayText)} status={DisplayLogValue(turnController.TurnStatusDisplayText)} feedback={DisplayLogValue(turnController.CommandFeedbackText)}",
+            flowObject);
+
+        string beforeDirectState = Chunk10StateSignature(hud, turnController, auction, token);
+        mockTransport.SetGameplayCommandTestResponsesHeld(true);
+        turnController.RollDice();
+        LogChunk16FlowState("roll in-flight prompt", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "in-flight copy is concise",
+            ContainsAll(turnController.CommandFeedbackText, "Waiting for server")
+                && ContainsAll(turnController.TurnStatusDisplayText, "Roll dice in progress")
+                && !ContainsProtocolDetail(turnController.CommandFeedbackText),
+            $"status={DisplayLogValue(turnController.TurnStatusDisplayText)} feedback={DisplayLogValue(turnController.CommandFeedbackText)}",
+            flowObject);
+
+        mockTransport.SetGameplayCommandTestResponsesHeld(false);
+        mockTransport.EmitCannedCommandResult(MonoJoeyTransportMessageTypes.RollDice);
+        string afterDirectState = Chunk10StateSignature(hud, turnController, auction, token);
+        LogChunk16FlowState("direct result waiting for snapshot", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "direct command result does not mutate gameplay presentation",
+            string.Equals(beforeDirectState, afterDirectState, StringComparison.Ordinal)
+                && ContainsAll(turnController.CommandFeedbackText, "Waiting for server update"),
+            $"before={beforeDirectState} after={afterDirectState} feedback={DisplayLogValue(turnController.CommandFeedbackText)}",
+            flowObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_tile_resolution", testPlayerId, 40, true, false, false, 1490, "property_01", false, 0, ""));
+        LogChunk16FlowState("snapshot resolves waiting state", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "authoritative snapshot updates next action",
+            !dispatcher.IsWaitingForAuthoritativeSnapshot
+                && ContainsAll(turnController.TurnStatusDisplayText, "Resolve tile"),
+            $"waiting={dispatcher.IsWaitingForAuthoritativeSnapshot} status={DisplayLogValue(turnController.TurnStatusDisplayText)}",
+            flowObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("awaiting_roll", "player-2", 41, false, false, false, 1490, "property_01", false, 0, ""));
+        LogChunk16FlowState("not-your-turn prompt", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "not-your-turn copy is readable",
+            ContainsAll(turnController.CurrentPlayerDisplayText, "Waiting for player-2")
+                && ContainsAll(turnController.CommandFeedbackText, "Not your turn")
+                && !ContainsProtocolDetail(turnController.CommandFeedbackText),
+            $"header={DisplayLogValue(turnController.CurrentPlayerDisplayText)} feedback={DisplayLogValue(turnController.CommandFeedbackText)}",
+            flowObject);
+
+        router.RouteRawMessage(Chunk10SnapshotResultJson("auction_bidding", testPlayerId, 42, true, true, false, 1490, "auction_test", true, 240, "player-2"));
+        auction.SetBidInputTextForValidation("260");
+        LogChunk16FlowState("active-auction prompt", flowObject, status, turnController, auction, dispatcher);
+        RecordChunk16Check(
+            "auction prompt is understandable without diagnostics",
+            ContainsAll(turnController.TurnStatusDisplayText, "Auction in progress")
+                && ContainsAll(auction.CurrentBidDisplayText, "auction_test", "$240")
+                && ContainsAll(auction.HighBidderDisplayText, "player-2")
+                && (ContainsAll(auction.ActivePlayerDisplayText, "Bid at least") || auction.BidButtonInteractable),
+            $"turn={DisplayLogValue(turnController.TurnStatusDisplayText)} currentBid={DisplayLogValue(auction.CurrentBidDisplayText)} highBidder={DisplayLogValue(auction.HighBidderDisplayText)} prompt={DisplayLogValue(auction.ActivePlayerDisplayText)}",
+            flowObject);
+
+        auction.SetBidInputTextForValidation("0");
+        auction.SubmitLocalBidRequest();
+        RecordChunk16Check(
+            "bid-disabled reason is player-facing",
+            ContainsAll(auction.LastBidFeedbackText, "Enter a valid bid")
+                && !ContainsProtocolDetail(auction.LastBidFeedbackText),
+            $"bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}",
+            flowObject);
+
+        status.Refresh();
+        RecordChunk16Check(
+            "secondary diagnostics remain available",
+            ContainsProtocolDetail(turnController.DebugLogText) || ContainsProtocolDetail(status.LastRenderedStatus),
+            $"debugLog={DisplayLogValue(turnController.DebugLogText)} status={DisplayLogValue(status.LastRenderedStatus)}",
+            flowObject);
 
         mockTransport.SetGameplayCommandTestResponsesHeld(false);
         yield return null;
@@ -2171,6 +2298,69 @@ public sealed class AgenticTestRunner : MonoBehaviour
     {
         status?.Refresh();
         Debug.Log($"[AgenticTestRunner] Chunk 12 {label}: buttons=roll:{turnController.RollButtonInteractable},resolve:{turnController.ResolveButtonInteractable},execute:{turnController.ExecuteButtonInteractable},end:{turnController.EndTurnButtonInteractable}, blocked=roll:{DisplayLogValue(turnController.LastRollBlockedReason)},resolve:{DisplayLogValue(turnController.LastResolveBlockedReason)},execute:{DisplayLogValue(turnController.LastExecuteBlockedReason)},end:{DisplayLogValue(turnController.LastEndTurnBlockedReason)}, turnFeedback={DisplayLogValue(turnController.CommandFeedbackText)}, bidButton={auction.BidButtonInteractable}, bidBlocked={DisplayLogValue(auction.LastBidBlockedReason)}, bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}, inFlight={dispatcher.IsCommandInFlight}, waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}, result={DisplayLogValue(dispatcher.LastCommandResultType)}, backendError={DisplayLogValue(dispatcher.LastCommandError)}, status={DisplayLogValue(status == null ? "" : status.LastRenderedStatus)}. Backend authoritative; no local gameplay state mutation.", context);
+    }
+
+    private static void LogChunk16FlowState(
+        string label,
+        UnityEngine.Object context,
+        MonoJoeyConnectionStatusController status,
+        TurnController turnController,
+        AuctionPanelController auction,
+        MonoJoeyGameplayCommandDispatcher dispatcher)
+    {
+        status?.Refresh();
+        Debug.Log($"[AgenticTestRunner] Chunk 16 {label}: primaryHeader={DisplayLogValue(turnController.CurrentPlayerDisplayText)}, primaryStatus={DisplayLogValue(turnController.TurnStatusDisplayText)}, primaryFeedback={DisplayLogValue(turnController.CommandFeedbackText)}, auctionCurrent={DisplayLogValue(auction.CurrentBidDisplayText)}, auctionPrompt={DisplayLogValue(auction.ActivePlayerDisplayText)}, auctionHighBidder={DisplayLogValue(auction.HighBidderDisplayText)}, bidFeedback={DisplayLogValue(auction.LastBidFeedbackText)}, diagnosticsStatus={DisplayLogValue(status == null ? "" : status.LastRenderedStatus)}, debugAvailable={!string.IsNullOrWhiteSpace(turnController.DebugLogText)}, inFlight={dispatcher.IsCommandInFlight}, waiting={dispatcher.IsWaitingForAuthoritativeSnapshot}. Backend authoritative; no local gameplay state mutation.", context);
+    }
+
+    private static void RecordChunk16Check(string label, bool passed, string details, UnityEngine.Object context)
+    {
+        string message = $"[AgenticTestRunner] Chunk 16 {(passed ? "PASS" : "FAIL")} {label}: {details}.";
+        if (passed)
+        {
+            Debug.Log(message, context);
+            return;
+        }
+
+        Debug.LogError(message, context);
+    }
+
+    private static bool ContainsAll(string value, params string[] expectedFragments)
+    {
+        if (value == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expectedFragments.Length; i++)
+        {
+            string fragment = expectedFragments[i];
+            if (!string.IsNullOrWhiteSpace(fragment)
+                && value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ContainsProtocolDetail(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.IndexOf("roll_dice", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("resolve_tile", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("execute_tile", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("end_turn", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("place_bid", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("localRequestId", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("requestId", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("sequence", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("snapshot_result", StringComparison.OrdinalIgnoreCase) >= 0
+            || value.IndexOf("reconnect_result", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static string Chunk10StateSignature(

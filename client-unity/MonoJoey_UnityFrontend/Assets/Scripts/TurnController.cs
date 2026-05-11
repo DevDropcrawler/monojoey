@@ -70,6 +70,8 @@ public sealed class TurnController : MonoBehaviour
     public string LastEndTurnBlockedReason => lastEndTurnBlockedReason;
     public string DebugLogText => debugLog == null ? "" : debugLog.text;
     public string CommandFeedbackText => commandFeedbackText == null ? "" : commandFeedbackText.text;
+    public string CurrentPlayerDisplayText => currentPlayerText == null ? "" : currentPlayerText.text;
+    public string TurnStatusDisplayText => turnStatusText == null ? "" : turnStatusText.text;
 
     private void Awake()
     {
@@ -656,20 +658,16 @@ public sealed class TurnController : MonoBehaviour
 
     private void RefreshUi()
     {
+        RefreshButtonLabels();
+
         if (currentPlayerText != null)
         {
-            currentPlayerText.text = hasSnapshot
-                ? $"Current: {DisplayText(lastSnapshot.CurrentPlayerId, "--")}"
-                : "Current: --";
+            currentPlayerText.text = BuildPrimaryTurnHeader();
         }
 
         if (turnStatusText != null)
         {
-            string phase = hasSnapshot ? DisplayText(lastSnapshot.Phase, "Unknown") : "No Snapshot";
-            string turnIndex = TurnIndexText();
-            string rollState = IsRolling ? "rolling" : IsMovementAnimating ? "moving" : hasRolledLocally ? "rolled" : "ready";
-            string activeState = isTurnActive ? "active" : "idle";
-            turnStatusText.text = $"Turn {turnIndex}: {phase} | {activeState} | {rollState}";
+            turnStatusText.text = BuildPrimaryTurnStatus();
         }
 
         if (rollButton != null)
@@ -693,6 +691,126 @@ public sealed class TurnController : MonoBehaviour
         }
 
         RefreshCommandFeedbackText();
+    }
+
+    private void RefreshButtonLabels()
+    {
+        SetButtonLabel(rollButton, "Roll dice");
+        SetButtonLabel(resolveButton, "Resolve tile");
+        SetButtonLabel(executeButton, "Execute tile");
+        SetButtonLabel(endTurnButton, "End turn");
+    }
+
+    private static void SetButtonLabel(Button button, string label)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        Text text = button.GetComponentInChildren<Text>(true);
+        if (text != null)
+        {
+            text.text = label;
+        }
+    }
+
+    private string BuildPrimaryTurnHeader()
+    {
+        if (!hasSnapshot)
+        {
+            return "Waiting for server update";
+        }
+
+        string currentPlayer = CurrentPlayerId();
+        if (string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal))
+        {
+            return "Your turn";
+        }
+
+        return $"Waiting for {currentPlayer}";
+    }
+
+    private string BuildPrimaryTurnStatus()
+    {
+        string nextAction = BuildNextActionText();
+        if (hasSnapshot)
+        {
+            return $"Turn {TurnIndexText()} - {nextAction}";
+        }
+
+        return nextAction;
+    }
+
+    private string BuildNextActionText()
+    {
+        if (UseLiveCommandMode())
+        {
+            if (gameplayCommandDispatcher.IsCommandInFlight)
+            {
+                return $"{CommandActionInProgressText(gameplayCommandDispatcher.InFlightRequestType)}";
+            }
+
+            if (gameplayCommandDispatcher.IsWaitingForAuthoritativeSnapshot)
+            {
+                return "Waiting for server update";
+            }
+
+            if (hasActiveAuctionFromHydration)
+            {
+                return "Auction in progress";
+            }
+
+            if (CanRollLive(out _))
+            {
+                return "Roll dice";
+            }
+
+            if (CanResolveTileLive(out _))
+            {
+                return "Resolve tile";
+            }
+
+            if (CanExecuteTileLive(out _))
+            {
+                return "Execute tile";
+            }
+
+            if (CanEndTurnLive(out _))
+            {
+                return "End turn";
+            }
+
+            string disabledReason = PlayerFacingDisabledReason(CurrentDisabledReason());
+            return string.IsNullOrWhiteSpace(disabledReason) ? "Waiting for server update" : disabledReason;
+        }
+
+        if (IsRolling)
+        {
+            return "Rolling dice";
+        }
+
+        if (IsMovementAnimating)
+        {
+            return "Resolving move";
+        }
+
+        if (CanRoll(out _))
+        {
+            return "Roll dice";
+        }
+
+        if (!hasSnapshot)
+        {
+            return "Waiting for server update";
+        }
+
+        if (!string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal))
+        {
+            return "Not your turn";
+        }
+
+        return hasRolledLocally ? "Roll complete" : "Roll first";
     }
 
     private bool CanRollForUi()
@@ -899,47 +1017,70 @@ public sealed class TurnController : MonoBehaviour
 
         if (!UseLiveCommandMode())
         {
-            commandFeedbackText.text = "Command: mock/read-only";
+            commandFeedbackText.text = BuildMockPrimaryFeedbackText();
             return;
         }
 
         List<string> lines = new List<string>();
-        string lastCommand = DisplayText(gameplayCommandDispatcher.LastCommandRequestType, "--");
-        string lastRequestId = DisplayText(gameplayCommandDispatcher.LastCommandLocalRequestId, "--");
-        lines.Add($"Last: {lastCommand} id={lastRequestId}");
 
         if (gameplayCommandDispatcher.IsCommandInFlight)
         {
-            lines.Add($"In flight: {DisplayText(gameplayCommandDispatcher.InFlightRequestType, "--")} id={DisplayText(gameplayCommandDispatcher.InFlightLocalRequestId, "--")}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandResultSummary))
-        {
-            lines.Add($"Result: {gameplayCommandDispatcher.LastCommandResultSummary}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandError))
-        {
-            lines.Add($"Error: {gameplayCommandDispatcher.LastCommandError}");
+            lines.Add("Waiting for server");
+            lines.Add(CommandActionInProgressText(gameplayCommandDispatcher.InFlightRequestType));
         }
 
         if (gameplayCommandDispatcher.IsWaitingForAuthoritativeSnapshot)
         {
-            lines.Add("Waiting: authoritative snapshot");
+            lines.Add("Waiting for server update");
+        }
+
+        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandResultType))
+        {
+            lines.Add(PlayerFacingCommandResult(gameplayCommandDispatcher.LastCommandResultType));
+        }
+
+        if (!string.IsNullOrWhiteSpace(gameplayCommandDispatcher.LastCommandError))
+        {
+            lines.Add(PlayerFacingCommandError(gameplayCommandDispatcher.LastCommandError));
         }
 
         string disabledReason = CurrentDisabledReason();
         if (!string.IsNullOrWhiteSpace(disabledReason))
         {
-            lines.Add($"Disabled: {disabledReason}");
+            lines.Add(PlayerFacingDisabledReason(disabledReason));
         }
 
         if (hasActiveAuctionFromHydration)
         {
-            lines.Add("Status: active auction");
+            lines.Add("Auction in progress");
         }
 
         commandFeedbackText.text = string.Join("\n", lines);
+    }
+
+    private string BuildMockPrimaryFeedbackText()
+    {
+        if (IsRolling)
+        {
+            return "Rolling dice";
+        }
+
+        if (IsMovementAnimating)
+        {
+            return "Resolving move";
+        }
+
+        if (!hasSnapshot)
+        {
+            return "Waiting for server update";
+        }
+
+        if (!string.Equals(lastSnapshot.CurrentPlayerId, localPlayerId, StringComparison.Ordinal))
+        {
+            return "Not your turn";
+        }
+
+        return hasRolledLocally ? "Roll complete" : "Roll first";
     }
 
     private string CurrentDisabledReason()
@@ -987,6 +1128,158 @@ public sealed class TurnController : MonoBehaviour
         if (!string.IsNullOrWhiteSpace(lastEndTurnBlockedReason))
         {
             return $"End turn - {lastEndTurnBlockedReason}";
+        }
+
+        return "";
+    }
+
+    private static string CommandActionInProgressText(string requestType)
+    {
+        string label = CommandLabel(requestType);
+        return string.IsNullOrWhiteSpace(label) ? "Action in progress" : $"{label} in progress";
+    }
+
+    private static string PlayerFacingCommandResult(string resultType)
+    {
+        if (string.Equals(resultType, MonoJoeyTransportMessageTypes.RollResult, StringComparison.Ordinal))
+        {
+            return "Roll accepted";
+        }
+
+        if (string.Equals(resultType, MonoJoeyTransportMessageTypes.ResolveTileResult, StringComparison.Ordinal))
+        {
+            return "Tile resolved";
+        }
+
+        if (string.Equals(resultType, MonoJoeyTransportMessageTypes.ExecuteTileResult, StringComparison.Ordinal))
+        {
+            return "Tile action accepted";
+        }
+
+        if (string.Equals(resultType, MonoJoeyTransportMessageTypes.EndTurnResult, StringComparison.Ordinal))
+        {
+            return "Turn ended";
+        }
+
+        if (string.Equals(resultType, MonoJoeyTransportMessageTypes.BidResult, StringComparison.Ordinal))
+        {
+            return "Bid accepted";
+        }
+
+        return "Action accepted";
+    }
+
+    private static string PlayerFacingCommandError(string error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return "";
+        }
+
+        string message = error;
+        int messageIndex = message.IndexOf("message=", StringComparison.OrdinalIgnoreCase);
+        if (messageIndex >= 0)
+        {
+            message = message.Substring(messageIndex + "message=".Length);
+        }
+
+        return $"Server error: {PlayerFacingDisabledReason(message)}";
+    }
+
+    private static string PlayerFacingDisabledReason(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return "";
+        }
+
+        string value = reason.Trim();
+        string lower = value.ToLowerInvariant();
+
+        if (lower.Contains("not connected")
+            || lower.Contains("not live")
+            || lower.Contains("dispatcher is not configured")
+            || lower.Contains("session client is not configured")
+            || lower.Contains("not bound")
+            || lower.Contains("unbound")
+            || lower.Contains("bound to session"))
+        {
+            return "Not connected";
+        }
+
+        if (lower.Contains("not local turn") || lower.Contains("not your turn") || lower.Contains("not local player"))
+        {
+            return "Not your turn";
+        }
+
+        if (lower.Contains("no authoritative turn snapshot") || lower.Contains("no local turn snapshot") || lower.Contains("no snapshot"))
+        {
+            return "Waiting for server update";
+        }
+
+        if (lower.Contains("command in flight") || lower.Contains("already in flight"))
+        {
+            return "Waiting for server";
+        }
+
+        if (lower.Contains("active auction") || lower.Contains("auction must finish"))
+        {
+            return "Auction must finish";
+        }
+
+        if (lower.Contains("resolve tile first"))
+        {
+            return "Resolve tile first";
+        }
+
+        if (lower.Contains("execute tile first"))
+        {
+            return "Execute tile first";
+        }
+
+        if (lower.Contains("roll first") || lower.Contains("already rolled"))
+        {
+            return "Roll first";
+        }
+
+        if (lower.Contains("invalid bid") || lower.Contains("amount must be positive"))
+        {
+            return "Enter a valid bid";
+        }
+
+        if (lower.Contains("no active auction"))
+        {
+            return "Auction must finish";
+        }
+
+        return value;
+    }
+
+    private static string CommandLabel(string requestType)
+    {
+        if (string.Equals(requestType, MonoJoeyTransportMessageTypes.RollDice, StringComparison.Ordinal))
+        {
+            return "Roll dice";
+        }
+
+        if (string.Equals(requestType, MonoJoeyTransportMessageTypes.ResolveTile, StringComparison.Ordinal))
+        {
+            return "Resolve tile";
+        }
+
+        if (string.Equals(requestType, MonoJoeyTransportMessageTypes.ExecuteTile, StringComparison.Ordinal))
+        {
+            return "Execute tile";
+        }
+
+        if (string.Equals(requestType, MonoJoeyTransportMessageTypes.EndTurn, StringComparison.Ordinal))
+        {
+            return "End turn";
+        }
+
+        if (string.Equals(requestType, MonoJoeyTransportMessageTypes.PlaceBid, StringComparison.Ordinal))
+        {
+            return "Place bid";
         }
 
         return "";
