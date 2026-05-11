@@ -131,6 +131,7 @@ MonoBehaviour:
   baseRenderer: {fileID: 100004}
   highlightRenderer: {fileID: 200004}
   ownershipRenderer: {fileID: 300004}
+  boardIndex: -1
   normalColor: {r: 0.28, g: 0.32, b: 0.36, a: 1}
   highlightedColor: {r: 0.95, g: 0.78, b: 0.24, a: 0.65}
   unownedColor: {r: 0.22, g: 0.24, b: 0.27, a: 1}

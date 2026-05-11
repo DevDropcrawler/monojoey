@@ -53,9 +53,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
     {
         EnsureEventSystem();
         Dictionary<string, BoardTileController> tilesById = ValidateBoardTiles();
-        ValidateHud();
-        ValidateTurnUi();
-        ValidatePlayerToken(tilesById);
+        StartCoroutine(RunFullMockTurnValidation(tilesById));
         ValidateAuctionPanel();
     }
 
@@ -93,6 +91,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
             string ownerId = i == 1 ? "player-2" : i == 2 ? "player-3" : "";
             Color ownerColor = i == 1 ? new Color(0.20f, 0.55f, 0.85f, 1f) : new Color(0.95f, 0.70f, 0.18f, 1f);
             tile.BindTile(tileIds[i], ownerId, ownerColor);
+            tile.SetBoardIndex(i);
             tile.SetHighlighted(i == 3);
             tilesById[tile.TileId] = tile;
 
@@ -100,6 +99,143 @@ public sealed class AgenticTestRunner : MonoBehaviour
         }
 
         return tilesById;
+    }
+
+    private IEnumerator RunFullMockTurnValidation(Dictionary<string, BoardTileController> tilesById)
+    {
+        GameObject hudObject = InstantiateRequiredPrefab(hudPrefab, "Assets/Prefabs/HUDPrefab.prefab", "HUDPrefab");
+        GameObject turnObject = InstantiateRequiredPrefab(turnUiPrefab, "Assets/Prefabs/TurnUIPrefab.prefab", "TurnUIPrefab");
+        GameObject tokenObject = InstantiateRequiredPrefab(playerTokenPrefab, "Assets/Prefabs/PlayerToken.prefab", "PlayerToken");
+
+        if (hudObject == null || turnObject == null || tokenObject == null)
+        {
+            yield break;
+        }
+
+        HUDController hud = hudObject.GetComponentInChildren<HUDController>();
+        TurnController turnController = turnObject.GetComponentInChildren<TurnController>();
+        DiceAnimator diceAnimator = turnObject.GetComponentInChildren<DiceAnimator>();
+        PlayerTokenController token = tokenObject.GetComponent<PlayerTokenController>();
+        TokenAnimator tokenAnimator = tokenObject.GetComponent<TokenAnimator>();
+        if (tokenAnimator == null)
+        {
+            tokenAnimator = tokenObject.AddComponent<TokenAnimator>();
+        }
+
+        if (hud == null || turnController == null || token == null || tokenAnimator == null)
+        {
+            Debug.LogError($"[AgenticTestRunner] Full mock turn missing components: hud={hud != null}, turn={turnController != null}, token={token != null}, tokenAnimator={tokenAnimator != null}. Mock/read-only; no backend mutation.", this);
+            yield break;
+        }
+
+        BoardTileController[] boardPath = OrderedBoardPath(tilesById);
+        if (boardPath.Length == 0)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Full mock turn skipped because no board tiles were available. Mock/read-only; no backend mutation.", this);
+            yield break;
+        }
+
+        token.SetPlayer(testPlayerId, testTokenColor);
+        token.SetCurrentTileIndex(0);
+        token.MoveToTilePosition(boardPath[0].GetTokenAnchorPosition(0.35f));
+
+        HUDController.PlayerHudSnapshot player = new HUDController.PlayerHudSnapshot(
+            testPlayerId,
+            "Agentic Player",
+            "gold",
+            1500,
+            "start",
+            120,
+            10f,
+            12,
+            "starter",
+            false,
+            false,
+            false);
+        HUDController.TurnHudSnapshot turn = new HUDController.TurnHudSnapshot(
+            testPlayerId,
+            8,
+            "AwaitingRoll",
+            false,
+            false,
+            false);
+
+        turnController.ConfigureMockTurnReferences(hud, tokenAnimator, boardPath, testPlayerId);
+        turnController.BindHudSnapshot(player, turn);
+        turnController.StartTurn();
+
+        Debug.Log($"[AgenticTestRunner] Chunk 4 full mock turn start: player={player.PlayerId}, tile={player.CurrentTileId}, turn={turn.TurnIndex}/{turn.Phase}, rollButtonInteractable={turnController.RollButtonInteractable}. Mock/read-only; no backend mutation.", turnObject);
+        turnController.RollDice();
+        Debug.Log($"[AgenticTestRunner] Chunk 4 roll triggered: rollButtonInteractable={turnController.RollButtonInteractable}, diceValues={string.Join(" + ", turnController.LastRollValues)}, diceAnimating={(diceAnimator != null && diceAnimator.IsAnimating)}, tokenAnimating={tokenAnimator.IsAnimating}. Mock/read-only; no backend mutation.", turnObject);
+
+        while (turnController.IsRolling || (diceAnimator != null && diceAnimator.IsAnimating) || tokenAnimator.IsAnimating)
+        {
+            yield return null;
+        }
+
+        Debug.Log($"[AgenticTestRunner] Chunk 4 roll complete: rollButtonInteractable={turnController.RollButtonInteractable}, diceValues={string.Join(" + ", turnController.LastRollValues)}, diceAnimating={(diceAnimator != null && diceAnimator.IsAnimating)}. Mock/read-only; no backend mutation.", turnObject);
+        Debug.Log($"[AgenticTestRunner] Chunk 4 token path: path={string.Join(" -> ", turnController.LastMovementPath)}, finalTile={tokenAnimator.LastCompletedTileId}, finalBoardIndex={tokenAnimator.FinalTileIndex}, elapsedSteps={tokenAnimator.ElapsedStepCount}, finalPosition={turnController.LastTokenPosition}. Mock/read-only; no backend mutation.", tokenObject);
+        Debug.Log($"[AgenticTestRunner] Chunk 4 HUD updated: money={turnController.LastHudPlayerSnapshot.Money}, loan={turnController.LastHudPlayerSnapshot.LoanTotalBorrowed}, currentTile={turnController.LastHudPlayerSnapshot.CurrentTileId}, hasRolled={turnController.LastSnapshot.HasRolledThisTurn}, phase={turnController.LastSnapshot.Phase}. Mock/read-only; no backend mutation.", hudObject);
+        Debug.Log($"[AgenticTestRunner] Chunk 4 turn debug log:\n{turnController.DebugLogText}", turnObject);
+
+        turnController.EndTurn();
+        Debug.Log($"[AgenticTestRunner] Chunk 4 full mock turn end: rollButtonInteractable={turnController.RollButtonInteractable}, turnActive={turnController.IsTurnActive}. Mock/read-only; no backend mutation.", turnObject);
+
+        ValidatePlayerTokenSummary(tokenObject, token, tokenAnimator);
+        ValidateHudSummary(hudObject, hud);
+        ValidateTurnUiSummary(turnObject, turnController, diceAnimator);
+    }
+
+    private static GameObject InstantiateRequiredPrefab(GameObject assignedPrefab, string editorAssetPath, string label)
+    {
+        GameObject prefab = assignedPrefab != null ? assignedPrefab : LoadPrefabInEditor(editorAssetPath);
+        if (prefab == null)
+        {
+            Debug.LogWarning($"[AgenticTestRunner] {label} is not assigned and could not be loaded. Mock/read-only; no backend mutation.");
+            return null;
+        }
+
+        GameObject instance = Instantiate(prefab);
+        instance.name = $"{label}_Chunk4Runtime";
+        return instance;
+    }
+
+    private static BoardTileController[] OrderedBoardPath(IReadOnlyDictionary<string, BoardTileController> tilesById)
+    {
+        if (tilesById == null || tilesById.Count == 0)
+        {
+            return new BoardTileController[0];
+        }
+
+        string[] pathIds = { "start", "property_01", "property_02", "auction_test" };
+        List<BoardTileController> path = new List<BoardTileController>();
+        for (int i = 0; i < pathIds.Length; i++)
+        {
+            if (tilesById.TryGetValue(pathIds[i], out BoardTileController tile) && tile != null)
+            {
+                path.Add(tile);
+            }
+        }
+
+        return path.ToArray();
+    }
+
+    private static void ValidatePlayerTokenSummary(GameObject tokenObject, PlayerTokenController token, TokenAnimator tokenAnimator)
+    {
+        Debug.Log($"[AgenticTestRunner] PlayerToken validation summary: playerId={token.PlayerId}, currentTileIndex={token.CurrentTileIndex}, color={token.TokenColor}, tag={tokenObject.tag}, path={string.Join(" -> ", tokenAnimator.LastPathTileIds)}, finalTile={tokenAnimator.LastCompletedTileId}. Mock/read-only; no backend mutation.", tokenObject);
+        Debug.Log(tokenObject.CompareTag("PlayerToken")
+            ? "[AgenticTestRunner] Tag validation reports PlayerToken. Mock/read-only; no backend mutation."
+            : $"[AgenticTestRunner] Tag validation failed: {tokenObject.tag}. Mock/read-only; no backend mutation.", tokenObject);
+    }
+
+    private static void ValidateHudSummary(GameObject hudObject, HUDController hud)
+    {
+        Debug.Log($"[AgenticTestRunner] HUD validation summary: player={hud.LastPlayerSnapshot.PlayerId}, money={hud.LastPlayerSnapshot.Money}, loan={hud.LastPlayerSnapshot.LoanTotalBorrowed}, turn={hud.LastTurnSnapshot.TurnIndex}/{hud.LastTurnSnapshot.Phase}, hasRolled={hud.LastTurnSnapshot.HasRolledThisTurn}. Mock/read-only; no backend mutation.", hudObject);
+    }
+
+    private static void ValidateTurnUiSummary(GameObject turnObject, TurnController turnController, DiceAnimator diceAnimator)
+    {
+        Debug.Log($"[AgenticTestRunner] Turn UI inspector fields: turnController={turnController != null}, diceImages={turnController.DiceImageCount}, rollButtonInteractable={turnController.RollButtonInteractable}, diceAnimator={diceAnimator != null}, diceFaces={(diceAnimator == null ? 0 : diceAnimator.DiceFaceCount)}, rollDuration={(diceAnimator == null ? 0f : diceAnimator.RollDuration)}. Mock/read-only; no backend mutation.", turnObject);
     }
 
     private void ValidateHud()
@@ -324,18 +460,36 @@ public sealed class AgenticTestRunner : MonoBehaviour
 
     private static void EnsureEventSystem()
     {
-        if (EventSystem.current != null)
+        EventSystem current = EventSystem.current;
+        GameObject eventSystem = current == null
+            ? new GameObject("EventSystem", typeof(EventSystem))
+            : current.gameObject;
+
+        System.Type inputSystemModuleType = System.Type.GetType("UnityEngine.InputSystem.UI.InputSystemUIInputModule, Unity.InputSystem");
+        if (inputSystemModuleType != null)
         {
-            return;
+            StandaloneInputModule[] legacyModules = eventSystem.GetComponents<StandaloneInputModule>();
+            for (int i = 0; i < legacyModules.Length; i++)
+            {
+                legacyModules[i].enabled = false;
+            }
+
+            if (eventSystem.GetComponent(inputSystemModuleType) == null)
+            {
+                eventSystem.AddComponent(inputSystemModuleType);
+            }
+        }
+        else if (eventSystem.GetComponent<StandaloneInputModule>() == null)
+        {
+            eventSystem.AddComponent<StandaloneInputModule>();
         }
 
-        GameObject eventSystem = new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
-        if (Application.isPlaying)
+        if (Application.isPlaying && current == null)
         {
             DontDestroyOnLoad(eventSystem);
         }
 
-        Debug.Log("[AgenticTestRunner] EventSystem created for runtime UI input validation.", eventSystem);
+        Debug.Log($"[AgenticTestRunner] EventSystem ready for runtime UI input validation: inputModule={(inputSystemModuleType == null ? "StandaloneInputModule" : "InputSystemUIInputModule")}. Mock/read-only; no backend mutation.", eventSystem);
     }
 
     private static GameObject LoadPrefabInEditor(string assetPath)

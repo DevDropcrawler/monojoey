@@ -21,10 +21,20 @@ public sealed class TokenAnimator : MonoBehaviour
     private Coroutine activeCoroutine;
     private Vector3 finalPosition;
     private int finalTileIndex;
+    private string[] lastPathTileIds = System.Array.Empty<string>();
+    private int lastStepCount;
+    private string lastCompletedTileId = "";
+    private int elapsedStepCount;
     private MovementKind currentMovementKind = MovementKind.Normal;
 
     public bool IsAnimating => activeCoroutine != null;
     public string CurrentMovementKind => currentMovementKind.ToString();
+    public IReadOnlyList<string> LastPathTileIds => lastPathTileIds;
+    public int LastStepCount => lastStepCount;
+    public string LastCompletedTileId => lastCompletedTileId;
+    public int FinalTileIndex => finalTileIndex;
+    public Vector3 FinalPosition => finalPosition;
+    public int ElapsedStepCount => elapsedStepCount;
 
     private void Awake()
     {
@@ -42,6 +52,7 @@ public sealed class TokenAnimator : MonoBehaviour
     {
         StopMovement(false);
         currentMovementKind = movementKind;
+        CaptureRequestedPath(pathTileIds, stepCount);
         activeCoroutine = StartCoroutine(AnimatePathRoutine(pathTileIds, tilesById, stepCount, movementKind));
         return activeCoroutine;
     }
@@ -99,7 +110,7 @@ public sealed class TokenAnimator : MonoBehaviour
             Vector3 start = transform.position;
             Vector3 end = tile.GetTokenAnchorPosition(0.35f);
             finalPosition = end;
-            finalTileIndex = i;
+            finalTileIndex = ResolveBoardIndex(tile, i);
 
             float duration = DurationForMovement(movementKind);
             if (duration <= 0.01f)
@@ -126,10 +137,12 @@ public sealed class TokenAnimator : MonoBehaviour
 
             if (tokenController != null)
             {
-                tokenController.SetCurrentTileIndex(i);
+                tokenController.SetCurrentTileIndex(finalTileIndex);
             }
 
-            LogDebug($"Step complete: tileId={tileId}, tileIndex={i}, position={transform.position}.");
+            lastCompletedTileId = tileId;
+            elapsedStepCount++;
+            LogDebug($"Step complete: tileId={tileId}, tileIndex={finalTileIndex}, position={transform.position}.");
         }
 
         LogDebug($"Animation end: finalTileIndex={finalTileIndex}, movementKind={movementKind}.");
@@ -141,14 +154,45 @@ public sealed class TokenAnimator : MonoBehaviour
         if (tilesById.TryGetValue(tileId, out BoardTileController tile) && tile != null)
         {
             finalPosition = tile.GetTokenAnchorPosition(0.35f);
-            finalTileIndex = tileIndex;
+            finalTileIndex = ResolveBoardIndex(tile, tileIndex);
             transform.position = finalPosition;
+            lastCompletedTileId = tileId;
 
             if (tokenController != null)
             {
-                tokenController.SetCurrentTileIndex(tileIndex);
+                tokenController.SetCurrentTileIndex(finalTileIndex);
             }
         }
+    }
+
+    private void CaptureRequestedPath(IReadOnlyList<string> pathTileIds, int stepCount)
+    {
+        if (pathTileIds == null || pathTileIds.Count == 0)
+        {
+            lastPathTileIds = System.Array.Empty<string>();
+        }
+        else
+        {
+            lastPathTileIds = new string[pathTileIds.Count];
+            for (int i = 0; i < pathTileIds.Count; i++)
+            {
+                lastPathTileIds[i] = pathTileIds[i];
+            }
+        }
+
+        lastStepCount = stepCount;
+        lastCompletedTileId = "";
+        elapsedStepCount = 0;
+    }
+
+    private static int ResolveBoardIndex(BoardTileController tile, int fallbackIndex)
+    {
+        if (tile != null && tile.BoardIndex >= 0)
+        {
+            return tile.BoardIndex;
+        }
+
+        return fallbackIndex;
     }
 
     private float DurationForMovement(MovementKind movementKind)

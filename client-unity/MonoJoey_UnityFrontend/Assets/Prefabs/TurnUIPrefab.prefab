@@ -124,6 +124,14 @@ MonoBehaviour:
   - {fileID: 6000003}
   - {fileID: 7000003}
   debugLog: {fileID: 9000003}
+  hudController: {fileID: 0}
+  tokenAnimator: {fileID: 0}
+  boardTiles: []
+  localPlayerId: player-agentic
+  useMockRollValues: 1
+  mockRollValues:
+  - 1
+  - 2
 --- !u!114 &1000006
 MonoBehaviour:
   m_ObjectHideFlags: 0

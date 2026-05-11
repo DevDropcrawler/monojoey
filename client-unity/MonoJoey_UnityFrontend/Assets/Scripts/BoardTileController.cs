@@ -7,6 +7,7 @@ public sealed class BoardTileController : MonoBehaviour
     [SerializeField] private Renderer baseRenderer;
     [SerializeField] private Renderer highlightRenderer;
     [SerializeField] private Renderer ownershipRenderer;
+    [SerializeField] private int boardIndex = -1;
     [SerializeField] private Color normalColor = new Color(0.28f, 0.32f, 0.36f, 1f);
     [SerializeField] private Color highlightedColor = new Color(0.95f, 0.78f, 0.24f, 0.65f);
     [SerializeField] private Color unownedColor = new Color(0.22f, 0.24f, 0.27f, 1f);
@@ -22,6 +23,7 @@ public sealed class BoardTileController : MonoBehaviour
     public string TileId => tileId;
     public string OwnerPlayerId => ownerPlayerId;
     public bool IsHighlighted => isHighlighted;
+    public int BoardIndex => boardIndex;
 
     private void Awake()
     {
@@ -47,6 +49,12 @@ public sealed class BoardTileController : MonoBehaviour
         SetOwnership(newOwnerPlayerId, ownerColor);
         ApplyBaseColor();
         LogDebug($"Bound tileId={tileId}, owner={DisplayOwner()}.");
+    }
+
+    public void SetBoardIndex(int newBoardIndex)
+    {
+        boardIndex = newBoardIndex;
+        LogDebug($"Board index set to {boardIndex}.");
     }
 
     public void SetHighlighted(bool highlighted)
