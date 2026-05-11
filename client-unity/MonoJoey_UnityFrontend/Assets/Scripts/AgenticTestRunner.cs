@@ -34,12 +34,21 @@ public sealed class AgenticTestRunner : MonoBehaviour
     [SerializeField] private GameObject auctionPanelPrefab;
     [SerializeField] private bool instantiateAuctionPanel = true;
 
+    [Header("Session Join Panel Validation")]
+    [SerializeField] private GameObject sessionJoinPanelPrefab;
+
     [Header("Chunk 9 Optional Live Backend Smoke")]
     [SerializeField] private bool runChunk9LiveBackendSmoke;
     [SerializeField] private bool runChunk9LiveRollSmoke;
     [SerializeField] private string chunk9LiveWebSocketUrl = "ws://127.0.0.1:5000/ws";
     [SerializeField] private string chunk9LiveSessionId = "";
     [SerializeField] private string chunk9LivePlayerId = "";
+
+    [Header("Chunk 11 Optional Live Backend Smoke")]
+    [SerializeField] private bool runChunk11LiveBackendSmoke;
+    [SerializeField] private string chunk11LiveWebSocketUrl = "ws://127.0.0.1:5000/ws";
+    [SerializeField] private string chunk11LiveSessionId = "";
+    [SerializeField] private string chunk11LivePlayerId = "";
 
 #if UNITY_EDITOR
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -305,6 +314,8 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk9ReadOnlyTransportValidation(hydrator);
         yield return RunChunk9GameplayCommandDispatcherValidation(hydrator, hud, turnController, auction, token);
         yield return RunChunk10PlayableTurnUiCommandFlow(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
+        yield return RunChunk11SessionJoinPanelValidation(hydrator);
+        yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
     }
 
@@ -548,6 +559,141 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.Log($"[AgenticTestRunner] Chunk 10 final local-turn buttons disabled: roll={turnController.RollButtonInteractable}, resolve={turnController.ResolveButtonInteractable}, execute={turnController.ExecuteButtonInteractable}, end={turnController.EndTurnButtonInteractable}, rollBlocked={DisplayLogValue(turnController.LastRollBlockedReason)}.", commandObject);
 
         yield return null;
+    }
+
+    private IEnumerator RunChunk11SessionJoinPanelValidation(SnapshotHydrator hydrator)
+    {
+        GameObject panelObject = InstantiateRequiredPrefab(sessionJoinPanelPrefab, "Assets/Prefabs/SessionJoinPanel.prefab", "SessionJoinPanel");
+        if (panelObject == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 11 session join panel validation skipped because SessionJoinPanel prefab was unavailable. Mock/read-only; no backend mutation.", this);
+            yield break;
+        }
+
+        SessionJoinController panel = panelObject.GetComponentInChildren<SessionJoinController>();
+        if (panel == null)
+        {
+            Debug.LogError("[AgenticTestRunner] Chunk 11 session join panel validation skipped because SessionJoinController was missing. Mock/read-only; no backend mutation.", panelObject);
+            yield break;
+        }
+
+        GameObject sessionObject = new GameObject(
+            "SessionJoinPanel_Chunk11MockRuntime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = sessionObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = sessionObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = sessionObject.GetComponent<MonoJoeySessionClient>();
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "",
+            "",
+            hydrator,
+            router,
+            true,
+            false,
+            false);
+
+        panel.Configure(session, router, hydrator);
+        panel.SetFormValues("", "", "", MonoJoeySessionClientMode.MockValidation);
+        panel.ConnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 11 empty inputs blocked connect: connectButton={panel.ConnectButtonInteractable}, error={DisplayLogValue(panel.LastValidationError)}, sentRequests={mockTransport.SentRequestTypes.Count}, state={session.State}. Expected no transport request.", panelObject);
+
+        panel.SetFormValues("mock://session-join-validation", "session_chunk_11", testPlayerId, MonoJoeySessionClientMode.MockValidation);
+        Debug.Log($"[AgenticTestRunner] Chunk 11 valid mock identity enables connect: connectButton={panel.ConnectButtonInteractable}, reconnectButton={panel.ReconnectButtonInteractable}, snapshotButton={panel.SnapshotButtonInteractable}, status={panel.LastRenderedStatus}.", panelObject);
+
+        panel.ConnectFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 11 panel connect hydrated: state={session.State}, bound={session.IsBoundToIdentity}, reconnectHydrated={router.ReconnectResultCount}, sentTypes={string.Join(", ", mockTransport.SentRequestTypes)}, status={panel.LastRenderedStatus}. Read-only reconnect_session only.", panelObject);
+
+        int beforeSnapshotRequests = mockTransport.SentRequestTypes.Count;
+        panel.RequestSnapshotFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 11 get snapshot clicked: sentDelta={mockTransport.SentRequestTypes.Count - beforeSnapshotRequests}, snapshots={router.SnapshotResultCount}, lastRequest={DisplayLogValue(session.LastSentRequestType)}, snapshotButton={panel.SnapshotButtonInteractable}. Read-only get_snapshot only.", panelObject);
+
+        int beforeReconnectRequests = mockTransport.SentRequestTypes.Count;
+        panel.ReconnectFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 11 reconnect clicked: sentDelta={mockTransport.SentRequestTypes.Count - beforeReconnectRequests}, reconnects={session.ReconnectAttemptCount}, reconnectHydrated={router.ReconnectResultCount}, reconnectButton={panel.ReconnectButtonInteractable}. Read-only reconnect_session only.", panelObject);
+
+        panel.DisconnectFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 11 disconnect updates state: state={session.State}, bound={session.IsBoundToIdentity}, connectButton={panel.ConnectButtonInteractable}, disconnectButton={panel.DisconnectButtonInteractable}, snapshotButton={panel.SnapshotButtonInteractable}, status={panel.LastRenderedStatus}.", panelObject);
+
+        Debug.Log(mockTransport.GameplayMutationRequestCount == 0 && session.GameplayCommandRequestCount == 0
+            ? $"[AgenticTestRunner] Chunk 11 no gameplay command sent. Sent request types={string.Join(", ", mockTransport.SentRequestTypes)}."
+            : $"[AgenticTestRunner] Chunk 11 validation failed: gameplayMutations={mockTransport.GameplayMutationRequestCount}, sessionGameplayCommands={session.GameplayCommandRequestCount}.", panelObject);
+    }
+
+    private IEnumerator RunOptionalChunk11LiveBackendSmoke(SnapshotHydrator hydrator)
+    {
+        if (!runChunk11LiveBackendSmoke)
+        {
+            yield break;
+        }
+
+        if (string.IsNullOrWhiteSpace(chunk11LiveWebSocketUrl)
+            || string.IsNullOrWhiteSpace(chunk11LiveSessionId)
+            || string.IsNullOrWhiteSpace(chunk11LivePlayerId))
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 11 live backend smoke skipped because URL/sessionId/playerId were not all provided at runtime.");
+            yield break;
+        }
+
+        GameObject panelObject = InstantiateRequiredPrefab(sessionJoinPanelPrefab, "Assets/Prefabs/SessionJoinPanel.prefab", "SessionJoinPanelLiveSmoke");
+        if (panelObject == null)
+        {
+            yield break;
+        }
+
+        SessionJoinController panel = panelObject.GetComponentInChildren<SessionJoinController>();
+        if (panel == null)
+        {
+            Debug.LogError("[AgenticTestRunner] Chunk 11 live backend smoke skipped because SessionJoinController was missing.", panelObject);
+            yield break;
+        }
+
+        GameObject liveObject = new GameObject(
+            "SessionJoinPanel_Chunk11OptionalLiveRuntime",
+            typeof(MonoJoeyWebSocketTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyBackendMessageRouter router = liveObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = liveObject.GetComponent<MonoJoeySessionClient>();
+        session.Configure(
+            MonoJoeySessionClientMode.LiveBackend,
+            chunk11LiveWebSocketUrl,
+            chunk11LiveSessionId,
+            chunk11LivePlayerId,
+            hydrator,
+            router,
+            true,
+            false,
+            false);
+
+        panel.Configure(session, router, hydrator);
+        panel.SetFormValues(chunk11LiveWebSocketUrl, chunk11LiveSessionId, chunk11LivePlayerId, MonoJoeySessionClientMode.LiveBackend);
+        panel.ConnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 11 optional live smoke connect clicked: state={session.State}, lastRequest={DisplayLogValue(session.LastSentRequestType)}, status={panel.LastRenderedStatus}.");
+        yield return WaitForChunk8State(session, MonoJoeyTransportConnectionState.BoundLive, 5f);
+        Debug.Log($"[AgenticTestRunner] Chunk 11 optional live smoke bound: state={session.State}, bound={session.IsBoundToIdentity}, message={DisplayLogValue(router.LastMessageType)}, status={panel.LastRenderedStatus}.");
+
+        panel.RequestSnapshotFromPanel();
+        yield return WaitForChunk8Snapshot(router, 5f);
+        Debug.Log($"[AgenticTestRunner] Chunk 11 optional live smoke snapshot: snapshots={router.SnapshotResultCount}, player={DisplayLogValue(hydrator.LastHydratedPlayerId)}, tile={DisplayLogValue(hydrator.LastHydratedTileId)}, status={panel.LastRenderedStatus}. No gameplay command sent.");
+
+        panel.DisconnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 11 optional live smoke disconnect: state={session.State}, status={panel.LastRenderedStatus}.");
     }
 
     private IEnumerator RunOptionalChunk9LiveBackendSmoke(SnapshotHydrator hydrator)
