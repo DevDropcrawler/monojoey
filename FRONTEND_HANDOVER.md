@@ -139,6 +139,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
     HUDController.cs
     MonoJoeyBackendMessageRouter.cs
     MonoJoeyConnectionStatusController.cs
+    MonoJoeyGameplayCommandDispatcher.cs
     MonoJoeyMockTransport.cs
     MonoJoeySessionClient.cs
     MonoJoeySnapshotModels.cs
@@ -231,6 +232,20 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - `dotnet build Assembly-CSharp.csproj -v minimal` still cannot run because the local machine is missing the .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
   - Unity batch/play validation was not started because three existing `Unity` editor processes were already active for the local machine/project, so a clean project load was not available in this session.
+
+### Chunk 9 Runtime Notes
+
+- Added `MonoJoeyGameplayCommandDispatcher` as the only Unity gameplay intent dispatcher for `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, and `place_bid`.
+- Request payloads contain only `sessionId`/`playerId`, plus positive `amount` for `place_bid`; Unity does not serialize dice values, movement, money, tile outcomes, auction IDs, winners, or local result data.
+- `MonoJoeySessionClient` now exposes a narrow gameplay command send gateway with command counters and live/bound state checks. The prior Chunk 8 experimental debug mutation wrappers were removed.
+- `MonoJoeyBackendMessageRouter` recognizes `roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, and `bid_result` as direct command results. These clear matching dispatcher in-flight state and update logs/status only; gameplay UI still hydrates from `snapshot_result` and `reconnect_result`.
+- `TurnController` and `AuctionPanelController` preserve existing mock validation behavior by default. When explicitly configured for live command dispatch, roll/bid clicks send intent only and do not locally roll dice, animate movement, mutate HUD money, advance turns, or update auction high-bid state.
+- `MonoJoeyMockTransport` still rejects/counts gameplay mutation requests in normal `MockValidation`. Explicit dispatcher test mode returns canned direct command results for isolated validation.
+- Optional live smoke remains disabled by default. If enabled with URL/session/player, it binds live state first; `runChunk9LiveRollSmoke` must also be enabled before the runner sends a single `roll_dice`.
+- Validation results for this handoff:
+  - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` could not run because the local machine is missing the .NET Framework 4.7.1 targeting pack (`MSB3644`).
+  - Direct Roslyn compile against Unity runtime references passed for all `Assets/Scripts/*.cs`, with only serialized-field assignment warnings.
+  - Unity batch validation was attempted, but existing Unity editor processes were active and no clean batch log was produced.
 
 ## Optional Visual Polish
 

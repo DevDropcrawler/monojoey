@@ -17,6 +17,16 @@ This file must be updated at the end of every coding chunk.
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
 
+## Frontend Chunk 9 Addendum
+
+- Unity frontend Chunk 9 added controlled gameplay command wiring for exactly five intent types: `roll_dice`, `resolve_tile`, `execute_tile`, `end_turn`, and `place_bid`.
+- The new `MonoJoeyGameplayCommandDispatcher` sends intent envelopes only through `MonoJoeySessionClient`; it requires live/bound identity unless explicit mock dispatcher test mode is enabled.
+- Direct command results (`roll_result`, `resolve_tile_result`, `execute_tile_result`, `end_turn_result`, `bid_result`) clear matching in-flight state and update logs/status only. Gameplay UI remains authoritative-snapshot driven via `snapshot_result` and `reconnect_result`.
+- `TurnController` and `AuctionPanelController` retain mock validation flows by default and only use dispatcher sends when explicitly configured for live command mode.
+- `MonoJoeyMockTransport` rejects/counts gameplay mutation requests in normal `MockValidation`; isolated test mode can return canned command responses.
+- Updated frontend validation in `AgenticTestRunner` covers default mock safety, guarded dispatcher sends, approved envelopes, direct-result non-mutation, snapshot hydration, backend error status, and optional disabled-by-default live roll smoke.
+- Validation: direct Roslyn compile against Unity runtime references passed for all `client-unity/MonoJoey_UnityFrontend/Assets/Scripts/*.cs` with serialized-field warnings only. `dotnet build` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`), and Unity batch validation could not get a clean project load while existing Unity editor processes were active.
+
 ## Last Completed Chunk
 
 Jail/Joey Hole Runtime Parity.
