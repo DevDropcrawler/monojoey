@@ -146,6 +146,11 @@ public sealed class AuctionPanelController : MonoBehaviour
             string rowPlayerId = playerIds[i];
             playerRows[i].Bind(rowPlayerId, bid, rowPlayerId == activePlayerId || rowPlayerId == highBidderPlayerId);
         }
+
+        for (int i = count; i < playerRows.Count; i++)
+        {
+            playerRows[i].Bind("", 0, false);
+        }
     }
 
     public void SetPlayerHighlight(string playerId, bool highlighted)

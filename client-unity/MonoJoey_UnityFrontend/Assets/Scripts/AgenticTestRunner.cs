@@ -184,6 +184,8 @@ public sealed class AgenticTestRunner : MonoBehaviour
         ValidatePlayerTokenSummary(tokenObject, token, tokenAnimator);
         ValidateHudSummary(hudObject, hud);
         ValidateTurnUiSummary(turnObject, turnController, diceAnimator);
+
+        RunReadOnlySnapshotHydrationValidation(hud, turnController, token, tokenAnimator, boardPath);
     }
 
     private static GameObject InstantiateRequiredPrefab(GameObject assignedPrefab, string editorAssetPath, string label)
@@ -236,6 +238,265 @@ public sealed class AgenticTestRunner : MonoBehaviour
     private static void ValidateTurnUiSummary(GameObject turnObject, TurnController turnController, DiceAnimator diceAnimator)
     {
         Debug.Log($"[AgenticTestRunner] Turn UI inspector fields: turnController={turnController != null}, diceImages={turnController.DiceImageCount}, rollButtonInteractable={turnController.RollButtonInteractable}, diceAnimator={diceAnimator != null}, diceFaces={(diceAnimator == null ? 0 : diceAnimator.DiceFaceCount)}, rollDuration={(diceAnimator == null ? 0f : diceAnimator.RollDuration)}. Mock/read-only; no backend mutation.", turnObject);
+    }
+
+    private void RunReadOnlySnapshotHydrationValidation(
+        HUDController hud,
+        TurnController turnController,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator,
+        BoardTileController[] boardPath)
+    {
+        GameObject auctionObject = InstantiateRequiredPrefab(auctionPanelPrefab, "Assets/Prefabs/AuctionPanel.prefab", "AuctionPanel");
+        if (auctionObject == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 5 snapshot hydration skipped because AuctionPanel prefab was unavailable. Read-only snapshot hydration; no backend mutation.", this);
+            return;
+        }
+
+        AuctionPanelController auction = auctionObject.GetComponentInChildren<AuctionPanelController>();
+        if (auction == null)
+        {
+            Debug.LogError("[AgenticTestRunner] Chunk 5 snapshot hydration skipped because AuctionPanelController was missing. Read-only snapshot hydration; no backend mutation.", auctionObject);
+            return;
+        }
+
+        GameObject hydratorObject = new GameObject("SnapshotHydrator_Chunk5Runtime", typeof(SnapshotHydrator));
+        SnapshotHydrator hydrator = hydratorObject.GetComponent<SnapshotHydrator>();
+        hydrator.Configure(hud, turnController, auction, token, tokenAnimator, boardPath, testPlayerId);
+
+        bool firstHydrated = hydrator.HydrateSnapshotJson(Chunk5SnapshotJson(activeAuction: true));
+        BoardTileController propertyOne = FindBoardTile(boardPath, "property_01");
+        Debug.Log($"[AgenticTestRunner] Chunk 5 first snapshot hydrated={firstHydrated}: hudMoney={hud.LastPlayerSnapshot.Money}, hudLoan={hud.LastPlayerSnapshot.LoanTotalBorrowed}, hudTile={hud.LastPlayerSnapshot.CurrentTileId}, turnPhase={turnController.LastSnapshot.Phase}, hasRolled={turnController.LastSnapshot.HasRolledThisTurn}, hasResolved={turnController.LastSnapshot.HasResolvedTileThisTurn}, auctionHighBidder={auction.HighBidderPlayerId}, auctionHighBid={auction.CurrentHighBid}, tileOwner={propertyOne?.OwnerPlayerId}, tileIndex={(propertyOne == null ? -1 : propertyOne.BoardIndex)}, tokenPlayer={token.PlayerId}, tokenTileIndex={token.CurrentTileIndex}, tokenPosition={token.transform.position}. Read-only snapshot hydration; no backend mutation.", hydratorObject);
+
+        bool secondHydrated = hydrator.HydrateSnapshotJson(Chunk5SnapshotJson(activeAuction: false));
+        BoardTileController propertyTwo = FindBoardTile(boardPath, "property_02");
+        Debug.Log($"[AgenticTestRunner] Chunk 5 second snapshot hydrated={secondHydrated}: auctionId={auction.AuctionId}, auctionHighBidder={auction.HighBidderPlayerId}, auctionHighBid={auction.CurrentHighBid}, helpers movement={(hydrator.LastMovement == null ? "cleared" : "present")}, moneyDeltas={hydrator.LastMoneyDeltas.Length}, ownershipChanges={hydrator.LastPropertyOwnershipChanges.Length}, eliminations={hydrator.LastPlayerEliminations.Length}, tileOwner={propertyTwo?.OwnerPlayerId}, tileIndex={(propertyTwo == null ? -1 : propertyTwo.BoardIndex)}, tokenPlayer={token.PlayerId}, tokenTileId={hydrator.LastHydratedTileId}, tokenTileIndex={token.CurrentTileIndex}, tokenPosition={token.transform.position}. Read-only snapshot hydration; no backend mutation.", hydratorObject);
+    }
+
+    private static BoardTileController FindBoardTile(IReadOnlyList<BoardTileController> boardPath, string tileId)
+    {
+        if (boardPath == null)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < boardPath.Count; i++)
+        {
+            BoardTileController tile = boardPath[i];
+            if (tile != null && tile.TileId == tileId)
+            {
+                return tile;
+            }
+        }
+
+        return null;
+    }
+
+    private static string Chunk5SnapshotJson(bool activeAuction)
+    {
+        if (activeAuction)
+        {
+            return @"{
+  ""snapshotVersion"": 1,
+  ""sessionId"": ""session_chunk_5"",
+  ""status"": ""in_game"",
+  ""gameStatus"": ""in_progress"",
+  ""serverNowUtc"": ""2026-05-11T00:00:00Z"",
+  ""matchId"": ""session_chunk_5"",
+  ""phase"": ""awaiting_tile_action"",
+  ""winnerPlayerId"": null,
+  ""startedAtUtc"": ""2026-05-11T00:00:00Z"",
+  ""endedAtUtc"": null,
+  ""turn"": {
+    ""currentPlayerId"": ""player-agentic"",
+    ""turnIndex"": 9,
+    ""hasRolledThisTurn"": true,
+    ""hasResolvedTileThisTurn"": true,
+    ""hasExecutedTileThisTurn"": false
+  },
+  ""players"": [
+    {
+      ""playerId"": ""player-agentic"",
+      ""username"": ""Agentic Player"",
+      ""tokenId"": ""token_agentic"",
+      ""colorId"": ""gold"",
+      ""money"": 1320,
+      ""currentTileId"": ""auction_test"",
+      ""ownedPropertyIds"": [""property_01""],
+      ""heldCardIds"": [""chance_escape""],
+      ""statusEffects"": [],
+      ""loan"": {
+        ""totalBorrowed"": 180,
+        ""currentInterestRatePercent"": 20,
+        ""nextTurnInterestDue"": 36,
+        ""loanTier"": 1
+      },
+      ""jailTurnCount"": 0,
+      ""jailRollAttemptCount"": 0,
+      ""consecutiveDoublesCount"": 0,
+      ""lastJailReleaseReason"": null,
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-2"",
+      ""username"": ""Blue Player"",
+      ""tokenId"": ""token_blue"",
+      ""colorId"": ""blue"",
+      ""money"": 1640,
+      ""currentTileId"": ""property_01"",
+      ""ownedPropertyIds"": [],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": {
+        ""totalBorrowed"": 0,
+        ""currentInterestRatePercent"": 0,
+        ""nextTurnInterestDue"": 0,
+        ""loanTier"": 0
+      },
+      ""jailTurnCount"": 0,
+      ""jailRollAttemptCount"": 0,
+      ""consecutiveDoublesCount"": 0,
+      ""lastJailReleaseReason"": null,
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    }
+  ],
+  ""board"": {
+    ""boardId"": ""chunk_5_board"",
+    ""version"": 1,
+    ""displayName"": ""Chunk 5 Board"",
+    ""tiles"": [
+      { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""groupId"": """", ""price"": 0, ""rentTable"": [], ""upgradeCost"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""groupId"": ""group_01"", ""price"": 60, ""rentTable"": [2, 10, 30], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": ""player-agentic"" },
+      { ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""groupId"": ""group_01"", ""price"": 80, ""rentTable"": [4, 20, 60], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": ""player-2"" },
+      { ""tileId"": ""auction_test"", ""index"": 3, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""groupId"": ""group_02"", ""price"": 100, ""rentTable"": [6, 30, 90], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null }
+    ]
+  },
+  ""propertyStates"": [
+    { ""tileId"": ""property_01"", ""data"": { ""damagePercent"": 25, ""isMortgaged"": false, ""upgradeLevel"": 1 } }
+  ],
+  ""activeAuction"": {
+    ""propertyTileId"": ""auction_test"",
+    ""triggeringPlayerId"": ""player-agentic"",
+    ""status"": ""active"",
+    ""startingBid"": 100,
+    ""minimumBidIncrement"": 10,
+    ""initialPreBidSeconds"": 5,
+    ""bidResetSeconds"": 10,
+    ""highestBid"": 240,
+    ""highestBidderId"": ""player-2"",
+    ""countdownDurationSeconds"": 14,
+    ""timerEndsAtUtc"": ""2026-05-11T00:00:14Z"",
+    ""bids"": [
+      { ""bidderPlayerId"": ""player-agentic"", ""amount"": 220, ""placedAtUtc"": ""2026-05-11T00:00:01Z"" },
+      { ""bidderPlayerId"": ""player-2"", ""amount"": 240, ""placedAtUtc"": ""2026-05-11T00:00:02Z"" }
+    ]
+  },
+  ""movement"": {
+    ""playerId"": ""player-agentic"",
+    ""fromTileId"": ""start"",
+    ""toTileId"": ""auction_test"",
+    ""pathTileIds"": [""property_01"", ""property_02"", ""auction_test""],
+    ""stepCount"": 3,
+    ""movementKind"": ""path"",
+    ""passedStart"": false
+  },
+  ""moneyDeltas"": [
+    { ""playerId"": ""player-agentic"", ""delta"": -30, ""balance"": 1320, ""reason"": ""rent"", ""counterpartyPlayerId"": ""player-2"", ""tileId"": ""property_02"", ""cardId"": null }
+  ],
+  ""propertyOwnershipChanges"": [
+    { ""tileId"": ""property_01"", ""previousOwnerPlayerId"": null, ""newOwnerPlayerId"": ""player-agentic"", ""reason"": ""purchase"" }
+  ],
+  ""playerEliminations"": []
+}";
+        }
+
+        return @"{
+  ""snapshotVersion"": 1,
+  ""sessionId"": ""session_chunk_5"",
+  ""status"": ""in_game"",
+  ""gameStatus"": ""in_progress"",
+  ""serverNowUtc"": ""2026-05-11T00:00:30Z"",
+  ""matchId"": ""session_chunk_5"",
+  ""phase"": ""awaiting_roll"",
+  ""winnerPlayerId"": null,
+  ""startedAtUtc"": ""2026-05-11T00:00:00Z"",
+  ""endedAtUtc"": null,
+  ""turn"": {
+    ""currentPlayerId"": ""player-2"",
+    ""turnIndex"": 10,
+    ""hasRolledThisTurn"": false,
+    ""hasResolvedTileThisTurn"": false,
+    ""hasExecutedTileThisTurn"": false
+  },
+  ""players"": [
+    {
+      ""playerId"": ""player-agentic"",
+      ""username"": ""Agentic Player"",
+      ""tokenId"": ""token_agentic"",
+      ""colorId"": ""gold"",
+      ""money"": 1290,
+      ""currentTileId"": ""property_02"",
+      ""ownedPropertyIds"": [""property_02""],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": {
+        ""totalBorrowed"": 180,
+        ""currentInterestRatePercent"": 20,
+        ""nextTurnInterestDue"": 36,
+        ""loanTier"": 1
+      },
+      ""jailTurnCount"": 0,
+      ""jailRollAttemptCount"": 0,
+      ""consecutiveDoublesCount"": 0,
+      ""lastJailReleaseReason"": null,
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-2"",
+      ""username"": ""Blue Player"",
+      ""tokenId"": ""token_blue"",
+      ""colorId"": ""blue"",
+      ""money"": 1640,
+      ""currentTileId"": ""property_01"",
+      ""ownedPropertyIds"": [],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": {
+        ""totalBorrowed"": 0,
+        ""currentInterestRatePercent"": 0,
+        ""nextTurnInterestDue"": 0,
+        ""loanTier"": 0
+      },
+      ""jailTurnCount"": 0,
+      ""jailRollAttemptCount"": 0,
+      ""consecutiveDoublesCount"": 0,
+      ""lastJailReleaseReason"": null,
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    }
+  ],
+  ""board"": {
+    ""boardId"": ""chunk_5_board"",
+    ""version"": 1,
+    ""displayName"": ""Chunk 5 Board"",
+    ""tiles"": [
+      { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""groupId"": """", ""price"": 0, ""rentTable"": [], ""upgradeCost"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""groupId"": ""group_01"", ""price"": 60, ""rentTable"": [2, 10, 30], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""groupId"": ""group_01"", ""price"": 80, ""rentTable"": [4, 20, 60], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": ""player-agentic"" },
+      { ""tileId"": ""auction_test"", ""index"": 3, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""groupId"": ""group_02"", ""price"": 100, ""rentTable"": [6, 30, 90], ""upgradeCost"": 50, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null }
+    ]
+  },
+  ""propertyStates"": [],
+  ""activeAuction"": null
+}";
     }
 
     private void ValidateHud()
