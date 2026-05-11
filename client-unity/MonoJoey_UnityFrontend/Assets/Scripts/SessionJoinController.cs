@@ -5,9 +5,20 @@ using UnityEngine.UI;
 
 public sealed class SessionJoinController : MonoBehaviour
 {
+    private const string DefaultLiveBackendUrl = "ws://127.0.0.1:5000/ws";
+    private const string MockModeLabel = "Mock validation";
+    private const string LiveModeLabel = "Live backend (/ws)";
+
+    private static bool hasRuntimeMemory;
+    private static string rememberedWebSocketUrl = "";
+    private static string rememberedSessionId = "";
+    private static string rememberedPlayerId = "";
+    private static MonoJoeySessionClientMode rememberedMode = MonoJoeySessionClientMode.MockValidation;
+
     [SerializeField] private MonoJoeySessionClient sessionClient;
     [SerializeField] private MonoJoeyBackendMessageRouter messageRouter;
     [SerializeField] private SnapshotHydrator snapshotHydrator;
+    [SerializeField] private LiveSessionContext liveSessionContext;
     [SerializeField] private bool createRuntimeControls = true;
     [SerializeField] private InputField webSocketUrlInput;
     [SerializeField] private InputField sessionIdInput;
@@ -19,11 +30,14 @@ public sealed class SessionJoinController : MonoBehaviour
     [SerializeField] private Button snapshotButton;
     [SerializeField] private Text statusText;
     [SerializeField] private Text errorText;
+    [SerializeField] private Text playerListText;
 
     private string validationError = "";
 
     public string LastValidationError => validationError;
     public string LastRenderedStatus { get; private set; } = "";
+    public string LastRenderedPlayers { get; private set; } = "";
+    public LiveSessionContext Context => liveSessionContext;
     public bool ConnectButtonInteractable => connectButton != null && connectButton.interactable;
     public bool DisconnectButtonInteractable => disconnectButton != null && disconnectButton.interactable;
     public bool ReconnectButtonInteractable => reconnectButton != null && reconnectButton.interactable;
@@ -45,6 +59,7 @@ public sealed class SessionJoinController : MonoBehaviour
         }
 
         EnsureRuntimeControls();
+        EnsureContext();
         WireControls();
         SyncControlsFromClient();
         Refresh();
@@ -53,31 +68,28 @@ public sealed class SessionJoinController : MonoBehaviour
     public void SetFormValues(string webSocketUrl, string configuredSessionId, string configuredPlayerId, MonoJoeySessionClientMode configuredMode)
     {
         EnsureRuntimeControls();
-        if (webSocketUrlInput != null)
-        {
-            webSocketUrlInput.text = webSocketUrl ?? "";
-        }
-
-        if (sessionIdInput != null)
-        {
-            sessionIdInput.text = configuredSessionId ?? "";
-        }
-
-        if (playerIdInput != null)
-        {
-            playerIdInput.text = configuredPlayerId ?? "";
-        }
+        EnsureContext();
+        WireControls();
 
         if (modeDropdown != null)
         {
             modeDropdown.value = configuredMode == MonoJoeySessionClientMode.LiveBackend ? 1 : 0;
         }
 
+        string normalizedUrl = configuredMode == MonoJoeySessionClientMode.LiveBackend && string.IsNullOrWhiteSpace(webSocketUrl)
+            ? DefaultLiveBackendUrl
+            : webSocketUrl ?? "";
+
+        SetInputText(webSocketUrlInput, normalizedUrl);
+        SetInputText(sessionIdInput, configuredSessionId ?? "");
+        SetInputText(playerIdInput, configuredPlayerId ?? "");
+        RememberRuntimeInputs();
         Refresh();
     }
 
     public void ConnectFromPanel()
     {
+        EnsureLiveDefaultForSelectedMode();
         if (!ValidateForm(setError: true))
         {
             Refresh();
@@ -99,6 +111,7 @@ public sealed class SessionJoinController : MonoBehaviour
 
     public void ReconnectFromPanel()
     {
+        EnsureLiveDefaultForSelectedMode();
         if (!ValidateForm(setError: true))
         {
             Refresh();
@@ -113,6 +126,7 @@ public sealed class SessionJoinController : MonoBehaviour
 
     public void RequestSnapshotFromPanel()
     {
+        EnsureLiveDefaultForSelectedMode();
         if (!ValidateForm(setError: true))
         {
             Refresh();
@@ -128,12 +142,14 @@ public sealed class SessionJoinController : MonoBehaviour
     private void Awake()
     {
         EnsureRuntimeControls();
+        EnsureContext();
         WireControls();
     }
 
     private void OnEnable()
     {
         EnsureRuntimeControls();
+        EnsureContext();
         WireControls();
         if (sessionClient != null)
         {
@@ -169,19 +185,30 @@ public sealed class SessionJoinController : MonoBehaviour
         SetInteractable(reconnectButton, sessionClient != null && valid && connected && !busy);
         SetInteractable(snapshotButton, sessionClient != null && valid && bound && !busy);
 
-        string mode = SelectedMode().ToString();
-        string state = sessionClient == null ? "--" : sessionClient.State.ToString();
-        string boundText = bound ? "bound" : "unbound";
-        string session = $"{Display(Trimmed(sessionIdInput))} / {Display(Trimmed(playerIdInput))}";
-        string url = Display(Trimmed(webSocketUrlInput));
+        EnsureContext();
+        liveSessionContext?.RefreshFrom(
+            sessionClient,
+            snapshotHydrator,
+            SelectedMode(),
+            Trimmed(webSocketUrlInput),
+            Trimmed(sessionIdInput),
+            Trimmed(playerIdInput));
+
         string lastRequest = sessionClient == null ? "--" : Display(sessionClient.LastSentRequestType);
         string lastMessage = messageRouter == null ? "--" : Display(messageRouter.LastMessageType);
         string lastMessageTime = messageRouter == null || messageRouter.LastMessageReceivedUtc == DateTime.MinValue
             ? "--"
             : messageRouter.LastMessageReceivedUtc.ToString("O");
+        string statusSummary = liveSessionContext == null ? "" : liveSessionContext.ConnectionSummary;
+        string snapshotSummary = liveSessionContext == null ? "snapshot=--" : liveSessionContext.SnapshotSummary;
 
-        LastRenderedStatus = $"mode={mode}|state={state}|{boundText}|session={session}|url={url}|lastRequest={lastRequest}|lastMessage={lastMessage}";
-        SetText(statusText, $"Mode: {mode} | State: {state} | {boundText}\nSession/player: {session} | URL: {url}\nLast request: {lastRequest} | Last message: {lastMessage} @ {lastMessageTime}");
+        LastRenderedStatus = $"{statusSummary}|request={lastRequest}|message={lastMessage}|{snapshotSummary}";
+        LastRenderedPlayers = liveSessionContext == null ? "Players: --" : liveSessionContext.PlayerListSummary;
+
+        SetText(
+            statusText,
+            $"Connection: {statusSummary}\nLast request: {lastRequest} | Last message: {lastMessage} @ {lastMessageTime}\nSnapshot: {snapshotSummary}");
+        SetText(playerListText, $"Players:\n{LastRenderedPlayers}");
 
         string renderedError = validationError;
         if (string.IsNullOrWhiteSpace(renderedError) && sessionClient != null)
@@ -206,6 +233,7 @@ public sealed class SessionJoinController : MonoBehaviour
             return;
         }
 
+        RememberRuntimeInputs();
         sessionClient.Configure(
             SelectedMode(),
             Trimmed(webSocketUrlInput),
@@ -227,21 +255,25 @@ public sealed class SessionJoinController : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(url))
         {
-            error = "Backend URL is required.";
-        }
-        else if (string.IsNullOrWhiteSpace(session))
-        {
-            error = "Session ID is required.";
-        }
-        else if (string.IsNullOrWhiteSpace(player))
-        {
-            error = "Player ID is required.";
+            error = $"Backend URL is required. Use {DefaultLiveBackendUrl} for a local live backend.";
         }
         else if (SelectedMode() == MonoJoeySessionClientMode.LiveBackend
             && !url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
             && !url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
         {
             error = "Live backend URL must start with ws:// or wss://.";
+        }
+        else if (SelectedMode() == MonoJoeySessionClientMode.LiveBackend && !TargetsWebSocketPath(url))
+        {
+            error = "Live backend URL must target /ws.";
+        }
+        else if (string.IsNullOrWhiteSpace(session))
+        {
+            error = "Session ID is required. Paste an existing in-game session ID; this panel does not create sessions.";
+        }
+        else if (string.IsNullOrWhiteSpace(player))
+        {
+            error = "Player ID is required. Paste an existing in-game player ID; this panel does not create players.";
         }
 
         if (setError)
@@ -282,12 +314,16 @@ public sealed class SessionJoinController : MonoBehaviour
 
     private void SyncControlsFromClient()
     {
-        if (sessionClient == null)
+        if (sessionClient != null)
         {
+            SetFormValues(sessionClient.WebSocketUrl, sessionClient.SessionId, sessionClient.PlayerId, sessionClient.Mode);
             return;
         }
 
-        SetFormValues(sessionClient.WebSocketUrl, sessionClient.SessionId, sessionClient.PlayerId, sessionClient.Mode);
+        if (hasRuntimeMemory)
+        {
+            SetFormValues(rememberedWebSocketUrl, rememberedSessionId, rememberedPlayerId, rememberedMode);
+        }
     }
 
     private MonoJoeySessionClientMode SelectedMode()
@@ -302,10 +338,10 @@ public sealed class SessionJoinController : MonoBehaviour
 
     private void WireControls()
     {
-        if (modeDropdown != null && modeDropdown.options.Count == 0)
-        {
-            modeDropdown.AddOptions(new List<string> { "MockValidation", "LiveBackend" });
-        }
+        EnsureModeOptions();
+        ConfigureSingleLineInput(webSocketUrlInput);
+        ConfigureSingleLineInput(sessionIdInput);
+        ConfigureSingleLineInput(playerIdInput);
 
         connectButton?.onClick.RemoveListener(ConnectFromPanel);
         disconnectButton?.onClick.RemoveListener(DisconnectFromPanel);
@@ -343,11 +379,14 @@ public sealed class SessionJoinController : MonoBehaviour
 
     private void HandleFormChanged(string _)
     {
+        RememberRuntimeInputs();
         Refresh();
     }
 
     private void HandleModeChanged(int _)
     {
+        EnsureLiveDefaultForSelectedMode();
+        RememberRuntimeInputs();
         Refresh();
     }
 
@@ -362,14 +401,14 @@ public sealed class SessionJoinController : MonoBehaviour
         GameObject root = new GameObject("SessionJoinPanelControls", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
         root.transform.SetParent(transform, false);
         Image background = root.GetComponent<Image>();
-        background.color = new Color(0.05f, 0.06f, 0.07f, 0.92f);
+        background.color = new Color(0.05f, 0.06f, 0.07f, 0.94f);
 
         RectTransform rect = root.GetComponent<RectTransform>();
         rect.anchorMin = new Vector2(0f, 1f);
         rect.anchorMax = new Vector2(0f, 1f);
         rect.pivot = new Vector2(0f, 1f);
         rect.anchoredPosition = new Vector2(16f, -16f);
-        rect.sizeDelta = new Vector2(420f, 260f);
+        rect.sizeDelta = new Vector2(520f, 500f);
 
         VerticalLayoutGroup layout = root.GetComponent<VerticalLayoutGroup>();
         layout.padding = new RectOffset(12, 12, 12, 12);
@@ -377,14 +416,15 @@ public sealed class SessionJoinController : MonoBehaviour
         layout.childForceExpandHeight = false;
         layout.childForceExpandWidth = true;
 
-        CreateLabel(root.transform, font, "Session Join");
+        CreateLabel(root.transform, font, "Live Session Entry");
         modeDropdown = CreateDropdown(root.transform, font);
-        webSocketUrlInput = CreateInput(root.transform, font, "Backend URL");
-        sessionIdInput = CreateInput(root.transform, font, "Session ID");
-        playerIdInput = CreateInput(root.transform, font, "Player ID");
+        webSocketUrlInput = CreateInputRow(root.transform, font, "Backend URL");
+        sessionIdInput = CreateInputRow(root.transform, font, "Session ID");
+        playerIdInput = CreateInputRow(root.transform, font, "Player ID");
 
-        GameObject row = new GameObject("Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        GameObject row = new GameObject("Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
         row.transform.SetParent(root.transform, false);
+        row.GetComponent<LayoutElement>().preferredHeight = 30f;
         HorizontalLayoutGroup rowLayout = row.GetComponent<HorizontalLayoutGroup>();
         rowLayout.spacing = 5f;
         rowLayout.childForceExpandWidth = true;
@@ -394,13 +434,93 @@ public sealed class SessionJoinController : MonoBehaviour
         reconnectButton = CreateButton(row.transform, font, "Reconnect");
         snapshotButton = CreateButton(row.transform, font, "Get Snapshot");
 
-        statusText = CreateText(root.transform, font, "Status: --", 12, TextAnchor.MiddleLeft, new Vector2(396f, 52f));
-        errorText = CreateText(root.transform, font, "Error: --", 12, TextAnchor.MiddleLeft, new Vector2(396f, 28f));
+        statusText = CreateText(root.transform, font, "Connection: --", 12, TextAnchor.UpperLeft, new Vector2(496f, 92f));
+        playerListText = CreateText(root.transform, font, "Players: --", 12, TextAnchor.UpperLeft, new Vector2(496f, 120f));
+        errorText = CreateText(root.transform, font, "Error: --", 12, TextAnchor.UpperLeft, new Vector2(496f, 46f));
+    }
+
+    private void EnsureContext()
+    {
+        if (liveSessionContext != null)
+        {
+            return;
+        }
+
+        liveSessionContext = GetComponent<LiveSessionContext>();
+        if (liveSessionContext == null)
+        {
+            liveSessionContext = gameObject.AddComponent<LiveSessionContext>();
+        }
+    }
+
+    private void EnsureModeOptions()
+    {
+        if (modeDropdown == null)
+        {
+            return;
+        }
+
+        if (modeDropdown.options.Count == 2
+            && modeDropdown.options[0].text == MockModeLabel
+            && modeDropdown.options[1].text == LiveModeLabel)
+        {
+            return;
+        }
+
+        int value = modeDropdown.value;
+        modeDropdown.ClearOptions();
+        modeDropdown.AddOptions(new List<string> { MockModeLabel, LiveModeLabel });
+        modeDropdown.value = Mathf.Clamp(value, 0, 1);
+        modeDropdown.RefreshShownValue();
+    }
+
+    private void EnsureLiveDefaultForSelectedMode()
+    {
+        if (SelectedMode() == MonoJoeySessionClientMode.LiveBackend && string.IsNullOrWhiteSpace(Trimmed(webSocketUrlInput)))
+        {
+            SetInputText(webSocketUrlInput, DefaultLiveBackendUrl);
+        }
+    }
+
+    private void RememberRuntimeInputs()
+    {
+        hasRuntimeMemory = true;
+        rememberedWebSocketUrl = Trimmed(webSocketUrlInput);
+        rememberedSessionId = Trimmed(sessionIdInput);
+        rememberedPlayerId = Trimmed(playerIdInput);
+        rememberedMode = SelectedMode();
+    }
+
+    private InputField CreateInputRow(Transform parent, Font font, string placeholder)
+    {
+        GameObject rowObject = new GameObject($"{placeholder}Row", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        rowObject.transform.SetParent(parent, false);
+        rowObject.GetComponent<LayoutElement>().preferredHeight = 30f;
+        HorizontalLayoutGroup rowLayout = rowObject.GetComponent<HorizontalLayoutGroup>();
+        rowLayout.spacing = 5f;
+        rowLayout.childForceExpandHeight = false;
+        rowLayout.childForceExpandWidth = false;
+
+        InputField input = CreateInput(rowObject.transform, font, placeholder);
+        Button copyButton = CreateButton(rowObject.transform, font, "Copy", 44f);
+        Button pasteButton = CreateButton(rowObject.transform, font, "Paste", 46f);
+        copyButton.onClick.AddListener(() => GUIUtility.systemCopyBuffer = input == null ? "" : input.text ?? "");
+        pasteButton.onClick.AddListener(() =>
+        {
+            if (input != null)
+            {
+                input.text = GUIUtility.systemCopyBuffer ?? "";
+                RememberRuntimeInputs();
+                Refresh();
+            }
+        });
+
+        return input;
     }
 
     private static void CreateLabel(Transform parent, Font font, string value)
     {
-        Text label = CreateText(parent, font, value, 15, TextAnchor.MiddleLeft, new Vector2(396f, 24f));
+        Text label = CreateText(parent, font, value, 15, TextAnchor.MiddleLeft, new Vector2(496f, 24f));
         label.fontStyle = FontStyle.Bold;
     }
 
@@ -410,6 +530,7 @@ public sealed class SessionJoinController : MonoBehaviour
         inputObject.transform.SetParent(parent, false);
         inputObject.GetComponent<Image>().color = new Color(0.11f, 0.12f, 0.13f, 1f);
         inputObject.GetComponent<LayoutElement>().preferredHeight = 30f;
+        inputObject.GetComponent<LayoutElement>().preferredWidth = 400f;
 
         InputField input = inputObject.GetComponent<InputField>();
         Text text = CreateText(inputObject.transform, font, "", 13, TextAnchor.MiddleLeft, new Vector2(390f, 30f));
@@ -417,6 +538,7 @@ public sealed class SessionJoinController : MonoBehaviour
         hint.color = new Color(0.70f, 0.72f, 0.74f, 1f);
         input.textComponent = text;
         input.placeholder = hint;
+        ConfigureSingleLineInput(input);
         return input;
     }
 
@@ -428,9 +550,9 @@ public sealed class SessionJoinController : MonoBehaviour
         dropdownObject.GetComponent<LayoutElement>().preferredHeight = 30f;
 
         Dropdown dropdown = dropdownObject.GetComponent<Dropdown>();
-        dropdown.captionText = CreateText(dropdownObject.transform, font, "", 13, TextAnchor.MiddleLeft, new Vector2(390f, 30f));
+        dropdown.captionText = CreateText(dropdownObject.transform, font, "", 13, TextAnchor.MiddleLeft, new Vector2(490f, 30f));
         dropdown.template = CreateDropdownTemplate(dropdownObject.transform, font);
-        dropdown.AddOptions(new List<string> { "MockValidation", "LiveBackend" });
+        dropdown.AddOptions(new List<string> { MockModeLabel, LiveModeLabel });
         return dropdown;
     }
 
@@ -474,7 +596,7 @@ public sealed class SessionJoinController : MonoBehaviour
         Image itemImage = itemObject.GetComponent<Image>();
         itemImage.color = new Color(0.13f, 0.15f, 0.17f, 1f);
         itemObject.GetComponent<LayoutElement>().preferredHeight = 30f;
-        Text itemText = CreateText(itemObject.transform, font, "MockValidation", 13, TextAnchor.MiddleLeft, new Vector2(390f, 30f));
+        Text itemText = CreateText(itemObject.transform, font, MockModeLabel, 13, TextAnchor.MiddleLeft, new Vector2(490f, 30f));
 
         Toggle itemToggle = itemObject.GetComponent<Toggle>();
         itemToggle.targetGraphic = itemImage;
@@ -497,17 +619,24 @@ public sealed class SessionJoinController : MonoBehaviour
 
     private static Button CreateButton(Transform parent, Font font, string label)
     {
+        return CreateButton(parent, font, label, 112f);
+    }
+
+    private static Button CreateButton(Transform parent, Font font, string label, float preferredWidth)
+    {
         GameObject buttonObject = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
         buttonObject.transform.SetParent(parent, false);
         buttonObject.GetComponent<Image>().color = new Color(0.18f, 0.21f, 0.24f, 1f);
-        buttonObject.GetComponent<LayoutElement>().preferredHeight = 30f;
-        CreateText(buttonObject.transform, font, label, 12, TextAnchor.MiddleCenter, new Vector2(94f, 30f));
+        LayoutElement layout = buttonObject.GetComponent<LayoutElement>();
+        layout.preferredHeight = 30f;
+        layout.preferredWidth = preferredWidth;
+        CreateText(buttonObject.transform, font, label, 12, TextAnchor.MiddleCenter, new Vector2(preferredWidth, 30f));
         return buttonObject.GetComponent<Button>();
     }
 
     private static Text CreateText(Transform parent, Font font, string value, int fontSize, TextAnchor alignment, Vector2 size)
     {
-        GameObject textObject = new GameObject("Text", typeof(RectTransform), typeof(Text));
+        GameObject textObject = new GameObject("Text", typeof(RectTransform), typeof(Text), typeof(LayoutElement));
         textObject.transform.SetParent(parent, false);
         RectTransform rect = textObject.GetComponent<RectTransform>();
         rect.anchorMin = Vector2.zero;
@@ -515,6 +644,9 @@ public sealed class SessionJoinController : MonoBehaviour
         rect.offsetMin = new Vector2(6f, 0f);
         rect.offsetMax = new Vector2(-6f, 0f);
         rect.sizeDelta = size;
+
+        LayoutElement layout = textObject.GetComponent<LayoutElement>();
+        layout.preferredHeight = size.y;
 
         Text text = textObject.GetComponent<Text>();
         text.font = font;
@@ -539,6 +671,24 @@ public sealed class SessionJoinController : MonoBehaviour
         return font != null ? font : Resources.GetBuiltinResource<Font>("Arial.ttf");
     }
 
+    private static void ConfigureSingleLineInput(InputField input)
+    {
+        if (input != null)
+        {
+            input.lineType = InputField.LineType.SingleLine;
+        }
+    }
+
+    private static bool TargetsWebSocketPath(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.AbsolutePath, "/ws", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void SetInteractable(Selectable selectable, bool interactable)
     {
         if (selectable != null)
@@ -555,6 +705,14 @@ public sealed class SessionJoinController : MonoBehaviour
         }
     }
 
+    private static void SetInputText(InputField input, string value)
+    {
+        if (input != null)
+        {
+            input.text = value ?? "";
+        }
+    }
+
     private static string Trimmed(InputField input)
     {
         return input == null ? "" : (input.text ?? "").Trim();
@@ -567,9 +725,10 @@ public sealed class SessionJoinController : MonoBehaviour
 
     private static bool IsFormError(string value)
     {
-        return string.Equals(value, "Backend URL is required.", StringComparison.Ordinal)
-            || string.Equals(value, "Session ID is required.", StringComparison.Ordinal)
-            || string.Equals(value, "Player ID is required.", StringComparison.Ordinal)
-            || string.Equals(value, "Live backend URL must start with ws:// or wss://.", StringComparison.Ordinal);
+        return !string.IsNullOrWhiteSpace(value)
+            && (value.StartsWith("Backend URL is required.", StringComparison.Ordinal)
+                || value.StartsWith("Session ID is required.", StringComparison.Ordinal)
+                || value.StartsWith("Player ID is required.", StringComparison.Ordinal)
+                || value.StartsWith("Live backend URL must", StringComparison.Ordinal));
     }
 }

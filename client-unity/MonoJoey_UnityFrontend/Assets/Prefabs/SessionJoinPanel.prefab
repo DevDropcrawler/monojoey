@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 1000003}
   - component: {fileID: 1000004}
   - component: {fileID: 1000005}
+  - component: {fileID: 1000006}
   m_Layer: 5
   m_Name: SessionJoinPanel
   m_TagString: Untagged
@@ -118,6 +119,7 @@ MonoBehaviour:
   sessionClient: {fileID: 0}
   messageRouter: {fileID: 0}
   snapshotHydrator: {fileID: 0}
+  liveSessionContext: {fileID: 1000006}
   createRuntimeControls: 1
   webSocketUrlInput: {fileID: 0}
   sessionIdInput: {fileID: 0}
@@ -129,3 +131,33 @@ MonoBehaviour:
   snapshotButton: {fileID: 0}
   statusText: {fileID: 0}
   errorText: {fileID: 0}
+  playerListText: {fileID: 0}
+--- !u!114 &1000006
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 87d3502fb9724d94a8a9e44d38f7a4bd, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::LiveSessionContext
+  backendUrl:
+  sessionId:
+  playerId:
+  mode: 0
+  connectionState: 0
+  isTransportConnected: 0
+  isBoundToIdentity: 0
+  snapshotVersion: 0
+  snapshotSessionId:
+  snapshotStatus:
+  snapshotGameStatus:
+  snapshotPhase:
+  turnIndex: -1
+  currentTurnPlayerId:
+  selectedPlayerId:
+  latestSnapshotIdentity:
+  players: []

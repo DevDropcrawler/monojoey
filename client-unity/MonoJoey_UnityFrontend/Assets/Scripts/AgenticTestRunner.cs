@@ -325,6 +325,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk10PlayableTurnUiCommandFlow(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk12GameplayCommandFeedbackValidation(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
+        yield return RunChunk14LiveSessionEntryValidation(hydrator);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk13LiveGameplaySmoke(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
@@ -763,6 +764,87 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.Log(mockTransport.GameplayMutationRequestCount == 0 && session.GameplayCommandRequestCount == 0
             ? $"[AgenticTestRunner] Chunk 11 no gameplay command sent. Sent request types={string.Join(", ", mockTransport.SentRequestTypes)}."
             : $"[AgenticTestRunner] Chunk 11 validation failed: gameplayMutations={mockTransport.GameplayMutationRequestCount}, sessionGameplayCommands={session.GameplayCommandRequestCount}.", panelObject);
+    }
+
+    private IEnumerator RunChunk14LiveSessionEntryValidation(SnapshotHydrator hydrator)
+    {
+        GameObject panelObject = InstantiateRequiredPrefab(sessionJoinPanelPrefab, "Assets/Prefabs/SessionJoinPanel.prefab", "SessionJoinPanelChunk14");
+        if (panelObject == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 14 live session entry validation skipped because SessionJoinPanel prefab was unavailable. Frontend-only/read-only; no backend mutation.", this);
+            yield break;
+        }
+
+        SessionJoinController panel = panelObject.GetComponentInChildren<SessionJoinController>();
+        if (panel == null)
+        {
+            Debug.LogError("[AgenticTestRunner] Chunk 14 live session entry validation skipped because SessionJoinController was missing. Frontend-only/read-only; no backend mutation.", panelObject);
+            yield break;
+        }
+
+        GameObject sessionObject = new GameObject(
+            "SessionJoinPanel_Chunk14MockRuntime",
+            typeof(MonoJoeyMockTransport),
+            typeof(MonoJoeyBackendMessageRouter),
+            typeof(MonoJoeySessionClient))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+
+        MonoJoeyMockTransport mockTransport = sessionObject.GetComponent<MonoJoeyMockTransport>();
+        MonoJoeyBackendMessageRouter router = sessionObject.GetComponent<MonoJoeyBackendMessageRouter>();
+        MonoJoeySessionClient session = sessionObject.GetComponent<MonoJoeySessionClient>();
+        session.Configure(
+            MonoJoeySessionClientMode.MockValidation,
+            "",
+            "",
+            "",
+            hydrator,
+            router,
+            true,
+            false,
+            false);
+
+        panel.Configure(session, router, hydrator);
+        panel.SetFormValues("", "", "", MonoJoeySessionClientMode.MockValidation);
+        panel.ConnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 14 empty URL/session/player blocks connect: error={DisplayLogValue(panel.LastValidationError)}, sentRequests={mockTransport.SentRequestTypes.Count}, state={session.State}. Expected zero outbound requests.", panelObject);
+
+        panel.SetFormValues("http://127.0.0.1:5000/ws", "session_chunk_14", testPlayerId, MonoJoeySessionClientMode.LiveBackend);
+        panel.ConnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 14 invalid live scheme blocked: error={DisplayLogValue(panel.LastValidationError)}, sentRequests={mockTransport.SentRequestTypes.Count}.", panelObject);
+
+        panel.SetFormValues("ws://127.0.0.1:5000/not-ws", "session_chunk_14", testPlayerId, MonoJoeySessionClientMode.LiveBackend);
+        panel.ConnectFromPanel();
+        Debug.Log($"[AgenticTestRunner] Chunk 14 invalid live path blocked: error={DisplayLogValue(panel.LastValidationError)}, sentRequests={mockTransport.SentRequestTypes.Count}.", panelObject);
+
+        panel.SetFormValues("", "session_chunk_14", testPlayerId, MonoJoeySessionClientMode.LiveBackend);
+        Debug.Log($"[AgenticTestRunner] Chunk 14 live mode default URL populated: contextUrl={DisplayLogValue(panel.Context == null ? "" : panel.Context.BackendUrl)}, status={panel.LastRenderedStatus}.", panelObject);
+
+        panel.SetFormValues("mock://session-entry-validation", "session_chunk_14", testPlayerId, MonoJoeySessionClientMode.MockValidation);
+        panel.ConnectFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 14 mock connect context: mode={(panel.Context == null ? MonoJoeySessionClientMode.MockValidation : panel.Context.Mode)}, url={DisplayLogValue(panel.Context == null ? "" : panel.Context.BackendUrl)}, session={DisplayLogValue(panel.Context == null ? "" : panel.Context.SessionId)}, player={DisplayLogValue(panel.Context == null ? "" : panel.Context.PlayerId)}, connected={(panel.Context != null && panel.Context.IsTransportConnected)}, bound={(panel.Context != null && panel.Context.IsBoundToIdentity)}, status={panel.LastRenderedStatus}.", panelObject);
+
+        int beforeSnapshotRequests = mockTransport.SentRequestTypes.Count;
+        panel.RequestSnapshotFromPanel();
+        yield return null;
+        Debug.Log($"[AgenticTestRunner] Chunk 14 mock snapshot renders players: sentDelta={mockTransport.SentRequestTypes.Count - beforeSnapshotRequests}, snapshot={DisplayLogValue(panel.Context == null ? "" : panel.Context.SnapshotSummary)}, players={DisplayLogValue(panel.LastRenderedPlayers)}.", panelObject);
+
+        bool differingTurnHydrated = hydrator.HydrateSnapshotJson(Chunk5SnapshotJson(activeAuction: false));
+        panel.Refresh();
+        bool hasLocalMarker = panel.LastRenderedPlayers.Contains("[local]");
+        bool hasTurnMarker = panel.LastRenderedPlayers.Contains("[turn]");
+        bool localAndTurnDiffer = panel.Context != null
+            && !string.IsNullOrWhiteSpace(panel.Context.SelectedPlayerId)
+            && !string.IsNullOrWhiteSpace(panel.Context.CurrentTurnPlayerId)
+            && !string.Equals(panel.Context.SelectedPlayerId, panel.Context.CurrentTurnPlayerId, StringComparison.Ordinal);
+        Debug.Log($"[AgenticTestRunner] Chunk 14 local/current-turn markers: hydrated={differingTurnHydrated}, differ={localAndTurnDiffer}, localMarker={hasLocalMarker}, turnMarker={hasTurnMarker}, selected={DisplayLogValue(panel.Context == null ? "" : panel.Context.SelectedPlayerId)}, current={DisplayLogValue(panel.Context == null ? "" : panel.Context.CurrentTurnPlayerId)}, players={DisplayLogValue(panel.LastRenderedPlayers)}.", panelObject);
+
+        bool onlySessionEntryRequests = ContainsOnlySessionEntryRequests(mockTransport.SentRequestTypes);
+        Debug.Log(onlySessionEntryRequests && mockTransport.GameplayMutationRequestCount == 0 && session.GameplayCommandRequestCount == 0
+            ? $"[AgenticTestRunner] Chunk 14 session UI sent only reconnect_session/get_snapshot: sentTypes={string.Join(", ", mockTransport.SentRequestTypes)}, gameplayMutations={mockTransport.GameplayMutationRequestCount}, gameplayCommands={session.GameplayCommandRequestCount}."
+            : $"[AgenticTestRunner] Chunk 14 validation failed: sentTypes={string.Join(", ", mockTransport.SentRequestTypes)}, gameplayMutations={mockTransport.GameplayMutationRequestCount}, gameplayCommands={session.GameplayCommandRequestCount}.", panelObject);
     }
 
     private IEnumerator RunOptionalChunk11LiveBackendSmoke(SnapshotHydrator hydrator)
@@ -1713,6 +1795,26 @@ public sealed class AgenticTestRunner : MonoBehaviour
         }
 
         return "--";
+    }
+
+    private static bool ContainsOnlySessionEntryRequests(IReadOnlyList<string> requestTypes)
+    {
+        if (requestTypes == null)
+        {
+            return true;
+        }
+
+        for (int i = 0; i < requestTypes.Count; i++)
+        {
+            string requestType = requestTypes[i] ?? "";
+            if (!string.Equals(requestType, "reconnect_session", StringComparison.Ordinal)
+                && !string.Equals(requestType, "get_snapshot", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void SubscribeToChunk6HydratorHooks(SnapshotHydrator hydrator, UnityEngine.Object logContext)
