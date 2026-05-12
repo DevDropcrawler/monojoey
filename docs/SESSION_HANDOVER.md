@@ -5,8 +5,8 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 17 - Board Layout / Camera Foundation
-- Completion status: Unity now has a frontend-only placeholder board foundation that lays authoritative snapshot tiles around a rectangular loop, provides deterministic token anchors for shared tiles, frames the generated board with a runtime camera helper, and highlights selected/current-player/active-auction tiles from hydrated snapshot state only.
+- Chunk: 18 - Real Game Visual Pass
+- Completion status: Unity now has a frontend-only runtime placeholder visual pass for the board/gameplay screen: generated board surface/rails, readable tile labels/type styling, token rings/nameplates, clearer snapshot-owned highlights, improved camera composition, and stronger HUD/turn/auction hierarchy without backend authority or scene/project edits.
 - Branch: `main` tracking `origin/main`; implementation is pending user review/commit in this workspace.
 - Previous commit: `a77f15d`
 - Last commit before this chunk: `a77f15d`
@@ -16,6 +16,18 @@ This file must be updated at the end of every coding chunk.
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 18 Addendum
+
+- Added `PlaceholderVisualTheme.cs` as a lightweight runtime-only helper for placeholder colors, generated child visuals, temporary material/property-block coloring, and small consistency utilities. It is intentionally not a global theme framework, asset pipeline, ScriptableObject skin system, editor tool, or production-art assumption.
+- `BoardLayoutManager` now creates a runtime-only board surface and rails with `HideFlags.DontSave`, keeping scene files and material assets untouched.
+- `BoardTileController` now binds authoritative tile display metadata and renders runtime placeholder labels, type bands, borders, owner strips, type-aware colors, and clearer selected/current/active-auction highlight treatment.
+- `PlayerTokenController` now adds runtime placeholder token rings, pedestals, and nameplates while placement remains driven by snapshot hydration and deterministic board anchors.
+- `BoardCameraFramingController` now tunes orthographic composition and background color for the generated board without saving scene camera state.
+- `HUDController`, `TurnController`, and `AuctionPanelController` now apply runtime visual hierarchy so money, turn action, countdown, current bid, and high bidder read as primary gameplay information while diagnostics stay secondary.
+- Authority boundary is unchanged: direct command responses do not mutate HUD/token/auction/board state, and snapshot/reconnect hydration remains the source for displayed gameplay truth.
+- `AgenticTestRunner` adds Chunk 18 semantic validation for board presentation, tile labels/type metadata, token readability/separation, camera framing, UI hierarchy, and active-auction highlight priority without pixel tests.
+- Validation: `git diff --check` passed with line-ending warnings only. Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed for `Assets/Scripts/*.cs` with serialized-field warnings only. `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`). Unity MCP/Play Mode validation was unavailable in this session; existing Unity editor processes were running, so no clean runtime object inspection was attempted.
 
 ## Frontend Chunk 17 Addendum
 

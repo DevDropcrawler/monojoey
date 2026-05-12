@@ -72,9 +72,11 @@ public sealed class TurnController : MonoBehaviour
     public string CommandFeedbackText => commandFeedbackText == null ? "" : commandFeedbackText.text;
     public string CurrentPlayerDisplayText => currentPlayerText == null ? "" : currentPlayerText.text;
     public string TurnStatusDisplayText => turnStatusText == null ? "" : turnStatusText.text;
+    public bool HasRuntimeVisualHierarchy => currentPlayerText != null && currentPlayerText.fontSize >= 24 && turnStatusText != null && turnStatusText.fontSize >= 16;
 
     private void Awake()
     {
+        ApplyRuntimeVisualHierarchy();
         diceAnimator = GetComponent<DiceAnimator>();
         if (diceAnimator == null)
         {
@@ -690,6 +692,7 @@ public sealed class TurnController : MonoBehaviour
             endTurnButton.interactable = CanEndTurnForUi();
         }
 
+        RefreshButtonVisuals();
         RefreshCommandFeedbackText();
     }
 
@@ -699,6 +702,64 @@ public sealed class TurnController : MonoBehaviour
         SetButtonLabel(resolveButton, "Resolve tile");
         SetButtonLabel(executeButton, "Execute tile");
         SetButtonLabel(endTurnButton, "End turn");
+    }
+
+    private void ApplyRuntimeVisualHierarchy()
+    {
+        if (currentPlayerText != null)
+        {
+            currentPlayerText.fontSize = Mathf.Max(currentPlayerText.fontSize, 24);
+            currentPlayerText.fontStyle = FontStyle.Bold;
+            currentPlayerText.color = Color.white;
+        }
+
+        if (turnStatusText != null)
+        {
+            turnStatusText.fontSize = Mathf.Max(turnStatusText.fontSize, 16);
+            turnStatusText.color = PlaceholderVisualTheme.PanelAccent;
+        }
+
+        if (commandFeedbackText != null)
+        {
+            commandFeedbackText.fontSize = Mathf.Max(commandFeedbackText.fontSize, 13);
+            commandFeedbackText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+
+        if (debugLog != null)
+        {
+            debugLog.color = PlaceholderVisualTheme.DisabledText;
+        }
+    }
+
+    private void RefreshButtonVisuals()
+    {
+        StyleButton(rollButton);
+        StyleButton(resolveButton);
+        StyleButton(executeButton);
+        StyleButton(endTurnButton);
+    }
+
+    private static void StyleButton(Button button)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        Image image = button.GetComponent<Image>();
+        if (image != null)
+        {
+            image.color = button.interactable
+                ? new Color(0.20f, 0.48f, 0.56f, 0.96f)
+                : new Color(0.16f, 0.18f, 0.20f, 0.72f);
+        }
+
+        Text text = button.GetComponentInChildren<Text>(true);
+        if (text != null)
+        {
+            text.fontStyle = FontStyle.Bold;
+            text.color = button.interactable ? Color.white : PlaceholderVisualTheme.DisabledText;
+        }
     }
 
     private static void SetButtonLabel(Button button, string label)

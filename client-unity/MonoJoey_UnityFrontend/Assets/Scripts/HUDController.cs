@@ -88,9 +88,14 @@ public sealed class HUDController : MonoBehaviour
 
     public PlayerHudSnapshot LastPlayerSnapshot { get; private set; }
     public TurnHudSnapshot LastTurnSnapshot { get; private set; }
+    public string CurrentPlayerDisplayText => currentPlayerText == null ? "" : currentPlayerText.text;
+    public string TurnStatusDisplayText => turnStatusText == null ? "" : turnStatusText.text;
+    public string MoneyDisplayText => moneyText == null ? "" : moneyText.text;
+    public bool HasRuntimeVisualHierarchy => currentPlayerText != null && currentPlayerText.fontSize >= 18 && moneyText != null && moneyText.fontStyle == FontStyle.Bold;
 
     private void Awake()
     {
+        ApplyRuntimeVisualHierarchy();
         if (debugLogText != null)
         {
             debugLogText.gameObject.SetActive(showDebugLog);
@@ -106,30 +111,32 @@ public sealed class HUDController : MonoBehaviour
 
         if (currentPlayerText != null)
         {
-            currentPlayerText.text = $"{DisplayText(player.Username, player.PlayerId)} ({DisplayText(player.ColorId, "no-color")})";
+            currentPlayerText.text = $"{DisplayText(player.Username, player.PlayerId)}";
         }
 
         if (turnStatusText != null)
         {
-            turnStatusText.text = $"Turn {turn.TurnIndex}: {DisplayText(turn.Phase, "Unknown")} | Rolled: {YesNo(turn.HasRolledThisTurn)} | Tile: {YesNo(turn.HasResolvedTileThisTurn)} | Action: {YesNo(turn.HasExecutedTileThisTurn)}";
+            turnStatusText.text = BuildTurnStatusText(turn, isCurrentTurn);
         }
 
         if (moneyText != null)
         {
-            moneyText.text = $"Money: ${player.Money}";
+            moneyText.text = $"${player.Money}";
         }
 
         if (loanText != null)
         {
-            loanText.text = $"Loans: ${player.LoanTotalBorrowed} | {player.LoanInterestRatePercent:0.#}% | Next: ${player.LoanNextTurnInterestDue} | {DisplayText(player.LoanTier, "none")}";
+            loanText.text = player.LoanTotalBorrowed > 0
+                ? $"Loan ${player.LoanTotalBorrowed} | next ${player.LoanNextTurnInterestDue}"
+                : "No loans";
         }
 
         if (tileText != null)
         {
             string status = PlayerStatus(player);
             tileText.text = string.IsNullOrWhiteSpace(status)
-                ? $"Tile: {DisplayText(player.CurrentTileId, "--")}"
-                : $"Tile: {DisplayText(player.CurrentTileId, "--")} | {status}";
+                ? $"On {DisplayText(player.CurrentTileId, "--")}"
+                : $"On {DisplayText(player.CurrentTileId, "--")} | {status}";
         }
 
         if (turnIndicatorImage != null)
@@ -182,5 +189,62 @@ public sealed class HUDController : MonoBehaviour
     private static string YesNo(bool value)
     {
         return value ? "yes" : "no";
+    }
+
+    private void ApplyRuntimeVisualHierarchy()
+    {
+        if (currentPlayerText != null)
+        {
+            currentPlayerText.fontSize = Mathf.Max(currentPlayerText.fontSize, 18);
+            currentPlayerText.fontStyle = FontStyle.Bold;
+            currentPlayerText.color = Color.white;
+        }
+
+        if (turnStatusText != null)
+        {
+            turnStatusText.fontSize = Mathf.Max(turnStatusText.fontSize, 14);
+            turnStatusText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+
+        if (moneyText != null)
+        {
+            moneyText.fontSize = Mathf.Max(moneyText.fontSize, 20);
+            moneyText.fontStyle = FontStyle.Bold;
+            moneyText.color = PlaceholderVisualTheme.PanelAccent;
+        }
+
+        if (loanText != null)
+        {
+            loanText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+
+        if (tileText != null)
+        {
+            tileText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+    }
+
+    private static string BuildTurnStatusText(TurnHudSnapshot turn, bool isCurrentTurn)
+    {
+        string nextStep;
+        if (!turn.HasRolledThisTurn)
+        {
+            nextStep = "Roll dice";
+        }
+        else if (!turn.HasResolvedTileThisTurn)
+        {
+            nextStep = "Resolve tile";
+        }
+        else if (!turn.HasExecutedTileThisTurn)
+        {
+            nextStep = "Execute tile";
+        }
+        else
+        {
+            nextStep = "End turn";
+        }
+
+        string owner = isCurrentTurn ? "Your turn" : $"Waiting for {DisplayText(turn.CurrentPlayerId, "--")}";
+        return $"Turn {turn.TurnIndex} | {owner} | {nextStep}";
     }
 }

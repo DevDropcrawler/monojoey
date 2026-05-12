@@ -20,6 +20,8 @@ public sealed class BoardLayoutManager : MonoBehaviour
     private readonly List<BoardTileController> orderedTiles = new List<BoardTileController>();
 
     private PlayerTokenController externalSelectedToken;
+    private Transform boardSurfaceRoot;
+    private Renderer boardSurfaceRenderer;
     private string selectedPlayerId = "";
     private string selectedTileId = "";
     private string currentPlayerTileId = "";
@@ -33,6 +35,8 @@ public sealed class BoardLayoutManager : MonoBehaviour
     public string ActiveAuctionTileId => activeAuctionTileId;
     public Bounds BoardBounds => boardBounds;
     public BoardTileController[] RuntimeTiles => orderedTiles.ToArray();
+    public bool HasPlaceholderBoardSurface => boardSurfaceRenderer != null;
+    public Vector3 BoardSurfaceScale => boardSurfaceRenderer == null ? Vector3.zero : boardSurfaceRenderer.transform.localScale;
 
     public void Configure(GameObject newTilePrefab, GameObject newPlayerTokenPrefab)
     {
@@ -137,7 +141,7 @@ public sealed class BoardLayoutManager : MonoBehaviour
             tile.transform.SetParent(tileRoot, false);
             tile.transform.localPosition = PositionForIndex(i, sortedTiles.Length);
             tile.transform.localRotation = RotationForPosition(tile.transform.localPosition);
-            tile.BindTile(snapshotTile.tileId, snapshotTile.ownerPlayerId, FallbackOwnerColor(snapshotTile.ownerPlayerId));
+            tile.BindTileSnapshot(snapshotTile, FallbackOwnerColor(snapshotTile.ownerPlayerId));
             tile.SetBoardIndex(snapshotTile.index);
 
             orderedTiles.Add(tile);
@@ -368,6 +372,38 @@ public sealed class BoardLayoutManager : MonoBehaviour
             tokenRoot.SetParent(transform, false);
             tokenRoot.gameObject.hideFlags = HideFlags.DontSave;
         }
+
+        EnsureBoardSurface();
+    }
+
+    private void EnsureBoardSurface()
+    {
+        if (boardSurfaceRoot != null || !Application.isPlaying)
+        {
+            return;
+        }
+
+        boardSurfaceRoot = new GameObject("BoardSurface_Runtime").transform;
+        boardSurfaceRoot.SetParent(transform, false);
+        boardSurfaceRoot.gameObject.hideFlags = HideFlags.DontSave;
+
+        GameObject surface = PlaceholderVisualTheme.CreateRuntimeCubeChild(
+            boardSurfaceRoot,
+            "BoardTableSurface_Runtime",
+            new Vector3(0f, -0.16f, 0f),
+            new Vector3(Mathf.Max(1f, boardWidth) + 3.2f, 0.12f, Mathf.Max(1f, boardDepth) + 3.2f),
+            PlaceholderVisualTheme.BoardSurface);
+        boardSurfaceRenderer = surface.GetComponent<Renderer>();
+
+        float railHeight = 0.28f;
+        float railThickness = 0.35f;
+        float railY = 0.02f;
+        float width = Mathf.Max(1f, boardWidth) + 3.5f;
+        float depth = Mathf.Max(1f, boardDepth) + 3.5f;
+        PlaceholderVisualTheme.CreateRuntimeCubeChild(boardSurfaceRoot, "BoardRailNorth_Runtime", new Vector3(0f, railY, depth * 0.5f), new Vector3(width, railHeight, railThickness), PlaceholderVisualTheme.BoardRail);
+        PlaceholderVisualTheme.CreateRuntimeCubeChild(boardSurfaceRoot, "BoardRailSouth_Runtime", new Vector3(0f, railY, -depth * 0.5f), new Vector3(width, railHeight, railThickness), PlaceholderVisualTheme.BoardRail);
+        PlaceholderVisualTheme.CreateRuntimeCubeChild(boardSurfaceRoot, "BoardRailEast_Runtime", new Vector3(width * 0.5f, railY, 0f), new Vector3(railThickness, railHeight, depth), PlaceholderVisualTheme.BoardRail);
+        PlaceholderVisualTheme.CreateRuntimeCubeChild(boardSurfaceRoot, "BoardRailWest_Runtime", new Vector3(-width * 0.5f, railY, 0f), new Vector3(railThickness, railHeight, depth), PlaceholderVisualTheme.BoardRail);
     }
 
     private Vector3 PositionForIndex(int index, int count)

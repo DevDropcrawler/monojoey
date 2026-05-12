@@ -109,18 +109,21 @@ public sealed class AuctionPanelController : MonoBehaviour
     public string ActivePlayerDisplayText => activePlayerText == null ? "" : activePlayerText.text;
     public string HighBidderDisplayText => highBidderText == null ? "" : highBidderText.text;
     public string TimerDisplayText => timerText == null ? "" : timerText.text;
+    public bool HasRuntimeVisualHierarchy => timerText != null && timerText.fontSize >= 24 && currentBidText != null && currentBidText.fontSize >= 21;
 
     private Coroutine highBidderPulseCoroutine;
     private string lastLoggedBidFeedback = "";
 
     private void Awake()
     {
+        ApplyRuntimeVisualHierarchy();
         if (bidButton != null)
         {
             bidButton.onClick.AddListener(SubmitLocalBidRequest);
         }
 
         RefreshButtonLabel();
+        RefreshButtonVisual();
         RefreshSnapshotText();
         RefreshBidButton();
         AnimateCountdownHighlight(remainingSeconds, 30f);
@@ -324,6 +327,7 @@ public sealed class AuctionPanelController : MonoBehaviour
     private void RefreshBidButton()
     {
         RefreshButtonLabel();
+        RefreshButtonVisual();
 
         if (bidButton == null)
         {
@@ -336,6 +340,7 @@ public sealed class AuctionPanelController : MonoBehaviour
             LastBidBlockedReason = "";
             LastBidFeedbackText = BuildBidPromptText();
             RefreshSnapshotTextOnlyPrompt();
+            RefreshButtonVisual();
             return;
         }
 
@@ -351,6 +356,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         {
             SetBidFeedback($"Bid unavailable - {PlayerFacingBidReason(gameplayCommandDispatcher.LastCommandError)}", $"Bid backend error: {gameplayCommandDispatcher.LastCommandError}");
             RefreshSnapshotTextOnlyPrompt();
+            RefreshButtonVisual();
             return;
         }
 
@@ -373,6 +379,7 @@ public sealed class AuctionPanelController : MonoBehaviour
         }
 
         RefreshSnapshotTextOnlyPrompt();
+        RefreshButtonVisual();
     }
 
     private bool CanSubmitBidLive(int amount, out string reason)
@@ -503,6 +510,63 @@ public sealed class AuctionPanelController : MonoBehaviour
         if (text != null)
         {
             text.text = "Place bid";
+        }
+    }
+
+    private void ApplyRuntimeVisualHierarchy()
+    {
+        if (timerText != null)
+        {
+            timerText.fontSize = Mathf.Max(timerText.fontSize, 24);
+            timerText.fontStyle = FontStyle.Bold;
+            timerText.color = PlaceholderVisualTheme.PanelAccent;
+        }
+
+        if (currentBidText != null)
+        {
+            currentBidText.fontSize = Mathf.Max(currentBidText.fontSize, 21);
+            currentBidText.fontStyle = FontStyle.Bold;
+            currentBidText.color = Color.white;
+        }
+
+        if (highBidderText != null)
+        {
+            highBidderText.fontSize = Mathf.Max(highBidderText.fontSize, 18);
+            highBidderText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+
+        if (activePlayerText != null)
+        {
+            activePlayerText.fontSize = Mathf.Max(activePlayerText.fontSize, 18);
+            activePlayerText.color = PlaceholderVisualTheme.SecondaryText;
+        }
+
+        if (logText != null)
+        {
+            logText.color = PlaceholderVisualTheme.DisabledText;
+        }
+    }
+
+    private void RefreshButtonVisual()
+    {
+        if (bidButton == null)
+        {
+            return;
+        }
+
+        Image image = bidButton.GetComponent<Image>();
+        if (image != null)
+        {
+            image.color = bidButton.interactable
+                ? new Color(0.46f, 0.32f, 0.14f, 0.98f)
+                : new Color(0.16f, 0.18f, 0.20f, 0.72f);
+        }
+
+        Text text = bidButton.GetComponentInChildren<Text>(true);
+        if (text != null)
+        {
+            text.fontStyle = FontStyle.Bold;
+            text.color = bidButton.interactable ? Color.white : PlaceholderVisualTheme.DisabledText;
         }
     }
 

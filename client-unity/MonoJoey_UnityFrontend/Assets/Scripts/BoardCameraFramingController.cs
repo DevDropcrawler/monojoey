@@ -3,15 +3,17 @@ using UnityEngine;
 public sealed class BoardCameraFramingController : MonoBehaviour
 {
     [SerializeField] private Camera targetCamera;
-    [SerializeField] private float framingMargin = 1.35f;
-    [SerializeField] private float cameraHeight = 13f;
-    [SerializeField] private float cameraDepthOffset = -10f;
-    [SerializeField] private Vector3 cameraEulerAngles = new Vector3(55f, 0f, 0f);
+    [SerializeField] private float framingMargin = 1.22f;
+    [SerializeField] private float cameraHeight = 14.5f;
+    [SerializeField] private float cameraDepthOffset = -9.25f;
+    [SerializeField] private Vector3 cameraEulerAngles = new Vector3(57f, 0f, 0f);
+    [SerializeField] private Color cameraBackgroundColor = new Color(0.03f, 0.04f, 0.05f, 1f);
     [SerializeField] private bool enableDebugLogging;
 
     public Camera TargetCamera => targetCamera;
     public float LastOrthographicSize { get; private set; }
     public Bounds LastFramedBounds { get; private set; }
+    public Vector3 LastCameraPosition { get; private set; }
 
     public void Configure(Camera cameraToFrame)
     {
@@ -53,10 +55,13 @@ public sealed class BoardCameraFramingController : MonoBehaviour
 
         LastFramedBounds = bounds;
         cameraToFrame.orthographic = true;
+        cameraToFrame.clearFlags = CameraClearFlags.SolidColor;
+        cameraToFrame.backgroundColor = cameraBackgroundColor;
         cameraToFrame.transform.position = new Vector3(bounds.center.x, bounds.center.y + cameraHeight, bounds.center.z + cameraDepthOffset);
         cameraToFrame.transform.rotation = Quaternion.Euler(cameraEulerAngles);
+        LastCameraPosition = cameraToFrame.transform.position;
 
-        float verticalExtent = Mathf.Max(bounds.extents.z, bounds.extents.x * 0.72f);
+        float verticalExtent = Mathf.Max(bounds.extents.z, bounds.extents.x * 0.78f);
         LastOrthographicSize = Mathf.Max(4f, verticalExtent * framingMargin);
         cameraToFrame.orthographicSize = LastOrthographicSize;
         LogDebug($"Camera framed bounds={bounds}, size={LastOrthographicSize}, position={cameraToFrame.transform.position}.");

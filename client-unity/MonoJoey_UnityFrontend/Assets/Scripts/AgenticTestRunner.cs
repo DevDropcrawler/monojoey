@@ -329,6 +329,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk14LiveSessionEntryValidation(hydrator);
         yield return RunChunk15LiveSmokeExecutionHelperValidation(hydrator);
         yield return RunChunk17BoardLayoutValidation(hydrator, token, tokenAnimator);
+        yield return RunChunk18RealGameVisualPassValidation(hydrator, hud, turnController, auction, token);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk13LiveGameplaySmoke(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
@@ -1220,6 +1221,131 @@ public sealed class AgenticTestRunner : MonoBehaviour
         }
 
         Debug.Log($"[AgenticTestRunner] Chunk 17 board layout summary: tiles={boardLayout.TileCount}, tokens={boardLayout.TokenCount}, selectedTile={DisplayLogValue(boardLayout.SelectedTileId)}, currentPlayerTile={DisplayLogValue(boardLayout.CurrentPlayerTileId)}, activeAuctionTile={DisplayLogValue(boardLayout.ActiveAuctionTileId)}, bounds={boardLayout.BoardBounds}, cameraSize={cameraFraming.LastOrthographicSize}. Placeholder visuals only; snapshot hydration remains authoritative; no backend mutation.", boardObject);
+    }
+
+    private IEnumerator RunChunk18RealGameVisualPassValidation(
+        SnapshotHydrator hydrator,
+        HUDController hud,
+        TurnController turnController,
+        AuctionPanelController auction,
+        PlayerTokenController selectedToken)
+    {
+        GameObject tileRuntimePrefab = tilePrefab != null ? tilePrefab : LoadPrefabInEditor("Assets/Prefabs/TilePrefab.prefab");
+        GameObject tokenRuntimePrefab = playerTokenPrefab != null ? playerTokenPrefab : LoadPrefabInEditor("Assets/Prefabs/PlayerToken.prefab");
+        if (tileRuntimePrefab == null || tokenRuntimePrefab == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 18 visual validation skipped because tile/token prefabs were unavailable. Placeholder visuals only; snapshot hydration remains authoritative; no backend mutation.");
+            yield break;
+        }
+
+        GameObject boardObject = new GameObject(
+            "BoardLayout_Chunk18Runtime",
+            typeof(BoardLayoutManager),
+            typeof(BoardCameraFramingController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+        BoardLayoutManager boardLayout = boardObject.GetComponent<BoardLayoutManager>();
+        BoardCameraFramingController cameraFraming = boardObject.GetComponent<BoardCameraFramingController>();
+        boardLayout.Configure(tileRuntimePrefab, tokenRuntimePrefab);
+        boardLayout.SetExternalSelectedToken(selectedToken);
+        hydrator.ConfigureBoardLayout(boardLayout, cameraFraming);
+
+        bool hydrated = hydrator.HydrateSnapshotJson(Chunk17BoardLayoutSnapshotJson());
+        yield return null;
+
+        BoardTileController[] runtimeTiles = boardLayout.RuntimeTiles;
+        int polishedTileCount = 0;
+        int labeledTileCount = 0;
+        int typedTileCount = 0;
+        for (int i = 0; i < runtimeTiles.Length; i++)
+        {
+            BoardTileController tile = runtimeTiles[i];
+            if (tile == null)
+            {
+                continue;
+            }
+
+            if (tile.HasPlaceholderVisualPolish)
+            {
+                polishedTileCount++;
+            }
+
+            if (!string.IsNullOrWhiteSpace(tile.TitleLabelText) && !string.IsNullOrWhiteSpace(tile.DetailLabelText))
+            {
+                labeledTileCount++;
+            }
+
+            if (!string.IsNullOrWhiteSpace(tile.TileType))
+            {
+                typedTileCount++;
+            }
+        }
+
+        BoardTileController selectedTile = FindBoardTile(runtimeTiles, "property_04");
+        BoardTileController currentTile = FindBoardTile(runtimeTiles, "property_02");
+        BoardTileController auctionTile = FindBoardTile(runtimeTiles, "auction_test");
+        bool boardPresentation = hydrated
+            && boardLayout.HasPlaceholderBoardSurface
+            && boardLayout.BoardSurfaceScale.x > boardLayout.BoardBounds.size.x
+            && boardLayout.BoardSurfaceScale.z > boardLayout.BoardBounds.size.z;
+        bool tileReadability = runtimeTiles.Length == 12
+            && polishedTileCount == runtimeTiles.Length
+            && labeledTileCount == runtimeTiles.Length
+            && typedTileCount == runtimeTiles.Length;
+        bool highlightAuthority = selectedTile != null
+            && selectedTile.CurrentHighlightKind == BoardTileController.HighlightKind.Selected
+            && currentTile != null
+            && currentTile.CurrentHighlightKind == BoardTileController.HighlightKind.CurrentPlayer
+            && auctionTile != null
+            && auctionTile.CurrentHighlightKind == BoardTileController.HighlightKind.ActiveAuction;
+
+        boardLayout.TryGetToken(testPlayerId, out PlayerTokenController visualSelectedToken);
+        boardLayout.TryGetToken("player-3", out PlayerTokenController sharedTileToken);
+        Vector3 selectedAnchor = boardLayout.GetTokenAnchorPosition("property_04", testPlayerId, 0.35f);
+        Vector3 sharedAnchor = boardLayout.GetTokenAnchorPosition("property_04", "player-3", 0.35f);
+        float sharedTokenDistance = Vector3.Distance(selectedAnchor, sharedAnchor);
+        bool tokenReadability = visualSelectedToken != null
+            && visualSelectedToken.HasPlaceholderVisualPolish
+            && !string.IsNullOrWhiteSpace(visualSelectedToken.NameplateText)
+            && sharedTileToken != null
+            && sharedTileToken.HasPlaceholderVisualPolish
+            && sharedTokenDistance > 0.05f;
+
+        bool cameraComposition = cameraFraming.TargetCamera != null
+            && cameraFraming.TargetCamera.orthographic
+            && cameraFraming.LastOrthographicSize >= 4f
+            && cameraFraming.LastOrthographicSize < 20f
+            && cameraFraming.LastFramedBounds.size.x > 8f;
+
+        bool uiHierarchy = hud != null
+            && hud.HasRuntimeVisualHierarchy
+            && hud.MoneyDisplayText.StartsWith("$", StringComparison.Ordinal)
+            && turnController != null
+            && turnController.HasRuntimeVisualHierarchy
+            && !turnController.TurnStatusDisplayText.Contains("Rolled:", StringComparison.Ordinal)
+            && auction != null
+            && auction.HasRuntimeVisualHierarchy
+            && auction.TimerDisplayText.Contains("s left", StringComparison.Ordinal);
+
+        RecordChunk18Check("placeholder board surface and rails generated", boardPresentation, $"hydrated={hydrated}, surface={boardLayout.HasPlaceholderBoardSurface}, surfaceScale={boardLayout.BoardSurfaceScale}, bounds={boardLayout.BoardBounds}.", boardObject);
+        RecordChunk18Check("runtime tiles expose readable placeholder labels", tileReadability, $"tiles={runtimeTiles.Length}, polished={polishedTileCount}, labels={labeledTileCount}, typed={typedTileCount}, sample={DisplayLogValue(selectedTile == null ? "" : selectedTile.TitleLabelText)} / {DisplayLogValue(selectedTile == null ? "" : selectedTile.DetailLabelText)}.", boardObject);
+        RecordChunk18Check("snapshot-owned highlight hierarchy preserved", highlightAuthority, $"selected={selectedTile?.CurrentHighlightKind}, current={currentTile?.CurrentHighlightKind}, auction={auctionTile?.CurrentHighlightKind}, activeAuctionTile={DisplayLogValue(boardLayout.ActiveAuctionTileId)}.", boardObject);
+        RecordChunk18Check("token readability and shared-tile separation", tokenReadability, $"selectedToken={visualSelectedToken != null}, selectedPolish={(visualSelectedToken != null && visualSelectedToken.HasPlaceholderVisualPolish)}, selectedName={DisplayLogValue(visualSelectedToken == null ? "" : visualSelectedToken.NameplateText)}, sharedToken={sharedTileToken != null}, distance={sharedTokenDistance:0.000}.", boardObject);
+        RecordChunk18Check("camera composition remains readable", cameraComposition, $"camera={cameraFraming.TargetCamera != null}, size={cameraFraming.LastOrthographicSize}, position={cameraFraming.LastCameraPosition}, bounds={cameraFraming.LastFramedBounds}.", boardObject);
+        RecordChunk18Check("HUD turn auction hierarchy is player-facing", uiHierarchy, $"hud={hud?.CurrentPlayerDisplayText}/{hud?.MoneyDisplayText}, turn={turnController?.TurnStatusDisplayText}, auction={auction?.TimerDisplayText}/{auction?.CurrentBidDisplayText}.", boardObject);
+
+        bool priorityHydrated = hydrator.HydrateSnapshotJson(Chunk18HighlightPrioritySnapshotJson());
+        BoardTileController priorityAuctionTile = FindBoardTile(boardLayout.RuntimeTiles, "auction_test");
+        bool auctionPriority = priorityHydrated
+            && priorityAuctionTile != null
+            && priorityAuctionTile.CurrentHighlightKind == BoardTileController.HighlightKind.ActiveAuction
+            && string.Equals(boardLayout.SelectedTileId, "auction_test", StringComparison.Ordinal)
+            && string.Equals(boardLayout.CurrentPlayerTileId, "auction_test", StringComparison.Ordinal)
+            && string.Equals(boardLayout.ActiveAuctionTileId, "auction_test", StringComparison.Ordinal);
+        RecordChunk18Check("active auction highlight wins overlap priority", auctionPriority, $"hydrated={priorityHydrated}, selected={DisplayLogValue(boardLayout.SelectedTileId)}, current={DisplayLogValue(boardLayout.CurrentPlayerTileId)}, auction={DisplayLogValue(boardLayout.ActiveAuctionTileId)}, highlight={priorityAuctionTile?.CurrentHighlightKind}.", boardObject);
+
+        Debug.Log($"[AgenticTestRunner] Chunk 18 visual pass summary: boardSurface={boardLayout.HasPlaceholderBoardSurface}, tiles={boardLayout.TileCount}, tileLabels={labeledTileCount}, tokens={boardLayout.TokenCount}, tokenDistance={sharedTokenDistance:0.000}, cameraSize={cameraFraming.LastOrthographicSize}, uiHierarchy={uiHierarchy}. Runtime placeholder visuals only; snapshot hydration remains authoritative; no backend mutation.", boardObject);
     }
 
     private IEnumerator RunOptionalChunk11LiveBackendSmoke(SnapshotHydrator hydrator)
@@ -2416,6 +2542,18 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.LogError(message, context);
     }
 
+    private static void RecordChunk18Check(string label, bool passed, string details, UnityEngine.Object context)
+    {
+        string message = $"[AgenticTestRunner] Chunk 18 {(passed ? "PASS" : "FAIL")} {label}: {details}";
+        if (passed)
+        {
+            Debug.Log(message, context);
+            return;
+        }
+
+        Debug.LogError(message, context);
+    }
+
     private static bool ContainsAll(string value, params string[] expectedFragments)
     {
         if (value == null)
@@ -2699,6 +2837,93 @@ public sealed class AgenticTestRunner : MonoBehaviour
   ""moneyDeltas"": [],
   ""propertyOwnershipChanges"": [],
   ""playerEliminations"": []
+}";
+    }
+
+    private static string Chunk18HighlightPrioritySnapshotJson()
+    {
+        return @"{
+  ""snapshotVersion"": 18,
+  ""sessionId"": ""session_chunk_18"",
+  ""status"": ""in_game"",
+  ""gameStatus"": ""in_progress"",
+  ""serverNowUtc"": ""2026-05-12T00:18:00Z"",
+  ""matchId"": ""session_chunk_18"",
+  ""phase"": ""auction_bidding"",
+  ""turn"": {
+    ""currentPlayerId"": ""player-agentic"",
+    ""turnIndex"": 18,
+    ""hasRolledThisTurn"": true,
+    ""hasResolvedTileThisTurn"": true,
+    ""hasExecutedTileThisTurn"": true
+  },
+  ""players"": [
+    {
+      ""playerId"": ""player-agentic"",
+      ""username"": ""Agentic Player"",
+      ""tokenId"": ""token_agentic"",
+      ""colorId"": ""gold"",
+      ""money"": 1200,
+      ""currentTileId"": ""auction_test"",
+      ""ownedPropertyIds"": [""property_01""],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": { ""totalBorrowed"": 180, ""currentInterestRatePercent"": 20, ""nextTurnInterestDue"": 36, ""loanTier"": 1 },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-2"",
+      ""username"": ""Blue Player"",
+      ""tokenId"": ""token_blue"",
+      ""colorId"": ""blue"",
+      ""money"": 1680,
+      ""currentTileId"": ""property_02"",
+      ""ownedPropertyIds"": [""property_02""],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    }
+  ],
+  ""board"": {
+    ""boardId"": ""chunk_18_priority_board"",
+    ""version"": 18,
+    ""displayName"": ""Chunk 18 Priority Board"",
+    ""tiles"": [
+      { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""price"": 60, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": ""player-agentic"" },
+      { ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""price"": 80, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": ""player-2"" },
+      { ""tileId"": ""chance_01"", ""index"": 3, ""displayName"": ""Chance 01"", ""tileType"": ""chance_deck"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_03"", ""index"": 4, ""displayName"": ""Property 03"", ""tileType"": ""property"", ""price"": 100, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null },
+      { ""tileId"": ""property_04"", ""index"": 5, ""displayName"": ""Property 04"", ""tileType"": ""property"", ""price"": 120, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null },
+      { ""tileId"": ""utility_01"", ""index"": 6, ""displayName"": ""Utility 01"", ""tileType"": ""utility"", ""price"": 150, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null },
+      { ""tileId"": ""lockup_01"", ""index"": 7, ""displayName"": ""Lockup"", ""tileType"": ""lockup"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""go_to_lockup_01"", ""index"": 8, ""displayName"": ""Go To Lockup"", ""tileType"": ""go_to_lockup"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""tax_01"", ""index"": 9, ""displayName"": ""Tax"", ""tileType"": ""tax"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""table_01"", ""index"": 10, ""displayName"": ""Table 01"", ""tileType"": ""table_deck"", ""price"": 0, ""isPurchasable"": false, ""isAuctionable"": false, ""ownerPlayerId"": null },
+      { ""tileId"": ""auction_test"", ""index"": 11, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""price"": 160, ""isPurchasable"": true, ""isAuctionable"": true, ""ownerPlayerId"": null }
+    ]
+  },
+  ""activeAuction"": {
+    ""propertyTileId"": ""auction_test"",
+    ""triggeringPlayerId"": ""player-agentic"",
+    ""status"": ""active"",
+    ""startingBid"": 100,
+    ""minimumBidIncrement"": 10,
+    ""highestBid"": 240,
+    ""highestBidderId"": ""player-2"",
+    ""countdownDurationSeconds"": 8,
+    ""timerEndsAtUtc"": ""2026-05-12T00:18:08Z"",
+    ""bids"": [
+      { ""bidderPlayerId"": ""player-2"", ""amount"": 240, ""placedAtUtc"": ""2026-05-12T00:18:02Z"" }
+    ]
+  },
+  ""propertyStates"": [],
+  ""pendingTrades"": []
 }";
     }
 

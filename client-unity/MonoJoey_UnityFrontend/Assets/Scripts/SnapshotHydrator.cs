@@ -323,7 +323,7 @@ public sealed class SnapshotHydrator : MonoBehaviour
                 }
             }
 
-            runtimeTile.BindTile(snapshotTile.tileId, snapshotTile.ownerPlayerId, ownerColor);
+            runtimeTile.BindTileSnapshot(snapshotTile, ownerColor);
             runtimeTile.SetBoardIndex(snapshotTile.index);
             if (boardLayoutManager == null)
             {
