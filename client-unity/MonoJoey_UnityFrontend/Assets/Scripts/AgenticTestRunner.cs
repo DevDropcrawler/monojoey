@@ -328,6 +328,7 @@ public sealed class AgenticTestRunner : MonoBehaviour
         yield return RunChunk11SessionJoinPanelValidation(hydrator);
         yield return RunChunk14LiveSessionEntryValidation(hydrator);
         yield return RunChunk15LiveSmokeExecutionHelperValidation(hydrator);
+        yield return RunChunk17BoardLayoutValidation(hydrator, token, tokenAnimator);
         yield return RunOptionalChunk11LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk9LiveBackendSmoke(hydrator);
         yield return RunOptionalChunk13LiveGameplaySmoke(hydrator, hud, turnController, auction, token, tokenAnimator, boardPath);
@@ -1140,6 +1141,85 @@ public sealed class AgenticTestRunner : MonoBehaviour
             && commandHelper.LastReportText.Contains("direct:")
             && commandHelper.LastReportText.Contains("snapshot:");
         Debug.Log($"[AgenticTestRunner] Chunk 15 explicit mock command smoke: started={commandStart}, result={DisplayLogValue(commandHelper.LastRunResult)}, failure={DisplayLogValue(commandHelper.LastFailureLabel)}, sentTypes={string.Join(", ", commandTransport.SentRequestTypes)}, exactlyOneRoll={exactlyOneRoll}, noResolveExecuteEndBid={noOtherGameplay}, direct={DisplayLogValue(commandRouter.LastDirectCommandResultType)}, snapshots={commandRouter.SnapshotResultCount}, reportComplete={reportComplete}. Expected one roll_dice, roll_result, authoritative snapshot_result, and clipboard-ready report.", commandPanelObject);
+    }
+
+    private IEnumerator RunChunk17BoardLayoutValidation(
+        SnapshotHydrator hydrator,
+        PlayerTokenController token,
+        TokenAnimator tokenAnimator)
+    {
+        GameObject tileRuntimePrefab = tilePrefab != null ? tilePrefab : LoadPrefabInEditor("Assets/Prefabs/TilePrefab.prefab");
+        GameObject tokenRuntimePrefab = playerTokenPrefab != null ? playerTokenPrefab : LoadPrefabInEditor("Assets/Prefabs/PlayerToken.prefab");
+        if (tileRuntimePrefab == null || tokenRuntimePrefab == null)
+        {
+            Debug.LogWarning("[AgenticTestRunner] Chunk 17 board layout validation skipped because tile/token prefabs were unavailable. Snapshot remains authoritative; no backend mutation.");
+            yield break;
+        }
+
+        GameObject boardObject = new GameObject(
+            "BoardLayout_Chunk17Runtime",
+            typeof(BoardLayoutManager),
+            typeof(BoardCameraFramingController))
+        {
+            hideFlags = HideFlags.DontSave
+        };
+        BoardLayoutManager boardLayout = boardObject.GetComponent<BoardLayoutManager>();
+        BoardCameraFramingController cameraFraming = boardObject.GetComponent<BoardCameraFramingController>();
+        boardLayout.Configure(tileRuntimePrefab, tokenRuntimePrefab);
+        boardLayout.SetExternalSelectedToken(token);
+        hydrator.ConfigureBoardLayout(boardLayout, cameraFraming);
+
+        bool hydrated = hydrator.HydrateSnapshotJson(Chunk17BoardLayoutSnapshotJson());
+        BoardTileController[] runtimeTiles = boardLayout.RuntimeTiles;
+        BoardTileController selectedTile = FindBoardTile(runtimeTiles, "property_04");
+        BoardTileController currentTile = FindBoardTile(runtimeTiles, "property_02");
+        BoardTileController auctionTile = FindBoardTile(runtimeTiles, "auction_test");
+        bool loopExtents = boardLayout.BoardBounds.size.x > 8f && boardLayout.BoardBounds.size.z > 8f;
+        bool selectedHighlight = selectedTile != null && selectedTile.CurrentHighlightKind == BoardTileController.HighlightKind.Selected;
+        bool currentHighlight = currentTile != null && currentTile.CurrentHighlightKind == BoardTileController.HighlightKind.CurrentPlayer;
+        bool auctionHighlight = auctionTile != null && auctionTile.CurrentHighlightKind == BoardTileController.HighlightKind.ActiveAuction;
+        bool cameraFramed = cameraFraming.TargetCamera != null && cameraFraming.TargetCamera.orthographic && cameraFraming.LastOrthographicSize > 0f;
+
+        boardLayout.TryGetToken(testPlayerId, out PlayerTokenController selectedToken);
+        boardLayout.TryGetToken("player-3", out PlayerTokenController sharedTileToken);
+        Vector3 selectedAnchor = boardLayout.GetTokenAnchorPosition("property_04", testPlayerId, 0.35f);
+        Vector3 sharedAnchor = boardLayout.GetTokenAnchorPosition("property_04", "player-3", 0.35f);
+        bool separatedSharedTileTokens = selectedToken != null
+            && sharedTileToken != null
+            && Vector3.Distance(selectedAnchor, sharedAnchor) > 0.05f;
+
+        RecordChunk17Check("snapshot board generated loop layout", hydrated && runtimeTiles.Length == 12 && loopExtents, $"hydrated={hydrated}, tiles={runtimeTiles.Length}, bounds={boardLayout.BoardBounds}.", boardObject);
+        RecordChunk17Check("snapshot highlight context", selectedHighlight && currentHighlight && auctionHighlight, $"selected={selectedTile?.CurrentHighlightKind}, current={currentTile?.CurrentHighlightKind}, auction={auctionTile?.CurrentHighlightKind}, activeAuctionTile={DisplayLogValue(boardLayout.ActiveAuctionTileId)}.", boardObject);
+        RecordChunk17Check("shared tile token anchors separated", separatedSharedTileTokens, $"selectedAnchor={selectedAnchor}, sharedAnchor={sharedAnchor}, selectedToken={selectedToken != null}, sharedToken={sharedTileToken != null}.", boardObject);
+        RecordChunk17Check("camera frames board bounds", cameraFramed, $"camera={cameraFraming.TargetCamera != null}, orthographic={(cameraFraming.TargetCamera != null && cameraFraming.TargetCamera.orthographic)}, size={cameraFraming.LastOrthographicSize}.", boardObject);
+
+        Vector3 beforeRepeatAnchor = boardLayout.GetTokenAnchorPosition("property_04", testPlayerId, 0.35f);
+        bool repeatedHydration = hydrator.HydrateSnapshotJson(Chunk17BoardLayoutSnapshotJson());
+        Vector3 afterRepeatAnchor = boardLayout.GetTokenAnchorPosition("property_04", testPlayerId, 0.35f);
+        RecordChunk17Check("anchors stable across repeated hydration", repeatedHydration && Vector3.Distance(beforeRepeatAnchor, afterRepeatAnchor) < 0.001f, $"before={beforeRepeatAnchor}, after={afterRepeatAnchor}, repeatedHydration={repeatedHydration}.", boardObject);
+
+        if (tokenAnimator != null)
+        {
+            List<string> path = new List<string> { "property_04", "utility_01", "lockup_01" };
+            tokenAnimator.AnimateAlongPath(path, boardLayout, testPlayerId, 2, TokenAnimator.MovementKind.Minimal);
+            while (tokenAnimator.IsAnimating)
+            {
+                yield return null;
+            }
+
+            Vector3 expectedAnimationAnchor = boardLayout.GetTokenAnchorPosition("lockup_01", testPlayerId, 0.35f);
+            bool animationFollowedLayoutAnchor = Vector3.Distance(tokenAnimator.FinalPosition, expectedAnimationAnchor) < 0.01f;
+            RecordChunk17Check("token animation follows board anchors", animationFollowedLayoutAnchor, $"final={tokenAnimator.FinalPosition}, expected={expectedAnimationAnchor}, finalTile={DisplayLogValue(tokenAnimator.LastCompletedTileId)}.", boardObject);
+
+            bool authoritativeRehydrate = hydrator.HydrateSnapshotJson(Chunk17BoardLayoutSnapshotJson());
+            bool snapshotReturnedToken = authoritativeRehydrate
+                && token != null
+                && string.Equals(token.CurrentTileId, "property_04", StringComparison.Ordinal)
+                && Vector3.Distance(token.transform.position, boardLayout.GetTokenAnchorPosition("property_04", testPlayerId, 0.35f)) < 0.01f;
+            RecordChunk17Check("snapshot hydration remains token authority", snapshotReturnedToken, $"rehydrated={authoritativeRehydrate}, tokenTile={DisplayLogValue(token == null ? "" : token.CurrentTileId)}, tokenPosition={(token == null ? Vector3.zero : token.transform.position)}.", boardObject);
+        }
+
+        Debug.Log($"[AgenticTestRunner] Chunk 17 board layout summary: tiles={boardLayout.TileCount}, tokens={boardLayout.TokenCount}, selectedTile={DisplayLogValue(boardLayout.SelectedTileId)}, currentPlayerTile={DisplayLogValue(boardLayout.CurrentPlayerTileId)}, activeAuctionTile={DisplayLogValue(boardLayout.ActiveAuctionTileId)}, bounds={boardLayout.BoardBounds}, cameraSize={cameraFraming.LastOrthographicSize}. Placeholder visuals only; snapshot hydration remains authoritative; no backend mutation.", boardObject);
     }
 
     private IEnumerator RunOptionalChunk11LiveBackendSmoke(SnapshotHydrator hydrator)
@@ -2324,6 +2404,18 @@ public sealed class AgenticTestRunner : MonoBehaviour
         Debug.LogError(message, context);
     }
 
+    private static void RecordChunk17Check(string label, bool passed, string details, UnityEngine.Object context)
+    {
+        string message = $"[AgenticTestRunner] Chunk 17 {(passed ? "PASS" : "FAIL")} {label}: {details}";
+        if (passed)
+        {
+            Debug.Log(message, context);
+            return;
+        }
+
+        Debug.LogError(message, context);
+    }
+
     private static bool ContainsAll(string value, params string[] expectedFragments)
     {
         if (value == null)
@@ -2501,6 +2593,113 @@ public sealed class AgenticTestRunner : MonoBehaviour
     ""playerEliminations"": []
   }}
 }}";
+    }
+
+    private static string Chunk17BoardLayoutSnapshotJson()
+    {
+        return @"{
+  ""snapshotVersion"": 17,
+  ""sessionId"": ""session_chunk_17"",
+  ""status"": ""in_game"",
+  ""gameStatus"": ""in_progress"",
+  ""serverNowUtc"": ""2026-05-12T00:17:00Z"",
+  ""matchId"": ""session_chunk_17"",
+  ""phase"": ""auction_bidding"",
+  ""turn"": {
+    ""currentPlayerId"": ""player-2"",
+    ""turnIndex"": 17,
+    ""hasRolledThisTurn"": true,
+    ""hasResolvedTileThisTurn"": true,
+    ""hasExecutedTileThisTurn"": false
+  },
+  ""players"": [
+    {
+      ""playerId"": ""player-agentic"",
+      ""username"": ""Agentic Player"",
+      ""tokenId"": ""token_agentic"",
+      ""colorId"": ""gold"",
+      ""money"": 1400,
+      ""currentTileId"": ""property_04"",
+      ""ownedPropertyIds"": [""property_01""],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-2"",
+      ""username"": ""Blue Player"",
+      ""tokenId"": ""token_blue"",
+      ""colorId"": ""blue"",
+      ""money"": 1500,
+      ""currentTileId"": ""property_02"",
+      ""ownedPropertyIds"": [""property_02""],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    },
+    {
+      ""playerId"": ""player-3"",
+      ""username"": ""Green Player"",
+      ""tokenId"": ""token_green"",
+      ""colorId"": ""green"",
+      ""money"": 1500,
+      ""currentTileId"": ""property_04"",
+      ""ownedPropertyIds"": [],
+      ""heldCardIds"": [],
+      ""statusEffects"": [],
+      ""loan"": { ""totalBorrowed"": 0, ""currentInterestRatePercent"": 0, ""nextTurnInterestDue"": 0, ""loanTier"": 0 },
+      ""isBankrupt"": false,
+      ""isEliminated"": false,
+      ""isLockedUp"": false
+    }
+  ],
+  ""board"": {
+    ""boardId"": ""chunk_17_loop_board"",
+    ""version"": 17,
+    ""displayName"": ""Chunk 17 Loop Board"",
+    ""tiles"": [
+      { ""tileId"": ""start"", ""index"": 0, ""displayName"": ""Start"", ""tileType"": ""start"", ""ownerPlayerId"": null },
+      { ""tileId"": ""property_01"", ""index"": 1, ""displayName"": ""Property 01"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-agentic"" },
+      { ""tileId"": ""property_02"", ""index"": 2, ""displayName"": ""Property 02"", ""tileType"": ""property"", ""ownerPlayerId"": ""player-2"" },
+      { ""tileId"": ""chance_01"", ""index"": 3, ""displayName"": ""Chance 01"", ""tileType"": ""chance_deck"", ""ownerPlayerId"": null },
+      { ""tileId"": ""property_03"", ""index"": 4, ""displayName"": ""Property 03"", ""tileType"": ""property"", ""ownerPlayerId"": null },
+      { ""tileId"": ""property_04"", ""index"": 5, ""displayName"": ""Property 04"", ""tileType"": ""property"", ""ownerPlayerId"": null },
+      { ""tileId"": ""utility_01"", ""index"": 6, ""displayName"": ""Utility 01"", ""tileType"": ""utility"", ""ownerPlayerId"": null },
+      { ""tileId"": ""lockup_01"", ""index"": 7, ""displayName"": ""Lockup"", ""tileType"": ""lockup"", ""ownerPlayerId"": null },
+      { ""tileId"": ""auction_test"", ""index"": 8, ""displayName"": ""Auction Test"", ""tileType"": ""property"", ""ownerPlayerId"": null },
+      { ""tileId"": ""transport_01"", ""index"": 9, ""displayName"": ""Transport 01"", ""tileType"": ""transport"", ""ownerPlayerId"": null },
+      { ""tileId"": ""tax_01"", ""index"": 10, ""displayName"": ""Tax 01"", ""tileType"": ""tax"", ""ownerPlayerId"": null },
+      { ""tileId"": ""table_01"", ""index"": 11, ""displayName"": ""Table 01"", ""tileType"": ""table_deck"", ""ownerPlayerId"": null }
+    ]
+  },
+  ""propertyStates"": [],
+  ""activeAuction"": {
+    ""propertyTileId"": ""auction_test"",
+    ""triggeringPlayerId"": ""player-agentic"",
+    ""status"": ""active"",
+    ""startingBid"": 100,
+    ""minimumBidIncrement"": 10,
+    ""initialPreBidSeconds"": 5,
+    ""bidResetSeconds"": 10,
+    ""highestBid"": 250,
+    ""highestBidderId"": ""player-2"",
+    ""countdownDurationSeconds"": 9,
+    ""timerEndsAtUtc"": ""2026-05-12T00:17:09Z"",
+    ""bids"": [
+      { ""bidderPlayerId"": ""player-2"", ""amount"": 250, ""placedAtUtc"": ""2026-05-12T00:17:01Z"" }
+    ]
+  },
+  ""movement"": null,
+  ""moneyDeltas"": [],
+  ""propertyOwnershipChanges"": [],
+  ""playerEliminations"": []
+}";
     }
 
     private static string JsonBool(bool value)

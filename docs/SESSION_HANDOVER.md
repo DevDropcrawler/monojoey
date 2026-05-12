@@ -5,9 +5,9 @@ This file must be updated at the end of every coding chunk.
 ## Current Status
 
 - Phase: Frontend
-- Chunk: 15 - Real Live Smoke Execution Helper
-- Completion status: Unity now has a frontend-only live smoke helper attached to `SessionJoinPanel.prefab`, reusing live session entry values to run one explicitly clicked `roll_dice` smoke with lock/cooldown gates, bounded connect/reconnect/snapshot orchestration, pre-command safety blocking, post-roll authoritative snapshot validation, and a clipboard-ready report.
-- Branch: `main` tracking `origin/main`; implementation is pending commit in this workspace.
+- Chunk: 17 - Board Layout / Camera Foundation
+- Completion status: Unity now has a frontend-only placeholder board foundation that lays authoritative snapshot tiles around a rectangular loop, provides deterministic token anchors for shared tiles, frames the generated board with a runtime camera helper, and highlights selected/current-player/active-auction tiles from hydrated snapshot state only.
+- Branch: `main` tracking `origin/main`; implementation is pending user review/commit in this workspace.
 - Previous commit: `a77f15d`
 - Last commit before this chunk: `a77f15d`
 - Last commit after this chunk: pending
@@ -16,6 +16,17 @@ This file must be updated at the end of every coding chunk.
 ## Docs Planning Note
 
 - Phase 5.22 planning added `docs/GAME_RULES_SPEC.md` as the canonical customization/control-panel contract for editable rules, presets, custom cards, decks, live-edit safety, future protocol projection, and Slimer/Earthquake extension points. This was docs-only; no backend behavior, Unity UI, voting, card execution, deck editing, Slimer, or Earthquake implementation was added.
+
+## Frontend Chunk 17 Addendum
+
+- Added `BoardLayoutManager.cs` for runtime-only placeholder board generation. It sorts `snapshot.board.tiles[]` by authoritative `index`, instantiates/updates `TilePrefab` instances around a rectangular loop, and keeps ownership/highlights tied to hydrated snapshots.
+- Added `BoardCameraFramingController.cs` for optional orthographic camera framing of generated board bounds. No scene save, production asset import, or `ProjectSettings` edit is required.
+- `BoardTileController` now supports selected/current-player/active-auction highlight kinds. Active-auction highlighting uses the existing Unity DTO field `snapshot.activeAuction.propertyTileId`.
+- Token anchors now support deterministic per-tile slots, so multiple players on one tile receive stable placeholder offsets.
+- `SnapshotHydrator` optionally binds the board layout manager, positions placeholder tokens from `players[].currentTileId`, and keeps selected/local token snapping snapshot-authoritative. Direct command responses still do not move tokens or mutate gameplay presentation as final truth.
+- `TokenAnimator` can animate along board-layout anchors for visual validation, and a later authoritative snapshot rehydrates the token back to the server-owned tile.
+- `AgenticTestRunner` validates loop-board extents, generated tile count, selected/current/auction highlights, shared-tile anchor separation and stability, camera framing, board-anchor token animation, and snapshot authority restoration.
+- Validation is pending in this workspace for this addendum.
 
 ## Frontend Chunk 15 Addendum
 

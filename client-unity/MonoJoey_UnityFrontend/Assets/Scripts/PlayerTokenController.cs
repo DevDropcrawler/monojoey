@@ -5,6 +5,7 @@ public sealed class PlayerTokenController : MonoBehaviour
 {
     [SerializeField] private string playerId = "player-1";
     [SerializeField] private Color tokenColor = new Color(0.20f, 0.55f, 0.85f, 1f);
+    [SerializeField] private string currentTileId = "";
     [SerializeField] private int currentTileIndex;
     [SerializeField] private bool enableDebugLogging;
 
@@ -16,6 +17,7 @@ public sealed class PlayerTokenController : MonoBehaviour
 
     public string PlayerId => playerId;
     public Color TokenColor => tokenColor;
+    public string CurrentTileId => currentTileId;
     public int CurrentTileIndex => currentTileIndex;
 
     private void Awake()
@@ -49,10 +51,17 @@ public sealed class PlayerTokenController : MonoBehaviour
         LogDebug($"Tile index set to {currentTileIndex}.");
     }
 
+    public void SetCurrentTile(string tileId, int tileIndex)
+    {
+        currentTileId = string.IsNullOrWhiteSpace(tileId) ? "" : tileId;
+        currentTileIndex = tileIndex;
+        LogDebug($"Current tile set to {DisplayTile()} index={currentTileIndex}.");
+    }
+
     public void MoveToTilePosition(Vector3 worldPosition)
     {
         transform.position = worldPosition;
-        LogDebug($"Moved to tile {currentTileIndex} at {worldPosition}.");
+        LogDebug($"Moved to tile {DisplayTile()} index={currentTileIndex} at {worldPosition}.");
     }
 
     private void ApplyTokenColor()
@@ -75,5 +84,10 @@ public sealed class PlayerTokenController : MonoBehaviour
         {
             Debug.Log($"[PlayerTokenController] {message}", this);
         }
+    }
+
+    private string DisplayTile()
+    {
+        return string.IsNullOrWhiteSpace(currentTileId) ? "--" : currentTileId;
     }
 }

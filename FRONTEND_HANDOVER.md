@@ -2,7 +2,7 @@
 
 ## Summary
 
-Frontend Chunks 1-15 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
+Frontend Chunks 1-17 are implemented in the Unity project at `client-unity/MonoJoey_UnityFrontend`. The completed work is limited to `Assets/Prefabs/` and `Assets/Scripts/`, with runtime validation driven by an editor Playmode auto-bootstrapped `AgenticTestRunner`.
 
 The backend V1 surface remains frozen. Frontend validation defaults to local mock/read-only snapshot data only. Chunk 11 adds a runtime session join panel for manual live testing; live backend use remains opt-in and the panel sends only connection/recovery requests (`connect`, `disconnect`, `reconnect_session`, and bound `get_snapshot`). Gameplay commands remain routed only through the controlled dispatcher from later turn/auction UI chunks and never locally apply gameplay outcomes. Chunk 12 adds player-facing command feedback for sent, in-flight, direct-result, backend-error, disabled-reason, and waiting-for-authoritative-snapshot states. Chunk 13 adds a disabled-by-default live gameplay smoke harness that uses the existing WebSocket transport, backend router, snapshot hydrator, and gameplay dispatcher for one bounded backend-authoritative pass. Chunk 14 adds a frontend-only live session entry/status layer around reconnect and snapshot hydration so humans can paste existing backend/session/player values and inspect connected, bound, phase/status, turn, and player-list state. Chunk 15 adds a frontend-only live smoke execution helper on the join panel for one explicit `roll_dice` smoke run with lock/cooldown gates and a clipboard-ready report.
 
@@ -135,6 +135,8 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   Scripts/
     AgenticTestRunner.cs
     AuctionPanelController.cs
+    BoardCameraFramingController.cs
+    BoardLayoutManager.cs
     BoardTileController.cs
     DiceAnimator.cs
     HUDController.cs
@@ -173,6 +175,7 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - read-only live session snapshot hooks,
   - turn UI snapshot binding,
   - dice roll animation,
+  - placeholder loop-board layout, token anchors, and camera framing,
   - one to two local mock turn flows.
 - Expected backend behavior by default: none. Runtime validation should remain read-only and local unless an optional live smoke flag plus URL/session/player values are explicitly set at runtime.
 
@@ -359,6 +362,16 @@ client-unity/MonoJoey_UnityFrontend/Assets/
   - Direct Unity/Mono Roslyn compile using Unity 6000.4.6f1 generated references passed for `Assets/Scripts/*.cs`; serialized-field warnings only.
   - `dotnet build client-unity/MonoJoey_UnityFrontend/Assembly-CSharp.csproj -v minimal` remains blocked by missing .NET Framework 4.7.1 targeting pack (`MSB3644`).
   - Unity batch mode was attempted but produced no log/output in this shell session, so Play Mode/UI object validation was not confirmed.
+
+### Chunk 17 Runtime Notes
+
+- Added `BoardLayoutManager.cs` as an optional runtime placeholder board foundation. It sorts authoritative `snapshot.board.tiles[]` by `index`, instantiates/updates `TilePrefab` instances around a rectangular loop, and keeps the board driven by snapshot hydration.
+- Added `BoardCameraFramingController.cs` for runtime-only orthographic camera framing around the generated board bounds. No scene save or `ProjectSettings` edit is required.
+- `BoardTileController` now supports highlight kinds for selected tile, current-player tile, and active-auction tile. Active-auction highlighting uses the existing DTO field `snapshot.activeAuction.propertyTileId` and takes visual priority over other highlights.
+- Token anchors now support deterministic per-tile slots. Multiple players on the same tile are separated with placeholder offsets instead of stacked at the same position.
+- `SnapshotHydrator` can optionally bind a board layout manager. When configured, it generates the board from hydrated snapshots, positions placeholder player tokens from `players[].currentTileId`, frames the camera, and still snaps the selected/local token only from authoritative snapshot state.
+- `TokenAnimator` can animate along `BoardLayoutManager` anchors for placeholder board movement validation. Snapshot hydration remains the source of truth and replaces any temporary visual movement.
+- `AgenticTestRunner` adds Chunk 17 validation for loop-board extents, authoritative tile ordering, selected/current/active-auction highlights, stable shared-tile anchors, camera framing, board-anchor token animation, and snapshot rehydration restoring token position.
 
 ## Optional Visual Polish
 

@@ -57,6 +57,20 @@ public sealed class TokenAnimator : MonoBehaviour
         return activeCoroutine;
     }
 
+    public Coroutine AnimateAlongPath(
+        IReadOnlyList<string> pathTileIds,
+        BoardLayoutManager boardLayout,
+        string playerId,
+        int stepCount,
+        MovementKind movementKind)
+    {
+        StopMovement(false);
+        currentMovementKind = movementKind;
+        CaptureRequestedPath(pathTileIds, stepCount);
+        activeCoroutine = StartCoroutine(AnimateBoardLayoutPathRoutine(pathTileIds, boardLayout, playerId, stepCount, movementKind));
+        return activeCoroutine;
+    }
+
     public void StopMovement(bool snapToFinalTile)
     {
         if (activeCoroutine != null)
@@ -137,7 +151,7 @@ public sealed class TokenAnimator : MonoBehaviour
 
             if (tokenController != null)
             {
-                tokenController.SetCurrentTileIndex(finalTileIndex);
+                tokenController.SetCurrentTile(tileId, finalTileIndex);
             }
 
             lastCompletedTileId = tileId;
@@ -146,6 +160,81 @@ public sealed class TokenAnimator : MonoBehaviour
         }
 
         LogDebug($"Animation end: finalTileIndex={finalTileIndex}, movementKind={movementKind}.");
+        activeCoroutine = null;
+    }
+
+    private IEnumerator AnimateBoardLayoutPathRoutine(
+        IReadOnlyList<string> pathTileIds,
+        BoardLayoutManager boardLayout,
+        string playerId,
+        int stepCount,
+        MovementKind movementKind)
+    {
+        if (pathTileIds == null || boardLayout == null || pathTileIds.Count == 0 || stepCount <= 0)
+        {
+            LogDebug("Board layout animation skipped: no path, layout, or steps.");
+            activeCoroutine = null;
+            yield break;
+        }
+
+        int maxIndex = Mathf.Min(stepCount, pathTileIds.Count - 1);
+        if (maxIndex <= 0)
+        {
+            SnapToBoardLayoutTile(pathTileIds[0], boardLayout, playerId, 0);
+            activeCoroutine = null;
+            yield break;
+        }
+
+        LogDebug($"Board layout animation start: path={string.Join(" -> ", pathTileIds)}, stepCount={stepCount}, movementKind={movementKind}.");
+
+        for (int i = 1; i <= maxIndex; i++)
+        {
+            string tileId = pathTileIds[i];
+            if (!boardLayout.TryGetTile(tileId, out BoardTileController tile) || tile == null)
+            {
+                LogDebug($"Board layout animation skipped missing tileId={tileId}.");
+                continue;
+            }
+
+            Vector3 start = transform.position;
+            Vector3 end = boardLayout.GetTokenAnchorPosition(tileId, playerId, 0.35f);
+            finalPosition = end;
+            finalTileIndex = ResolveBoardIndex(tile, i);
+
+            float duration = DurationForMovement(movementKind);
+            if (duration <= 0.01f)
+            {
+                transform.position = end;
+            }
+            else
+            {
+                float elapsed = 0f;
+                while (elapsed < duration)
+                {
+                    elapsed += Time.deltaTime;
+                    float t = Mathf.Clamp01(elapsed / duration);
+                    float curveT = movementCurve == null ? t : movementCurve.Evaluate(t);
+                    Vector3 position = Vector3.Lerp(start, end, curveT);
+                    float hopT = hopCurve == null ? Mathf.Sin(t * Mathf.PI) : hopCurve.Evaluate(t);
+                    position.y += Mathf.Max(0f, hopT) * hopHeight;
+                    transform.position = position;
+                    yield return null;
+                }
+
+                transform.position = end;
+            }
+
+            if (tokenController != null)
+            {
+                tokenController.SetCurrentTile(tileId, finalTileIndex);
+            }
+
+            lastCompletedTileId = tileId;
+            elapsedStepCount++;
+            LogDebug($"Board layout step complete: tileId={tileId}, tileIndex={finalTileIndex}, position={transform.position}.");
+        }
+
+        LogDebug($"Board layout animation end: finalTileIndex={finalTileIndex}, movementKind={movementKind}.");
         activeCoroutine = null;
     }
 
@@ -160,7 +249,23 @@ public sealed class TokenAnimator : MonoBehaviour
 
             if (tokenController != null)
             {
-                tokenController.SetCurrentTileIndex(finalTileIndex);
+                tokenController.SetCurrentTile(tileId, finalTileIndex);
+            }
+        }
+    }
+
+    private void SnapToBoardLayoutTile(string tileId, BoardLayoutManager boardLayout, string playerId, int tileIndex)
+    {
+        if (boardLayout.TryGetTile(tileId, out BoardTileController tile) && tile != null)
+        {
+            finalPosition = boardLayout.GetTokenAnchorPosition(tileId, playerId, 0.35f);
+            finalTileIndex = ResolveBoardIndex(tile, tileIndex);
+            transform.position = finalPosition;
+            lastCompletedTileId = tileId;
+
+            if (tokenController != null)
+            {
+                tokenController.SetCurrentTile(tileId, finalTileIndex);
             }
         }
     }

@@ -44,6 +44,8 @@ public sealed class SnapshotHydrator : MonoBehaviour
     [SerializeField] private PlayerTokenController playerTokenController;
     [SerializeField] private TokenAnimator tokenAnimator;
     [SerializeField] private BoardTileController[] boardTiles = Array.Empty<BoardTileController>();
+    [SerializeField] private BoardLayoutManager boardLayoutManager;
+    [SerializeField] private BoardCameraFramingController boardCameraFramingController;
     [SerializeField] private string localPlayerId = "";
     [SerializeField] private bool logHydration = true;
 
@@ -97,6 +99,18 @@ public sealed class SnapshotHydrator : MonoBehaviour
         Log($"Chunk 5 hydrator configured with hud={hudController != null}, turn={turnController != null}, auction={auctionPanelController != null}, token={playerTokenController != null}, animator={tokenAnimator != null}, boardTiles={boardTiles.Length}.");
     }
 
+    public void ConfigureBoardLayout(BoardLayoutManager layoutManager, BoardCameraFramingController cameraFramingController)
+    {
+        boardLayoutManager = layoutManager;
+        boardCameraFramingController = cameraFramingController;
+        if (boardLayoutManager != null)
+        {
+            boardLayoutManager.SetExternalSelectedToken(playerTokenController);
+        }
+
+        Log($"Chunk 17 board layout configured with layout={boardLayoutManager != null}, camera={boardCameraFramingController != null}.");
+    }
+
     public bool HydrateSnapshotJson(string json)
     {
         LastHydrationSourceMessageType = "snapshot_json";
@@ -142,6 +156,8 @@ public sealed class SnapshotHydrator : MonoBehaviour
         {
             tokenAnimator.StopMovement(false);
         }
+
+        ApplyBoardLayout(snapshot, player == null ? localPlayerId : player.playerId);
 
         if (player == null)
         {
@@ -309,7 +325,11 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
             runtimeTile.BindTile(snapshotTile.tileId, snapshotTile.ownerPlayerId, ownerColor);
             runtimeTile.SetBoardIndex(snapshotTile.index);
-            runtimeTile.SetHighlighted(false);
+            if (boardLayoutManager == null)
+            {
+                runtimeTile.SetHighlighted(false);
+            }
+
             Emit(BoardTileUpdated, "board-tile-updated", snapshotTile.ownerPlayerId, snapshotTile.tileId, true, $"Board tile updated: owner={Display(snapshotTile.ownerPlayerId)}, index={snapshotTile.index}.");
         }
     }
@@ -323,13 +343,26 @@ public sealed class SnapshotHydrator : MonoBehaviour
 
         playerTokenController.SetPlayer(player.playerId, ColorForPlayer(player));
 
+        if (boardLayoutManager != null
+            && !string.IsNullOrWhiteSpace(player.currentTileId)
+            && boardLayoutManager.TryGetTile(player.currentTileId, out BoardTileController layoutTile)
+            && layoutTile != null)
+        {
+            int boardIndex = layoutTile.BoardIndex >= 0 ? layoutTile.BoardIndex : 0;
+            playerTokenController.SetCurrentTile(player.currentTileId, boardIndex);
+            playerTokenController.MoveToTilePosition(boardLayoutManager.GetTokenAnchorPosition(player.currentTileId, player.playerId, 0.35f));
+            LastHydratedTileId = player.currentTileId;
+            Emit(TokenUpdated, "token-updated", player.playerId, player.currentTileId, true, $"Token snapped through board layout: boardIndex={boardIndex}.");
+            return;
+        }
+
         if (tilesById != null
             && !string.IsNullOrWhiteSpace(player.currentTileId)
             && tilesById.TryGetValue(player.currentTileId, out BoardTileController tile)
             && tile != null)
         {
             int boardIndex = tile.BoardIndex >= 0 ? tile.BoardIndex : 0;
-            playerTokenController.SetCurrentTileIndex(boardIndex);
+            playerTokenController.SetCurrentTile(player.currentTileId, boardIndex);
             playerTokenController.MoveToTilePosition(tile.GetTokenAnchorPosition(0.35f));
             LastHydratedTileId = player.currentTileId;
             Emit(TokenUpdated, "token-updated", player.playerId, player.currentTileId, true, $"Token snapped: boardIndex={boardIndex}.");
@@ -339,6 +372,22 @@ public sealed class SnapshotHydrator : MonoBehaviour
         LastHydratedTileId = "";
         Emit(TokenUpdated, "token-updated", player.playerId, player.currentTileId, false, "Token snap failed because authoritative tile was missing.");
         LogWarning($"Could not snap token for player {Display(player.playerId)} because tile {Display(player.currentTileId)} was missing.");
+    }
+
+    private void ApplyBoardLayout(MonoJoeySnapshot snapshot, string selectedPlayerId)
+    {
+        if (boardLayoutManager == null)
+        {
+            return;
+        }
+
+        boardLayoutManager.SetExternalSelectedToken(playerTokenController);
+        boardLayoutManager.BindSnapshot(snapshot, selectedPlayerId);
+        boardTiles = boardLayoutManager.RuntimeTiles;
+        if (boardCameraFramingController != null && boardLayoutManager.TileCount > 0)
+        {
+            boardCameraFramingController.FrameBounds(boardLayoutManager.BoardBounds);
+        }
     }
 
     private MonoJoeyPlayerSnapshot SelectPlayer(MonoJoeyPlayerSnapshot[] players)

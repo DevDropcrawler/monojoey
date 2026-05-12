@@ -3,6 +3,14 @@ using UnityEngine;
 [RequireComponent(typeof(BoxCollider))]
 public sealed class BoardTileController : MonoBehaviour
 {
+    public enum HighlightKind
+    {
+        None,
+        Selected,
+        CurrentPlayer,
+        ActiveAuction
+    }
+
     [SerializeField] private string tileId = "tile";
     [SerializeField] private Renderer baseRenderer;
     [SerializeField] private Renderer highlightRenderer;
@@ -10,6 +18,8 @@ public sealed class BoardTileController : MonoBehaviour
     [SerializeField] private int boardIndex = -1;
     [SerializeField] private Color normalColor = new Color(0.28f, 0.32f, 0.36f, 1f);
     [SerializeField] private Color highlightedColor = new Color(0.95f, 0.78f, 0.24f, 0.65f);
+    [SerializeField] private Color currentPlayerHighlightColor = new Color(0.24f, 0.70f, 0.95f, 0.68f);
+    [SerializeField] private Color activeAuctionHighlightColor = new Color(0.95f, 0.30f, 0.18f, 0.75f);
     [SerializeField] private Color unownedColor = new Color(0.22f, 0.24f, 0.27f, 1f);
     [SerializeField] private bool enableDebugLogging;
 
@@ -18,11 +28,12 @@ public sealed class BoardTileController : MonoBehaviour
 
     private MaterialPropertyBlock propertyBlock;
     private string ownerPlayerId = "";
-    private bool isHighlighted;
+    private HighlightKind highlightKind = HighlightKind.None;
 
     public string TileId => tileId;
     public string OwnerPlayerId => ownerPlayerId;
-    public bool IsHighlighted => isHighlighted;
+    public bool IsHighlighted => highlightKind != HighlightKind.None;
+    public HighlightKind CurrentHighlightKind => highlightKind;
     public int BoardIndex => boardIndex;
 
     private void Awake()
@@ -59,9 +70,14 @@ public sealed class BoardTileController : MonoBehaviour
 
     public void SetHighlighted(bool highlighted)
     {
-        isHighlighted = highlighted;
+        SetHighlightKind(highlighted ? HighlightKind.Selected : HighlightKind.None);
+    }
+
+    public void SetHighlightKind(HighlightKind newHighlightKind)
+    {
+        highlightKind = newHighlightKind;
         ApplyHighlight();
-        LogDebug($"Highlight set to {isHighlighted}.");
+        LogDebug($"Highlight set to {highlightKind}.");
     }
 
     public void SetOwnership(string newOwnerPlayerId, Color ownerColor)
@@ -79,8 +95,27 @@ public sealed class BoardTileController : MonoBehaviour
 
     public Vector3 GetTokenAnchorPosition(float yOffset)
     {
+        return GetTokenAnchorPosition(yOffset, 0, 1);
+    }
+
+    public Vector3 GetTokenAnchorPosition(float yOffset, int slotIndex, int slotCount)
+    {
         Bounds bounds = baseRenderer != null ? baseRenderer.bounds : new Bounds(transform.position, transform.lossyScale);
-        return new Vector3(bounds.center.x, bounds.max.y + yOffset, bounds.center.z);
+        Vector3 center = new Vector3(bounds.center.x, bounds.max.y + yOffset, bounds.center.z);
+        if (slotCount <= 1)
+        {
+            return center;
+        }
+
+        int columns = Mathf.CeilToInt(Mathf.Sqrt(slotCount));
+        int rows = Mathf.CeilToInt(slotCount / (float)columns);
+        int clampedSlot = Mathf.Clamp(slotIndex, 0, Mathf.Max(0, slotCount - 1));
+        int row = clampedSlot / columns;
+        int column = clampedSlot % columns;
+        float spacing = Mathf.Max(0.18f, Mathf.Min(bounds.extents.x, bounds.extents.z) * 0.42f);
+        float xOffset = (column - ((columns - 1) * 0.5f)) * spacing;
+        float zOffset = (((rows - 1) * 0.5f) - row) * spacing;
+        return center + (transform.right * xOffset) + (transform.forward * zOffset);
     }
 
     private void ResolveRenderers()
@@ -106,8 +141,8 @@ public sealed class BoardTileController : MonoBehaviour
             return;
         }
 
-        highlightRenderer.enabled = isHighlighted;
-        SetRendererColor(highlightRenderer, highlightedColor);
+        highlightRenderer.enabled = highlightKind != HighlightKind.None;
+        SetRendererColor(highlightRenderer, ColorForHighlight(highlightKind));
     }
 
     private void ApplyOwnershipColor()
@@ -135,6 +170,21 @@ public sealed class BoardTileController : MonoBehaviour
     private string DisplayOwner()
     {
         return string.IsNullOrWhiteSpace(ownerPlayerId) ? "unowned" : ownerPlayerId;
+    }
+
+    private Color ColorForHighlight(HighlightKind kind)
+    {
+        switch (kind)
+        {
+            case HighlightKind.CurrentPlayer:
+                return currentPlayerHighlightColor;
+            case HighlightKind.ActiveAuction:
+                return activeAuctionHighlightColor;
+            case HighlightKind.Selected:
+                return highlightedColor;
+            default:
+                return highlightedColor;
+        }
     }
 
     private void LogDebug(string message)
